@@ -68,7 +68,7 @@ jobs:
           api-level: 30
           arch: x86_64
           script: |
-            adb install -r android/app/build/outputs/apk/debug/*.apk
+            adb install -r android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk
             adb shell am start -n com.xiaoman.treehole/.MainActivity
             sleep 12
             adb exec-out screencap -p > emulator_01_home.png

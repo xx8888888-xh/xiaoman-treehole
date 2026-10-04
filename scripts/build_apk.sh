@@ -52,5 +52,7 @@ echo "[6/6] apksigner"
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:xiaoman2026 \
   --out "$OUT/xiaoman-treehole-v0.3-debug.apk" "$OUT/app-aligned.apk"
 "$BT/apksigner" verify --print-certs "$OUT/xiaoman-treehole-v0.3-debug.apk" | head -2
+# 清理中间产物（防 CI 通配符误命中）
+rm -f "$OUT/app-unsigned.apk" "$OUT/app-aligned.apk"
 
 echo "APK_DONE $OUT/xiaoman-treehole-v0.3-debug.apk ($(du -h $OUT/xiaoman-treehole-v0.3-debug.apk | cut -f1))"
