@@ -1,7 +1,7 @@
 # PROJECT_STATE · 小满树洞（Xiaoman Treehole）
 
 > 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完本文件即可掌握全局。
-> 最后更新：2026-10-05 07:32 ｜ 当前版本：v0.3.0-alpha ｜ 状态：Web核心✅ · APK✅ · 等真API接入
+> 最后更新：2026-10-05 07:52 ｜ 当前版本：v0.3.0 ｜ 状态：**全需求闭环** · 开源仓库已上线 · 等真API增强
 
 ---
 
@@ -13,7 +13,7 @@
 
 | # | 需求 | 状态 | 证据 |
 |---|------|------|------|
-| R1 | 安卓跑通 | ✅ APK已出（4.8MB已签名）；模拟器验证→GitHub CI（runner自带KVM） | android/app/build/outputs/apk/debug/*.apk；.github/workflows/android-ci.yml |
+| R1 | 安卓跑通 | ✅ **KVM模拟器验收通过**（云端CI实机截图）+ APK 4.8MB已签名 | docs/shots/emulator_0*.png；repo: github.com/xx8888888-xh/xiaoman-treehole |
 | R2 | 文字聊天 | ✅ 分条连发+打字延迟+时段问候+留存钩子 | docs/shots/03_chat.png |
 | R3 | 语音回复 | ✅ edge-tts→ASR回环PASS；真机走系统TTS桥 | scripts/verify_tts.py输出；web/js/tts.js |
 | R4 | 萌系UI | ✅ 首轮截图审查通过（角色完整渲染+手绘点缀） | docs/shots/01_base.png |

@@ -4,6 +4,10 @@
 
 ---
 
+[2026-10-05 07:50] ✅✅ R1最终闭环：GitHub KVM模拟器验收通过——APK安装→启动→Live2D渲染(WebGL)→离线对话→表情联动→截图三张全证据。仓库 https://github.com/xx8888888-xh/xiaoman-treehole · CI四轮迭代史：①模拟器job因adb install通配符命中中间产物失败→指定文件名 ②幽灵权限弹窗(Files/Phone)→根因aapt2 link缺target-sdk-version被系统当targetSdk=1史前应用→补全link参数后消失 ③APK变量作用域问题(action逐行执行script)→路径写死 ④✅全绿 → docs/shots/emulator_0*.png
+[2026-10-05 07:32] ✅ GitHub CD 全线打通：用户提供的PAT（upload/文件，全程未回显未入库）→建仓xx8888888-xh/xiaoman-treehole(公开)→推送→CI出包artifact。安全措施：密钥扫描、credential store即用即焚、token零落盘零日志
+[2026-10-05 07:29] 用户提供GitHub token（回答其"云端CD是否可行"：是，runner自带KVM+SDK，公开仓库免费）
+
 [2026-10-05 07:30] ✅ APK构建成功（第5次）：绕过gradle的手工流水线全线打通（aapt2→ecj→d8→zipalign→apksigner），4.8MB已签名验证，包内容完整（模型2.5MB完好版/网页/音频全打入）。gradle路线死因：504会话断裂杀客户端，2核机构建10分钟必跨断裂 → scripts/build_apk.sh, android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk
 [2026-10-05 07:28] 构建攻坚记录：javac缺失(JRE-only)→ecj.jar替代；appcompat主题依赖→系统Material；manifest补package与versionCode属性；src路径修正。全部坑已沉淀进build_apk.sh可复跑
 [2026-10-05 07:25] ✅ .github/workflows/android-ci.yml 落盘：双job（出包+KVM模拟器冒烟测试），公开仓库免费。模拟器验证路径正式转移到GitHub CD（本地无KVM+会话断裂，用户确认此方案）→ .github/workflows/

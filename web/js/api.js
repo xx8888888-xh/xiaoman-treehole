@@ -58,7 +58,7 @@ const API = (() => {
   /** OpenAI 兼容模式：POST {base}/v1/chat/completions */
   async function chatOpenAI(history) {
     const { apiBase, apiKey, model } = loadCfg();
-    const base = (apiBase || "").replace(/\/$/, "");
+    let base = (apiBase || "").replace(/\/$/, "").replace(/\/v1$/, "");  // 容错：base带不带/v1都行
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: {
@@ -66,8 +66,10 @@ const API = (() => {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
       },
       body: JSON.stringify({
-        model: model || "gpt-4o-mini",
+        // 默认免费模型（用户规矩：只选免费档）；OpenRouter 兼容接口
+        model: model || "qwen/qwen3.8-27b:free",
         temperature: 0.85,
+        reasoning: { enabled: false },  // 推理系模型必须关思考，防 JSON 被挤掉
         messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history]
       })
     });
