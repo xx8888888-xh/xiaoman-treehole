@@ -1,0 +1,139 @@
+/* ============================================================
+   小满树洞 · 萌系手绘风样式
+   设计语言：奶油底/樱粉/薄荷点缀，有机圆角，手绘虚线，无重投影
+   ============================================================ */
+
+:root {
+  --cream: #FFF9F2;
+  --peach: #FFEFE6;
+  --pink: #F7A8B8;
+  --pink-deep: #E88498;
+  --pink-soft: #FFD9E3;
+  --mint: #9CD9C4;
+  --mint-deep: #6FBFA5;
+  --ink: #5A4A4F;
+  --ink-light: #9C8B90;
+  --white: #FFFFFF;
+  --shadow-soft: 0 4px 16px rgba(232, 132, 152, 0.14);
+  --radius-bubble: 18px 18px 18px 6px;
+  --radius-bubble-user: 18px 18px 6px 18px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: -apple-system, "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+  color: var(--ink);
+  background: linear-gradient(168deg, var(--cream) 0%, var(--peach) 58%, #FFE3DE 100%);
+}
+
+#app { position: relative; display: flex; flex-direction: column; height: 100%; max-width: 560px; margin: 0 auto; }
+
+/* ---------- 背景手绘层 ---------- */
+.bg-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+.doodle { position: absolute; color: var(--pink); opacity: 0.35; }
+.cloud { width: 110px; animation: drift 26s linear infinite; }
+.cloud.c1 { top: 2.5%; left: -34px; }
+.cloud.c2 { top: 30%; right: -52px; animation-delay: -13s; color: var(--mint); }
+.star { width: 14px; }
+.star.s1 { top: 22%; left: 8%; animation: twinkle 3.2s ease-in-out infinite; }
+.star.s2 { top: 8%; right: 20%; width: 10px; animation: twinkle 4.1s ease-in-out infinite 1s; color: var(--mint-deep); }
+.sprout { width: 30px; bottom: 19%; right: 6%; color: var(--mint-deep); opacity: 0.5; transform: rotate(8deg); }
+@keyframes drift { from { transform: translateX(0); } to { transform: translateX(640px); } }
+@keyframes twinkle { 0%,100% { opacity: 0.2; transform: scale(0.85) rotate(-8deg);} 50% { opacity: 0.65; transform: scale(1.1) rotate(6deg);} }
+.paw { position: absolute; width: 16px; height: 16px; background: radial-gradient(circle at 50% 42%, var(--pink) 45%, transparent 46%), radial-gradient(circle at 28% 22%, var(--pink) 30%, transparent 31%), radial-gradient(circle at 72% 22%, var(--pink) 30%, transparent 31%); opacity: 0.22; }
+.paw1 { bottom: 26%; left: 7%; transform: rotate(-24deg); }
+.paw2 { bottom: 31%; left: 12%; transform: rotate(18deg); opacity: 0.15; }
+.paw3 { bottom: 23%; right: 12%; transform: rotate(30deg); }
+
+/* ---------- 顶栏 ---------- */
+.topbar { position: relative; z-index: 5; display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 6px; }
+.brand { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 16px; letter-spacing: 1px; }
+.brand-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mint-deep); box-shadow: 0 0 0 3px rgba(156, 217, 196, 0.3); animation: breathe 2.6s ease-in-out infinite; }
+@keyframes breathe { 50% { box-shadow: 0 0 0 6px rgba(156, 217, 196, 0.12); } }
+.top-actions { display: flex; gap: 6px; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border: none; border-radius: 14px; background: rgba(255,255,255,0.72); color: var(--pink-deep); cursor: pointer; transition: transform 0.15s; }
+.icon-btn:active { transform: scale(0.9); }
+
+/* ---------- Live2D 舞台 ---------- */
+#stage { position: relative; z-index: 2; flex: 0 0 40%; min-height: 240px; cursor: pointer; }
+#stage::before { content: ""; position: absolute; left: 50%; top: 52%; width: 300px; height: 300px; max-width: 92vw; transform: translate(-50%, -50%); background: radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(255,244,238,0.55) 42%, transparent 68%); border-radius: 50%; pointer-events: none; }
+#stage canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
+.stage-tip { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--ink-light); background: rgba(255,255,255,0.6); padding: 3px 12px; border-radius: 99px; border: 1.5px dashed var(--pink); animation: fadeout 6s forwards; pointer-events: none; }
+@keyframes fadeout { 0%,70% { opacity: 1; } 100% { opacity: 0; } }
+.stage-mood { position: absolute; top: 6px; right: 14px; font-size: 12px; color: var(--pink-deep); background: rgba(255,255,255,0.8); border: 1.5px solid var(--pink-soft); padding: 3px 10px; border-radius: 99px; transition: all 0.3s; }
+.stage-mood.pop { transform: scale(1.12); }
+
+/* ---------- 对话区 ---------- */
+#chatArea { position: relative; z-index: 3; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#chatScroll { flex: 1; overflow-y: auto; padding: 8px 14px 6px; scroll-behavior: smooth; }
+.msg-row { display: flex; gap: 8px; margin-bottom: 10px; animation: rise 0.32s ease; align-items: flex-end; }
+.msg-row.me { justify-content: flex-end; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+.avatar-mini { flex-shrink: 0; width: 32px; height: 32px; border-radius: 12px 12px 12px 4px; background: linear-gradient(145deg, var(--pink-soft), var(--pink)); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 14px; font-weight: 600; border: 1.5px solid #fff; }
+.bubble { max-width: 76%; padding: 9px 13px; font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; }
+.bubble.them { background: var(--white); border: 1.5px solid var(--pink-soft); border-radius: var(--radius-bubble); box-shadow: var(--shadow-soft); }
+.bubble.me { background: linear-gradient(150deg, var(--pink-soft), #FFCBD9); border: 1.5px solid #FBC7D4; border-radius: var(--radius-bubble-user); box-shadow: var(--shadow-soft); }
+.bubble .meta { display: block; margin-top: 3px; font-size: 10px; color: var(--ink-light); }
+.bubble.safety { background: #FFF4E8; border-color: #F5C89A; }
+.bubble.system-tip { margin: 0 auto; background: transparent; border: 1.5px dashed var(--mint-deep); color: var(--mint-deep); font-size: 12px; padding: 5px 14px; border-radius: 99px; box-shadow: none; max-width: 90%; text-align: center; }
+
+/* 打字中气泡 */
+.bubble.typing { display: flex; gap: 4px; padding: 12px 14px; }
+.bubble.typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--pink); animation: blink 1.2s infinite; }
+.bubble.typing span:nth-child(2) { animation-delay: 0.2s; background: var(--pink-deep); }
+.bubble.typing span:nth-child(3) { animation-delay: 0.4s; background: var(--mint-deep); }
+@keyframes blink { 0%,60%,100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+/* 留存钩子条 */
+.hook-bar { padding: 4px 14px 8px; }
+.hook-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--mint-deep); background: rgba(156,217,196,0.16); border: 1.5px solid var(--mint); padding: 6px 12px; border-radius: 99px; cursor: pointer; animation: rise 0.4s ease; }
+.hook-chip::before { content: "✿"; font-size: 11px; }
+
+/* ---------- 输入区 ---------- */
+.inputbar { position: relative; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 8px 12px calc(env(safe-area-inset-bottom, 0px) + 10px); background: rgba(255,255,255,0.82); backdrop-filter: blur(8px); border-top: 1.5px dashed var(--pink-soft); }
+#textInput { flex: 1; height: 42px; border: 1.5px solid var(--pink-soft); border-radius: 16px; padding: 0 14px; font-size: 15px; color: var(--ink); background: var(--white); outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
+#textInput:focus { border-color: var(--pink); box-shadow: 0 0 0 3px rgba(247,168,184,0.18); }
+#textInput::placeholder { color: var(--ink-light); }
+.mic { background: rgba(156,217,196,0.2); color: var(--mint-deep); }
+.send-btn { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; border: none; border-radius: 16px; background: linear-gradient(145deg, var(--pink), var(--pink-deep)); color: #fff; cursor: pointer; transition: transform 0.15s, box-shadow 0.2s; box-shadow: 0 3px 10px rgba(232,132,152,0.35); }
+.send-btn:active { transform: scale(0.88) rotate(-8deg); }
+.send-btn:disabled { opacity: 0.5; }
+
+/* ---------- 抽屉与弹窗 ---------- */
+.drawer, .modal { position: fixed; inset: 0; z-index: 50; }
+.drawer-mask { position: absolute; inset: 0; background: rgba(90,74,79,0.32); animation: fadein 0.25s; }
+@keyframes fadein { from { opacity: 0; } }
+.drawer-panel, .modal-panel { position: absolute; left: 50%; transform: translateX(-50%); bottom: 0; width: 100%; max-width: 560px; background: var(--cream); border-radius: 24px 24px 0 0; padding: 18px 18px calc(env(safe-area-inset-bottom, 0px) + 22px); animation: slideup 0.3s cubic-bezier(0.2,0.9,0.3,1); }
+.modal-panel { bottom: auto; top: 50%; transform: translate(-50%,-50%); max-width: 480px; border-radius: 24px; }
+@keyframes slideup { from { transform: translate(-50%, 40%); opacity: 0; } }
+.modal-panel { animation: popin 0.28s cubic-bezier(0.2,0.9,0.3,1); }
+@keyframes popin { from { transform: translate(-50%,-46%) scale(0.94); opacity: 0; } }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.drawer-sub { font-size: 12px; color: var(--ink-light); margin-bottom: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; min-height: 40px; }
+.chip { font-size: 13px; background: var(--white); border: 1.5px solid var(--pink-soft); color: var(--ink); padding: 6px 12px; border-radius: 99px; animation: rise 0.3s; }
+.chip b { color: var(--pink-deep); font-weight: 600; }
+.chip.empty { border-style: dashed; color: var(--ink-light); }
+.ghost-btn { margin-top: 16px; width: 100%; height: 40px; border: 1.5px dashed var(--pink); border-radius: 14px; background: transparent; color: var(--pink-deep); font-size: 14px; cursor: pointer; }
+.field { display: block; margin-bottom: 14px; }
+.field span { display: block; font-size: 13px; color: var(--ink-light); margin-bottom: 6px; }
+.field input, .field select { width: 100%; height: 42px; border: 1.5px solid var(--pink-soft); border-radius: 14px; padding: 0 12px; font-size: 14px; background: var(--white); color: var(--ink); outline: none; }
+.about { margin-top: 12px; padding-top: 12px; border-top: 1.5px dashed var(--pink-soft); font-size: 13px; color: var(--ink); }
+.about .mini { font-size: 11px; color: var(--ink-light); margin-top: 4px; line-height: 1.6; }
+
+/* ---------- 危机关怀卡片 ---------- */
+.care-card { max-width: 86%; background: linear-gradient(155deg, #FFF4E8, #FFEBDD); border: 1.5px solid #F5C89A; border-radius: 20px 20px 20px 6px; padding: 14px; font-size: 14px; line-height: 1.7; }
+.care-card .hotline { display: flex; align-items: center; gap: 8px; margin-top: 10px; background: #fff; border-radius: 12px; padding: 8px 12px; font-weight: 600; color: #D97742; }
+.care-card .hotline .pulse { width: 8px; height: 8px; border-radius: 50%; background: #F5A15E; animation: breathe 1.8s infinite; }
+
+/* ---------- Toast ---------- */
+.toast { position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%); z-index: 80; background: rgba(90,74,79,0.88); color: #fff; font-size: 13px; padding: 8px 18px; border-radius: 99px; animation: rise 0.3s; }
+.hidden { display: none !important; }
+
+/* ---------- 桌面端适配（浏览器里也好看） ---------- */
+@media (min-width: 560px) {
+  #app { border-left: 1.5px dashed var(--pink-soft); border-right: 1.5px dashed var(--pink-soft); }
+}

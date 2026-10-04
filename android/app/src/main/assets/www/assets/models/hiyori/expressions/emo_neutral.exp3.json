@@ -1,0 +1,35 @@
+{
+ "Type": "Live2D Expression",
+ "Parameters": [
+  {
+   "Id": "ParamEyeLOpen",
+   "Value": 1.0,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamEyeROpen",
+   "Value": 1.0,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamMouthForm",
+   "Value": 0.0,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamBrowLY",
+   "Value": 0.0,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamBrowRY",
+   "Value": 0.0,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamCheek",
+   "Value": 0.0,
+   "Blend": "Overwrite"
+  }
+ ]
+}

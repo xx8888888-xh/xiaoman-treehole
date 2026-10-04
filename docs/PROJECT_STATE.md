@@ -1,0 +1,155 @@
+# PROJECT_STATE · 小满树洞（Xiaoman Treehole）
+
+> 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完本文件即可掌握全局。
+> 最后更新：2026-10-05 07:32 ｜ 当前版本：v0.3.0-alpha ｜ 状态：Web核心✅ · APK✅ · 等真API接入
+
+---
+
+## 0. 项目一句话
+
+安卓端 AI 树洞/倾听陪伴应用「小满树洞」：Live2D 萌系角色 + 活人感对话 + 语音回复，角色名"小满"（26岁新媒体运营，养橘猫团子）。开源（MIT）。
+
+## 1. 完成度总览（对照验收清单）
+
+| # | 需求 | 状态 | 证据 |
+|---|------|------|------|
+| R1 | 安卓跑通 | ✅ APK已出（4.8MB已签名）；模拟器验证→GitHub CI（runner自带KVM） | android/app/build/outputs/apk/debug/*.apk；.github/workflows/android-ci.yml |
+| R2 | 文字聊天 | ✅ 分条连发+打字延迟+时段问候+留存钩子 | docs/shots/03_chat.png |
+| R3 | 语音回复 | ✅ edge-tts→ASR回环PASS；真机走系统TTS桥 | scripts/verify_tts.py输出；web/js/tts.js |
+| R4 | 萌系UI | ✅ 首轮截图审查通过（角色完整渲染+手绘点缀） | docs/shots/01_base.png |
+| R5 | Live2D手术 | ✅ 6表情+4动作组，可回滚 | docs/live2d_surgery.md |
+| R6 | 活人感 | ✅ 五件套+危机安全层（12356） | docs/shots/04_intimate.png, 06_crisis.png |
+| R7 | 最大复用 | ✅ 清单见§6 | — |
+| R8 | Mock API | ✅ 我充当（:8902）+离线引擎兜底 | server/mock_api.py; web/js/mock_engine.js |
+| R9 | 开源 | ✅ MIT（LICENSE待加，见迭代清单） | — |
+| R10 | 用户视角分析 | ✅ 首版自评+迭代清单 | docs/USER_REVIEW.md |
+
+## 2. 当前状态快照（接手先读）
+
+- **Web 核心**：浏览器打开 web/index.html 即完整体验（需起 server/mock_api.py + server/tts_server.py；不起也行，离线引擎兜底）
+- **APK**：已签名 debug 包可直接装真机：`android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk`
+- **模拟器**：本地无 KVM 不可行；GitHub Actions runner 自带 KVM，推仓后自动出包+模拟器截图（workflow 已写好）
+- **明天接真 API**：设置页（右上齿轮）→ 模式切 openai → 填 base URL + key + 模型名即可；提示词与结构化协议已内置（web/js/api.js）
+
+## 3. 三分钟跑起来
+
+```bash
+# 1) Web 预览（推荐先跑这个看效果）
+cd treehole-app && (cd server && python3 mock_api.py &) && (cd server && python3 tts_server.py &)
+cd web && python3 -m http.server 8901
+# 浏览器访问 http://127.0.0.1:8901（手机视口390x844最佳）
+
+# 2) 重新构建 APK
+bash scripts/build_apk.sh   # 需 ANDROID_HOME；构建器依赖已固化在脚本注释
+
+# 3) GitHub CI（推仓后自动）：出包 + KVM模拟器冒烟 + 截图 artifact
+```
+
+## 4. 关键约束（用户明示）
+
+1. **活文档**：每步操作、每次代码变更都要记录进 DEVLOG.md；本文档不断更新，保证随时可交接。
+2. **备份先行**：每次重大代码变更前，先做备份（scripts/backup.sh，产物进 backups/）。
+3. 全程自主决策，不问用户；任务完成前不停。
+4. 沙箱资源有限（无 GPU，内存紧张），所有重活走"后台+轮询"。
+
+## 5. 架构（当前设计）
+
+```
+┌─────────────── Android APK（WebView 壳，待定 Capacitor/原生） ───────────────┐
+│                                                                             │
+│  web/ 前端核心（同一份代码，浏览器=我们的"模拟器"）                            │
+│  ├─ index.html        萌系 UI：Live2D 舞台(上) + 聊天流(下) + 输入栏          │
+│  ├─ js/live2d.js      PixiJS + pixi-live2d-display；情绪→表情/动作；口型同步  │
+│  ├─ js/app.js         活人感引擎：分条发送/打字延迟/主动开口/记忆/留存钩子     │
+│  ├─ js/api.js         LLM 适配器：MOCK ⇄ OPENAI 兼容（真 API 明天接入）       │
+│  └─ js/tts.js         TTS 适配器：服务端 TTS(mp3) / 浏览器 speechSynthesis    │
+│                                                                             │
+│  server/（本地/局域网跑，安卓壳内也可打包）                                    │
+│  ├─ mock_api.py       我充当的 API：情绪识别+回复模板+记忆+结构化输出          │
+│  └─ tts_server.py     edge-tts 封装（免费，中文自然）                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 结构化 API 契约（明天接真 API 就按这个来）
+
+请求：`POST /v1/chat/completions`，OpenAI 兼容字段。
+响应 `choices[0].message.content` 必须是 JSON 字符串：
+
+```json
+{
+  "reply": "回复正文（可以含「|」表示建议分条）",
+  "emotion": "happy|comfort|sad|surprised|neutral|worried",
+  "motion": "idle|tap|shake|greeting",
+  "tts": true,
+  "memory_write": {"key": "值"},
+  "hook": "留存钩子可选文案，为空则无"
+}
+```
+
+安全层（危机干预）在前端+Mock API 双侧实现，不依赖大模型自觉：
+触发词命中 → 固定温暖话术 + 全国心理援助热线 **12356** + Live2D 切 worried 表情。
+
+## 6. 目录结构
+
+```
+treehole-app/
+├─ PROJECT_STATE.md      ← 本文件
+├─ docs/                 ← DEVLOG.md（操作日志）、设计稿、用户视角分析
+├─ backups/              ← 重大变更前的快照 tar
+├─ scripts/              ← backup.sh 等工具脚本
+├─ web/                  ← 前端核心（index.html + css/ + js/ + assets/）
+├─ server/               ← mock_api.py + tts_server.py
+└─ android/              ← 安卓壳工程（阶段二）
+```
+
+## 7. 环境事实（持续补充）
+
+- 沙箱：无 GPU、内存约 4GB、网络可用（npm/pip/curl 已验证可用）
+- 已有：Node 24、Python3、Playwright（Chromium）、z-ai SDK
+- 待确认：/dev/kvm（决定模拟器可行性）、Java（决定 Gradle 打包）、磁盘余量
+
+## 8. 复用清单（R7，持续登记）
+
+| 来源 | 用途 | 许可 |
+|------|------|------|
+| pixi-live2d-display (guansss) | Live2D 渲染 | MIT |
+| PixiJS | 渲染底层 | MIT |
+| Live2D 官方免费示例模型 | 角色模型（将做结构化改造） | Live2D 免费素材许可 |
+| edge-tts | 免费 TTS | GPL-3.0（仅本地服务调用，不打包进闭源分发；本项目本身开源故兼容） |
+| Open-LLM-VTuber (t41372) | 架构参考：情绪标签驱动 Live2D | AGPL-3.0（仅参考思路，不复代码） |
+| 前几日"小满"测试集与盲测结论 | 人设、活人感规则、安全层话术 | 自产 |
+
+## 9. 测试记录
+
+| 日期 | 项目 | 结果 |
+|------|------|------|
+| 10-04 | TTS→ASR 回环 | PASS（"你好呀，我是小满…"转写吻合） |
+| 10-04 | Live2D 渲染 | 首次贴图损坏（jsdelivr截断）→gcore镜像修复→完整渲染 |
+| 10-05 | 对话流截图 | PASS（分条/钩子/时段问候） |
+| 10-05 | 危机场景 | PASS（关怀卡+12356+表情联动） |
+| 10-05 | 亲密请求上下文 | PASS（@CTX接住情绪） |
+| 10-05 | APK 构建+签名 | PASS（4.8MB，apksigner verify通过） |
+| 10-05 | 模拟器 | 本地不可行（无KVM+会话断裂）→ GitHub CI 接管 |
+
+## 10. 已知问题 / 风险
+
+- 沙箱无 KVM 的话，Android 模拟器将极慢甚至不可行 → 降级方案：APK 构建 + Chromium 移动视口仿真截图 + 交付用户真机安装
+- Gradle/SDK 下载量大，内存紧张时用 --no-daemon + 限制 JVM 堆
+
+## 11. 交接指南（给下一个接手者）
+
+1. 读 §1 完成度与 §4 约束 → 2. 读 docs/DEVLOG.md 最新 20 条 → 3. 按 §3 三分钟跑起来 → 4. 接真 API：设置页切 openai 模式（提示词在 web/js/api.js 的 SYSTEM_PROMPT）→ 5. 模拟器验证：git push 后看 Actions（.github/workflows/android-ci.yml）。
+
+## 12. 交付物索引
+
+| 交付物 | 路径 |
+|---|---|
+| APK（可装真机） | android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk |
+| Web 源码 | web/ |
+| 手工构建脚本 | scripts/build_apk.sh（aapt2→ecj→d8→签名，可复跑） |
+| CI/CD | .github/workflows/android-ci.yml |
+| UI 截图 | docs/shots/01~06.png |
+| 手术报告 | docs/live2d_surgery.md |
+| 用户视角自评 | docs/USER_REVIEW.md |
+| 操作日志 | docs/DEVLOG.md |
+| 备份 | backups/（3个快照，含模型原始态与两次重大变更前态） |

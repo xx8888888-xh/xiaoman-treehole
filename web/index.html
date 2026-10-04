@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>小满树洞 · 你的深夜倾听者</title>
+<meta name="description" content="开源 AI 树洞陪伴应用 —— Live2D 角色 + 活人感对话 + 语音回复">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ 背景：手绘点缀层 ============ -->
+  <div class="bg-layer" aria-hidden="true">
+    <svg class="doodle cloud c1" viewBox="0 0 120 60"><path d="M20 45 Q10 45 10 35 Q10 26 20 26 Q22 14 35 14 Q46 14 49 23 Q52 18 60 18 Q72 18 73 29 Q84 28 85 37 Q85 45 75 45 Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+    <svg class="doodle cloud c2" viewBox="0 0 120 60"><path d="M20 45 Q10 45 10 35 Q10 26 20 26 Q22 14 35 14 Q46 14 49 23 Q52 18 60 18 Q72 18 73 29 Q84 28 85 37 Q85 45 75 45 Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+    <svg class="doodle star s1" viewBox="0 0 20 20"><path d="M10 1 L12.2 7.2 L19 7.6 L13.6 11.6 L15.6 18 L10 14.2 L4.4 18 L6.4 11.6 L1 7.6 L7.8 7.2 Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    <svg class="doodle star s2" viewBox="0 0 20 20"><path d="M10 1 L12.2 7.2 L19 7.6 L13.6 11.6 L15.6 18 L10 14.2 L4.4 18 L6.4 11.6 L1 7.6 L7.8 7.2 Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    <svg class="doodle sprout" viewBox="0 0 40 40"><path d="M20 36 Q20 24 20 16" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M20 20 Q10 20 8 10 Q18 10 20 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M20 16 Q28 14 30 6 Q22 7 20 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    <span class="paw paw1"></span><span class="paw paw2"></span><span class="paw paw3"></span>
+  </div>
+
+  <!-- ============ 顶栏 ============ -->
+  <header class="topbar">
+    <div class="brand"><span class="brand-dot"></span>小满树洞</div>
+    <div class="top-actions">
+      <button class="icon-btn" id="memoryBtn" title="小满记得的事" aria-label="记忆">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3 C7 3 4 6.5 4 10.5 C4 13 5.2 14.6 6.6 15.8 L6 21 L10.5 17.6 C11 17.7 11.5 17.8 12 17.8 C17 17.8 20 14.3 20 10.4 C20 6.5 17 3 12 3 Z"/></svg>
+      </button>
+      <button class="icon-btn" id="settingsBtn" title="设置" aria-label="设置">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8 L13 5.4 A6.8 6.8 0 0 1 15.2 6.3 L17.8 5.2 L19 6.9 L17 9 A6.8 6.8 0 0 1 17.4 11.3 L19.8 12.6 L19.2 14.6 L16.5 14.5 A6.8 6.8 0 0 1 15 16.7 L15.4 19.4 L13.4 20.3 L11.7 18.3 A6.8 6.8 0 0 1 9.3 18.3 L7.6 20.3 L5.6 19.4 L6 16.7 A6.8 6.8 0 0 1 4.5 14.5 L1.8 14.6 L1.2 12.6 L3.6 11.3 A6.8 6.8 0 0 1 4 9 L2 6.9 L3.2 5.2 L5.8 6.3 A6.8 6.8 0 0 1 8 5.4 L9 2.8 Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ Live2D 舞台 ============ -->
+  <div id="stage">
+    <span class="stage-mood"><span id="moodText">在听你说</span></span>
+    <span class="stage-tip">点我一下试试 · 摸头有惊喜</span>
+  </div>
+
+  <!-- ============ 对话区 ============ -->
+  <main id="chatArea">
+    <div id="chatScroll">
+      <div id="messages"></div>
+      <div class="msg-row hidden" id="typingRow">
+        <div class="avatar-mini">满</div>
+        <div class="bubble them typing"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+    <div class="hook-bar hidden" id="hookBar"></div>
+    <div class="inputbar">
+      <button class="icon-btn mic" id="micBtn" aria-label="语音输入">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11 C5 15 8 18 12 18 C16 18 19 15 19 11"/><path d="M12 18 L12 21 M8.5 21 L15.5 21"/></svg>
+      </button>
+      <input id="textInput" type="text" placeholder="跟小满说点什么…" autocomplete="off" maxlength="500">
+      <button class="send-btn" id="sendBtn" aria-label="发送">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L20 4 L14.5 20 L11.5 13.5 Z"/></svg>
+      </button>
+    </div>
+  </main>
+
+  <!-- ============ 记忆抽屉 ============ -->
+  <div class="drawer hidden" id="memoryDrawer">
+    <div class="drawer-mask"></div>
+    <div class="drawer-panel">
+      <div class="drawer-head"><span>小满记得的事</span><button class="icon-btn" id="memoryClose" aria-label="关闭">✕</button></div>
+      <p class="drawer-sub">聊天中提到的称呼、人物、事件会自动记在这里，只保存在你手机上</p>
+      <div class="chips" id="memoryChips"></div>
+      <button class="ghost-btn" id="memoryClear">清空记忆</button>
+    </div>
+  </div>
+
+  <!-- ============ 设置弹窗 ============ -->
+  <div class="modal hidden" id="settingsModal">
+    <div class="drawer-mask"></div>
+    <div class="modal-panel">
+      <div class="drawer-head"><span>设置</span><button class="icon-btn" id="settingsClose" aria-label="关闭">✕</button></div>
+      <label class="field"><span>对话服务地址（OpenAI 兼容 / 内置 Mock）</span>
+        <input id="cfgApi" type="text" placeholder="http://127.0.0.1:8902">
+      </label>
+      <label class="field"><span>语音回复</span>
+        <select id="cfgTts">
+          <option value="server">服务端语音（自然）</option>
+          <option value="browser">本机语音（离线）</option>
+          <option value="off">关闭</option>
+        </select>
+      </label>
+      <label class="field"><span>说话音色</span>
+        <select id="cfgVoice">
+          <option value="zh-CN-XiaoyiNeural">小艺 · 元气少女</option>
+          <option value="zh-CN-XiaoxiaoNeural">小晓 · 温柔御姐</option>
+          <option value="zh-CN-XiaoyuanNeural">小圆 · 甜妹</option>
+        </select>
+      </label>
+      <div class="about">
+        <p>小满树洞 v0.1 · 开源软件（MIT）</p>
+        <p class="mini">渲染: PixiJS + pixi-live2d-display (MIT) · 模型: Hiyori（Live2D 免费素材，经结构化改造）· 语音: edge-tts</p>
+        <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+</div>
+
+<script src="js/vendor/pixi.min.js"></script>
+<script src="js/vendor/live2dcubismcore.min.js"></script>
+<script src="js/vendor/pixi-live2d-cubism4.min.js"></script>
+<script src="js/api.js"></script>
+<script src="js/mock_engine.js"></script>
+<script src="js/tts.js"></script>
+<script src="js/stage.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+ "Type": "Live2D Expression",
+ "Parameters": [
+  {
+   "Id": "ParamEyeLSmile",
+   "Value": 0.8,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamEyeRSmile",
+   "Value": 0.8,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamMouthForm",
+   "Value": 0.3,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamCheek",
+   "Value": 1.0,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamAngleZ",
+   "Value": -6,
+   "Blend": "Overwrite"
+  },
+  {
+   "Id": "ParamBodyAngleZ",
+   "Value": -2,
+   "Blend": "Overwrite"
+  }
+ ]
+}

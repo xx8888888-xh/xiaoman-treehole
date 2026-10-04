@@ -1,0 +1,147 @@
+{
+ "Version": 3,
+ "FileReferences": {
+  "Moc": "Hiyori.moc3",
+  "Textures": [
+   "Hiyori.2048/texture_00.png",
+   "Hiyori.2048/texture_01.png"
+  ],
+  "Physics": "Hiyori.physics3.json",
+  "Pose": "Hiyori.pose3.json",
+  "UserData": "Hiyori.userdata3.json",
+  "DisplayInfo": "Hiyori.cdi3.json",
+  "Motions": {
+   "Idle": [
+    {
+     "File": "motions/Hiyori_m01.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m02.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m03.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m05.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m06.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m07.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m08.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m09.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    },
+    {
+     "File": "motions/Hiyori_m10.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    }
+   ],
+   "TapBody": [
+    {
+     "File": "motions/Hiyori_m04.motion3.json",
+     "FadeInTime": 0.5,
+     "FadeOutTime": 0.5
+    }
+   ],
+   "Greeting": [
+    {
+     "File": "motions/Hiyori_m04.motion3.json",
+     "FadeInTime": 0.3,
+     "FadeOutTime": 0.5
+    }
+   ],
+   "Nod": [
+    {
+     "File": "motions/Hiyori_m02.motion3.json",
+     "FadeInTime": 0.3,
+     "FadeOutTime": 0.4
+    }
+   ],
+   "Shake": [
+    {
+     "File": "motions/Hiyori_m03.motion3.json",
+     "FadeInTime": 0.3,
+     "FadeOutTime": 0.4
+    }
+   ],
+   "HappyJump": [
+    {
+     "File": "motions/Hiyori_m04.motion3.json",
+     "FadeInTime": 0.2,
+     "FadeOutTime": 0.5
+    }
+   ]
+  },
+  "Expressions": [
+   {
+    "Name": "happy",
+    "File": "expressions/emo_happy.exp3.json"
+   },
+   {
+    "Name": "sad",
+    "File": "expressions/emo_sad.exp3.json"
+   },
+   {
+    "Name": "gentle",
+    "File": "expressions/emo_gentle.exp3.json"
+   },
+   {
+    "Name": "surprised",
+    "File": "expressions/emo_surprised.exp3.json"
+   },
+   {
+    "Name": "shy",
+    "File": "expressions/emo_shy.exp3.json"
+   },
+   {
+    "Name": "neutral",
+    "File": "expressions/emo_neutral.exp3.json"
+   }
+  ]
+ },
+ "Groups": [
+  {
+   "Target": "Parameter",
+   "Name": "LipSync",
+   "Ids": [
+    "ParamMouthOpenY"
+   ]
+  },
+  {
+   "Target": "Parameter",
+   "Name": "EyeBlink",
+   "Ids": [
+    "ParamEyeLOpen",
+    "ParamEyeROpen"
+   ]
+  }
+ ],
+ "HitAreas": [
+  {
+   "Id": "HitArea",
+   "Name": "Body"
+  }
+ ]
+}

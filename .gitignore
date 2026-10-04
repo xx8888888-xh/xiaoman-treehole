@@ -1,0 +1,17 @@
+# 构建产物（APK 保留在 outputs 里，中间物不入库）
+android/app/build/
+android/local.properties
+android/.gradle/
+.gradle/
+
+# 本地环境与密钥（严禁入库）
+upload/
+*.local
+*.env
+.env
+*_token*
+.git_askpass*
+node_modules/
+
+# 系统
+.DS_Store
