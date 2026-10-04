@@ -20,7 +20,10 @@ cd "$MAIN"
 echo "[1/6] aapt2 compile+link"
 "$BT/aapt2" compile --dir res -o "$WORK/res.zip"
 "$BT/aapt2" link -o "$WORK/base.apk" -I "$JAR" --manifest AndroidManifest.xml \
-  -A "$MAIN/assets" --java "$WORK/gen" "$WORK/res.zip"
+  -A "$MAIN/assets" --java "$WORK/gen" \
+  --min-sdk-version 24 --target-sdk-version 34 \
+  --version-code 3 --version-name 0.3.0 \
+  "$WORK/res.zip"
 
 echo "[2/6] javac"
 find "$WORK/gen" "$MAIN/java" -name "*.java" > "$WORK/sources.txt"

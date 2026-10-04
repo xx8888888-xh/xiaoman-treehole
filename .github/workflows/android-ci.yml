@@ -68,17 +68,25 @@ jobs:
           api-level: 30
           arch: x86_64
           script: |
-            adb install -r android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk
+            APK=android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk
+            adb install -r "$APK"
+            # 兼容权限兜底（未声明则容忍失败）；若弹权限页则点 CONTINUE
+            adb shell pm grant com.xiaoman.treehole android.permission.READ_PHONE_STATE 2>/dev/null || true
+            adb shell pm grant com.xiaoman.treehole android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
             adb shell am start -n com.xiaoman.treehole/.MainActivity
-            sleep 12
+            sleep 5
+            adb shell input tap 296 726   # 权限页 CONTINUE（若在）
+            sleep 8
             adb exec-out screencap -p > emulator_01_home.png
-            adb shell input tap 540 2260
+            adb shell input tap 140 615   # 输入框（320x733 视口）
+            sleep 1
             adb shell input text "jin tian hao lei a"
-            adb shell input keyevent 66
-            sleep 6
+            sleep 1
+            adb shell input tap 296 615   # 发送按钮
+            sleep 8
             adb exec-out screencap -p > emulator_02_chat.png
-            adb shell input tap 540 500
-            sleep 2
+            adb shell input tap 160 220   # 戳 Live2D 角色
+            sleep 3
             adb exec-out screencap -p > emulator_03_poke.png
 
       - name: Upload screenshots
