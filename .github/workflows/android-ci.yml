@@ -68,8 +68,7 @@ jobs:
           api-level: 30
           arch: x86_64
           script: |
-            APK=android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk
-            adb install -r "$APK"
+            adb install -r android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk
             # 兼容权限兜底（未声明则容忍失败）；若弹权限页则点 CONTINUE
             adb shell pm grant com.xiaoman.treehole android.permission.READ_PHONE_STATE 2>/dev/null || true
             adb shell pm grant com.xiaoman.treehole android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
