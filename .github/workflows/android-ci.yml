@@ -82,6 +82,8 @@ jobs:
             sleep 1
             adb shell input text "jin tian hao lei a"
             sleep 1
+            adb shell input keyevent 111   # 收起软键盘，防遮挡对话区
+            sleep 1
             adb shell input tap 296 615   # 发送按钮
             sleep 8
             adb exec-out screencap -p > emulator_02_chat.png

@@ -4,6 +4,13 @@
 
 ---
 
+[2026-10-06 07:55] ✅ 多AI协同分支制落地（用户指令：另一AI协同开发，各自分支防冲突）：
+① 我的工作分支=`zhiqiu/dev`（已推送，从 v0.4 的 main 切出），后续提交全走此分支，不再直接动 main
+② workflow 触发放宽到 `zhiqiu/**`，分支首推即触发 CI
+③ v0.4 分支 CI 全绿（build-apk ✓ + emulator-smoke ✓，模拟器回归 PASS）——Live2D渲染/表情芯片/交互正常
+④ 顺手修 CI 截图：adb input text 弹软键盘遮挡对话区 → keyevent 111 收起（下轮回归验证）
+触及：.github/workflows/android-ci.yml；记忆同步登记分支规矩
+
 [2026-10-05 08:40] ✅ v0.4 三大生命线系统上线（用户定调：朋友定位+长期记忆+对话式提醒+心跳）：
 ① 提示词重构：小满=用户的朋友（去掉"树洞/倾听者"框架——过度限定失活人味），新增 HEARTBEAT_PROMPT（禁"在吗/好久不见"客服腔）+ buildSystemPrompt(记忆注入+时间注入)
 ② memory.js：localStorage 长期记忆库，2-gram 重叠滑窗检索（非重叠 match 会吞词——debug1h 的坑）+时间衰减+钉子户，双写兼容旧抽屉
