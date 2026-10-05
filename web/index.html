@@ -42,10 +42,11 @@
   <!-- ============ 对话区 ============ -->
   <main id="chatArea">
     <div id="chatScroll">
-      <div id="messages"></div>
-      <div class="msg-row hidden" id="typingRow">
-        <div class="avatar-mini">满</div>
-        <div class="bubble them typing"><span></span><span></span><span></span></div>
+      <div id="messages">
+        <div class="msg-row hidden" id="typingRow">
+          <div class="avatar-mini">满</div>
+          <div class="bubble them typing"><span></span><span></span><span></span></div>
+        </div>
       </div>
     </div>
     <div class="hook-bar hidden" id="hookBar"></div>
@@ -66,6 +67,8 @@
     <div class="drawer-panel">
       <div class="drawer-head"><span>小满记得的事</span><button class="icon-btn" id="memoryClose" aria-label="关闭">✕</button></div>
       <p class="drawer-sub">聊天中提到的称呼、人物、事件会自动记在这里，只保存在你手机上</p>
+      <div id="reminderList"></div>
+      <div id="memoryList"></div>
       <div class="chips" id="memoryChips"></div>
       <button class="ghost-btn" id="memoryClear">清空记忆</button>
     </div>
@@ -109,6 +112,9 @@
 <script src="js/vendor/pixi-live2d-cubism4.min.js"></script>
 <script src="js/api.js"></script>
 <script src="js/mock_engine.js"></script>
+<script src="js/memory.js"></script>
+<script src="js/reminders.js"></script>
+<script src="js/heartbeat.js"></script>
 <script src="js/tts.js"></script>
 <script src="js/stage.js"></script>
 <script src="js/app.js"></script>

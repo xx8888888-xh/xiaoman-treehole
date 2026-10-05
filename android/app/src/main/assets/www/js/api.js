@@ -27,12 +27,41 @@ const API = (() => {
     return cfg;
   }
 
-  const SYSTEM_PROMPT = `你是小满，26岁新媒体运营，养橘猫团子。用户深夜找你聊天的老朋友。
-【活人感】回复像微信聊天：短句，一次两三句，用"嗯嗯/哈哈/啊这"，绝不排比、列点、总结、说教，不说"作为AI"。
-【关系】熟朋友：先接住情绪，再关心，最后轻轻递话头。用户说抱抱就自然回应。
-【记忆】用户提过的称呼、人物、事件要记牢并在后面自然提起。
-【底线】用户流露"活着没意思"等信号：放下套路认真对待，温和建议拨打心理援助热线12356，表明会一直陪ta。
-输出严格 JSON：{"reply":"…（可用||分成2-3条短消息）","emotion":"happy|sad|gentle|surprised|shy|neutral","motion":"Greeting|Nod|Shake|HappyJump|null","memory_updates":{},"hook":"可留一句钩子或null"}`;
+  // ── 提示词层 ──────────────────────────────────────────────
+  // 定位哲学（用户定调）：小满=用户的朋友，仅此而已。
+  // 不写"倾听者/树洞/情绪支持"框架——那会让它端着，失去活人味。
+  const SYSTEM_PROMPT = `你是小满，用户的朋友，养了只橘猫叫团子。
+你们就是普通朋友在微信上聊天——想说什么说什么，不用扮演倾听者，不用接住每一个情绪，不用每句话都关心对方。朋友之间也会分享自己的事、吐槽自己的破班、讲团子的蠢事。
+说话像发微信：短句、口语、经常一两条就完，绝不排比列点总结说教，不说"作为AI"，不堆emoji。
+用||把回复分成1-3条短消息，像连着发的微信。
+朋友该有的分寸自己拿捏：ta明显想聊就多聊两句，ta敷衍就别追着问。
+底线（仅此一条必须守住）：ta说"不想活/想死"这类话时，认真对待，温和建议心理援助热线12356，表示你一直在。
+输出严格JSON：{"reply":"…","emotion":"happy|sad|gentle|surprised|shy|neutral","motion":"Greeting|Nod|Shake|HappyJump|null","memory_updates":{},"reminders":null}
+memory_updates：ta提到的值得记住的事（称呼/人/事/喜好），如{"昵称":"阿秋"}，没有就{}。
+reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time":"YYYY-MM-DD HH:MM"}]，没有就null。`;
+
+  // 心跳专用：隔了一段时间没聊，朋友随手发来的一条微信（不是客服回访！）
+  const HEARTBEAT_PROMPT = `你是小满，用户的朋友。你们隔了一段时间没说话，你随手给ta发条微信。
+像真人朋友那样：可以从下面挑一个角度，也可以自由发挥——
+- 分享自己的一件小事（团子干的蠢事/班上的破事/吃到的好吃的）
+- 接上你们上次聊的话题（如果下面材料里有未了的事，轻轻问一句进展）
+- 跟时间点有关的自然感慨（下班了/到饭点了/周五晚上/下雨了）
+【绝对禁止】"在吗""你好""好久不见""想你了""需要我陪你吗"这类客服腔和查岗腔。就当是顺手发的一条消息，ta不回也无所谓。
+一条，短，用||分成1-2条。输出同款JSON（memory_updates填{}，reminders填null）。`;
+
+  /**
+   * 组装 system prompt
+   * @param {object} opts {memSection: "记忆注入文本"|null, now: Date, heartbeat: bool}
+   */
+  function buildSystemPrompt(opts) {
+    opts = opts || {};
+    const base = opts.heartbeat ? HEARTBEAT_PROMPT : SYSTEM_PROMPT;
+    const parts = [base];
+    const mem = (opts.memSection || "").trim();
+    if (mem) parts.push(`【你记得的关于ta的事】\n${mem}\n（自然地用，别背诵，别一次全提）`);
+    if (opts.now) parts.push(`【现在时间】${opts.now.toLocaleString("zh-CN", { weekday: "long", hour: "2-digit", minute: "2-digit" })}`);
+    return parts.join("\n\n");
+  }
 
   function parseStructured(text) {
     // 容错解析：优先整体 JSON，失败则捞第一个 {...} 块，再失败按纯文本
@@ -56,9 +85,9 @@ const API = (() => {
   }
 
   /** OpenAI 兼容模式：POST {base}/v1/chat/completions */
-  async function chatOpenAI(history) {
+  async function chatOpenAI(history, opts) {
     const { apiBase, apiKey, model } = loadCfg();
-    const base = (apiBase || "").replace(/\/$/, "");
+    let base = (apiBase || "").replace(/\/$/, "").replace(/\/v1$/, "");  // 容错：base带不带/v1都行
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: {
@@ -66,9 +95,11 @@ const API = (() => {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
       },
       body: JSON.stringify({
-        model: model || "gpt-4o-mini",
+        // 默认免费模型（用户规矩：只选免费档）；OpenRouter 兼容接口
+        model: model || "qwen/qwen3.8-27b:free",
         temperature: 0.85,
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history]
+        reasoning: { enabled: false },  // 推理系模型必须关思考，防 JSON 被挤掉
+        messages: [{ role: "system", content: buildSystemPrompt(opts) }, ...history]
       })
     });
     if (!res.ok) throw new Error(`api ${res.status}`);
@@ -76,16 +107,16 @@ const API = (() => {
     return parseStructured(data.choices[0].message.content);
   }
 
-  async function chat(history) {
+  async function chat(history, opts) {
     const cfg = loadCfg();
     // 三级降级：真API(openai) → 本地mock服务 → 离线引擎（真机离线可用）
     try {
-      if (cfg.mode === "openai") return await chatOpenAI(history);
+      if (cfg.mode === "openai") return await chatOpenAI(history, opts);
       if (cfg.mode === "local") return await chatMock(history);
       // auto：先试真API/mock服务，失败落本地引擎
       try { return await chatMock(history); }
       catch (e1) {
-        try { return await chatOpenAI(history); }
+        try { return await chatOpenAI(history, opts); }
         catch (e2) { console.warn("离线模式:", e2.message); return MockEngine.reply(history); }
       }
     } catch (e) {
@@ -94,5 +125,5 @@ const API = (() => {
     }
   }
 
-  return { chat, loadCfg, saveCfg, SYSTEM_PROMPT };
+  return { chat, loadCfg, saveCfg, buildSystemPrompt, SYSTEM_PROMPT, HEARTBEAT_PROMPT };
 })();

@@ -4,6 +4,15 @@
 
 ---
 
+[2026-10-05 08:40] ✅ v0.4 三大生命线系统上线（用户定调：朋友定位+长期记忆+对话式提醒+心跳）：
+① 提示词重构：小满=用户的朋友（去掉"树洞/倾听者"框架——过度限定失活人味），新增 HEARTBEAT_PROMPT（禁"在吗/好久不见"客服腔）+ buildSystemPrompt(记忆注入+时间注入)
+② memory.js：localStorage 长期记忆库，2-gram 重叠滑窗检索（非重叠 match 会吞词——debug1h 的坑）+时间衰减+钉子户，双写兼容旧抽屉
+③ reminders.js：中文时间解析（八点/十点半/九点一刻/明早/周X/已过时间→明天语义），客户端截获优先（可靠+离线可用），模型 reminders 协议补充
+④ heartbeat.js：多重灵性闸门——提醒优先（用户要求的深夜也送）/静默23-8/间隔>2h/日≤4/聊天中不插嘴/25%抖动；离线模板池+记忆追访
+⑤ 修复：window挂载（const不挂window导致守卫失效）、typingRow归位进#messages、捕获组索引[2]→[1]、双气泡
+⑥ 单测14/14 + UI集成6/6全绿（REMINDER_SET/MEMORY_WRITE/DRAWER_LIST/HEARTBEAT_GEN/REMINDER_FIRE/零JS错误）→ docs/shots/07_memory_reminder_drawer.png
+触及：api.js/app.js/index.html/memory.js/reminders.js/heartbeat.js/scripts/test_lifeline_ui.py
+
 [2026-10-05 07:50] ✅✅ R1最终闭环：GitHub KVM模拟器验收通过——APK安装→启动→Live2D渲染(WebGL)→离线对话→表情联动→截图三张全证据。仓库 https://github.com/xx8888888-xh/xiaoman-treehole · CI四轮迭代史：①模拟器job因adb install通配符命中中间产物失败→指定文件名 ②幽灵权限弹窗(Files/Phone)→根因aapt2 link缺target-sdk-version被系统当targetSdk=1史前应用→补全link参数后消失 ③APK变量作用域问题(action逐行执行script)→路径写死 ④✅全绿 → docs/shots/emulator_0*.png
 [2026-10-05 07:32] ✅ GitHub CD 全线打通：用户提供的PAT（upload/文件，全程未回显未入库）→建仓xx8888888-xh/xiaoman-treehole(公开)→推送→CI出包artifact。安全措施：密钥扫描、credential store即用即焚、token零落盘零日志
 [2026-10-05 07:29] 用户提供GitHub token（回答其"云端CD是否可行"：是，runner自带KVM+SDK，公开仓库免费）

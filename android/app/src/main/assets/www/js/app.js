@@ -67,13 +67,27 @@ const App = (() => {
     const entries = Object.entries(mem);
     if (!entries.length) {
       box.innerHTML = `<span class="chip empty">还没有，聊着聊着就有了</span>`;
-      return;
+    } else {
+      for (const [k, v] of entries) {
+        const c = document.createElement("span");
+        c.className = "chip";
+        c.innerHTML = `<b>${k}</b> ${v}`;
+        box.appendChild(c);
+      }
     }
-    for (const [k, v] of entries) {
-      const c = document.createElement("span");
-      c.className = "chip";
-      c.innerHTML = `<b>${k}</b> ${v}`;
-      box.appendChild(c);
+    // 提醒清单（可取消）
+    if (window.Reminders) {
+      const rbox = $("reminderList");
+      const pend = Reminders.pending();
+      rbox.innerHTML = pend.length
+        ? `<p class="drawer-sub" style="margin-top:10px">定好的提醒</p>` +
+          pend.map(r => `<div class="chip" style="justify-content:space-between;width:100%">
+            <span>⏰ ${Reminders.fmt(r.at)} · ${r.text}</span>
+            <button data-rid="${r.id}" class="r-cancel" style="border:0;background:none;cursor:pointer;color:#e88498">✕</button></div>`).join("")
+        : "";
+      rbox.querySelectorAll(".r-cancel").forEach(b => {
+        b.onclick = () => { Reminders.cancel(b.dataset.rid); renderMem(); toast("提醒取消了"); };
+      });
     }
   }
 
@@ -85,6 +99,18 @@ const App = (() => {
     $("typingRow").classList.add("hidden");
   }
   const typingDelay = text => Math.min(2800, 550 + text.length * 42);
+
+  // 提醒确认语（朋友口吻，不机械）
+  function pickConfirm(item) {
+    const T = Reminders.fmt(item.at);
+    const C = item.text;
+    const pools = [
+      `好，${T}我喊你${C}，赖床就连环call`,
+      `记上了：${T} 提醒你${C}||到点我找你，不许装死`,
+      `行，${T}叫你${C}。团子作证`,
+    ];
+    return pools[Math.floor(Math.random() * pools.length)];
+  }
 
   // ---------- 发送主流程 ----------
   async function send(text) {
@@ -106,9 +132,32 @@ const App = (() => {
       return;
     }
 
+    // 定时提醒（客户端优先截获：可靠+离线可用，模型协议路径作为补充）
+    const remindCap = text.match(/(?:提醒我|叫我|记得让我|别忘了让我)(.{1,50})/);
+    if (remindCap) {
+      const when = Reminders.parseTime(text);
+      if (when) {
+        let content = remindCap[1] || "";
+        content = content.replace(/(\d{1,2}[点:：时](半|\d{1,2}分?)?|\d{1,2}:\d{2}|今天|今晚|明天|后天|大后天|早上|上午|中午|下午|傍晚|晚上|凌晨|周[一二三四五六日天]|\d{1,2}月\d{1,2}[日号]|一下|哈)/g, " ").trim();
+        const item = Reminders.add(content || "到时候提醒你", when);
+        if (item) {
+          const conf = pickConfirm(item);
+          await showTyping(700);
+          addMsg(conf, "them", { tip: true });
+          history.push({ role: "assistant", content: conf, at: Date.now() });
+          toast(`已设提醒：${Reminders.fmt(item.at)}`);
+          busy = false; $("sendBtn").disabled = false;
+          return;
+        }
+      }
+    }
+
     try {
       await showTyping(650 + Math.random() * 500);   // 读消息的停顿
-      const data = await API.chat(history);
+      const data = await API.chat(history, {
+        memSection: window.MemoryStore ? MemoryStore.renderContext(text) : "",
+        now: new Date()
+      });
       await sendSplit(data, text);
     } catch (e) {
       console.error(e);
@@ -127,16 +176,26 @@ const App = (() => {
       const seg = parts[i];
       await showTyping(typingDelay(seg));
       addMsg(seg, "them");
-      history.push({ role: "assistant", content: seg });
+      history.push({ role: "assistant", content: seg, at: Date.now() });
     }
 
     // 表情 + 动作
     if (data.emotion) Stage.setEmotion(data.emotion);
     if (data.motion && data.motion !== "null") Stage.playMotion(data.motion);
 
-    // 记忆
+    // 记忆：双写（旧抽屉 + 新索引库）
     if (data.memory_updates && Object.keys(data.memory_updates).length) {
       saveMem({ ...loadMem(), ...data.memory_updates });
+      if (window.MemoryStore) MemoryStore.addUpdates(data.memory_updates);
+    }
+
+    // 模型路径的提醒协议（补充：客户端没截获但模型识别到了）
+    if (Array.isArray(data.reminders) && data.reminders.length) {
+      for (const r of data.reminders) {
+        const item = Reminders.add(r.text, r.time);
+        if (item) toast(`已设提醒：${Reminders.fmt(item.at)}`);
+      }
+      renderMem();
     }
 
     // 语音（只念最后一条短消息，避免长篇朗读）
@@ -244,10 +303,21 @@ const App = (() => {
   }
 
   function init() {
-    bind();
-    Stage.mount($("stage"));
-    greet();
-    armIdle();
+    try {
+      bind(); console.log("[probe] bind ok");
+      Stage.mount($("stage")); console.log("[probe] mount ok");
+      greet(); console.log("[probe] greet ok");
+      armIdle();
+      // 心跳系统：提醒投递 + 朋友式主动问候（多重频控，不打扰）
+      if (window.Heartbeat && window.Reminders) {
+        Heartbeat.start(async (data) => {
+          if (busy) return;
+          await sendSplit(data, null);
+          renderMem();
+        }, n => history.slice(-n));
+        console.log("[probe] heartbeat ok");
+      }
+    } catch (e) { console.log("[probe] INIT_FAIL", e.message, (e.stack || "").split("\n")[1]); }
   }
 
   return { init, send, onPoke };
