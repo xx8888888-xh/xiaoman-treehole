@@ -1,13 +1,14 @@
 name: android-ci
 
 # 小满树洞 CI/CD · 出包 + 模拟器真机级验证 + UI 截图
-# 触发：push 到 main / 手动。公开仓库免费（Linux runner）。
+# 触发：push 到 main 或 zhiqiu/**（知秋的分支）/ 手动。公开仓库免费（Linux runner）。
+# 多AI协同分支策略：知秋=zhiqiu/**，另一协作者用其自己的分支，main 保持稳定。
 # 说明：GitHub ubuntu runner 自带 /dev/kvm，模拟器可硬件加速启动（约1-2分钟冷启）。
 # 前提：仓库根放本项目（含 android/ 与 scripts/build_apk.sh）。
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'zhiqiu/**']
   workflow_dispatch:
 
 jobs:
