@@ -250,6 +250,9 @@ jobs:
           pip install playwright edge-tts
           python -m playwright install --with-deps chromium
 
+      - name: Install ffmpeg (TTS verify dependency)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
       - name: Start local services (mock 8902 / tts 8903 / web 8901)
         run: bash scripts/dev_up.sh
 
