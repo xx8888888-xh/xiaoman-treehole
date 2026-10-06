@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-10-06 · 三线合一推送（integration/20261006）+ 密钥备份与权限审计
+
+> 用户上传 GitHub PAT + OneRouter key，要求备份（用户会自行销毁，任务期间不删）、审计权限、任务状态实时推送。
+
+### 分支合并
+- 远端 4 分支盘点（main ← audit ← r2 线性 + main ← zhiqiu/dev）。集成分支 `integration/20261006`：r2 直合 + zhiqiu/dev 三处冲突手工解。
+- **CI yml 修复**：`branches: ain]` 坏行（zhiqiu/dev 带伤上线，CI 触发此前一直失效）→ `push: [main, 'zhiqiu/**']`、`pull_request: [main]`；保留 keyevent 111 软键盘修复。
+- 验证全绿：node --check / bash -n / py_compile / YAML 解析 ✓；本地 mock_api + e2e exit 0。
+
+### 密钥与权限（密钥本体不入库、不回显，备份于仓库外 /home/z/.secrets/，600 权限 + tar）
+- **GitHub PAT**（fine-grained）：身份 `xx8888888-xh`，对 xiaoman-treehole **admin+push+pull**，可访问 10 仓库 → **权限：全仓写**。
+- **OneRouter key**（OpenRouter 格式，sk-or-v1）：免费档 is_free_tier=true，额度 $100（已用 0）→ **权限：免费模型调用**。
+
 ## 2026-10-06 · 第二轮：清零 4 项遗留 + 长期记忆/环境固化（分支 `fix/remediation-r2-20261006`）
 
 > 用户明示「自己决策修哪些、修完提交；每一步变更都要有迹可循、每次修改写文档并定期维护；沙箱会重置导致记忆缺失/软件失效，要固化」。开局先查额度：`free_model_daily_requests` 已 used 67 / limit 50 → **免费额度耗尽，DSH 全量 429**，故按铁律 1 例外**由助手直接执行**并在此记录。
