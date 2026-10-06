@@ -194,7 +194,7 @@ jobs:
             sleep 8
 
             # Verify process is alive
-            adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found"; exit 1; }
+            adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found — crash evidence follows"; adb logcat -d | tail -300 || true; exit 1; }
 
             # Check for FATAL in logcat
             adb logcat -d *:E | grep -i "fatal\|exception" && { echo "ERROR: FATAL/Exception found in logcat"; exit 1; } || true
