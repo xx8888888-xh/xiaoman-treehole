@@ -195,13 +195,8 @@ jobs:
             adb shell am start -n com.xiaoman.treehole/.MainActivity
             sleep 8
 
-            # Verify process is alive (retry: cold start may be slow / LMK pressure)
-            for i in 1 2 3; do
-              if adb shell pidof com.xiaoman.treehole; then echo "process alive (attempt $i)"; break; fi
-              echo "attempt $i: process not found; re-launching"
-              adb shell am start -n com.xiaoman.treehole/.MainActivity || true
-              sleep 10
-            done
+            # Verify process is alive (retry x3, single line — emulator-runner executes script line-by-line!)
+            for i in 1 2 3; do adb shell pidof com.xiaoman.treehole && { echo "process alive (attempt $i)"; break; }; echo "attempt $i: relaunching"; adb shell am start -n com.xiaoman.treehole/.MainActivity || true; sleep 10; done
             adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found after 3 attempts — crash evidence follows"; adb logcat -d | rg -i "xiaoman|FATAL|AndroidRuntime|lowmemorykiller" | tail -100 || adb logcat -d | tail -200 || true; exit 1; }
 
             # Check for FATAL in logcat
