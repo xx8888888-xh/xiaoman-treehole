@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-10-06 · 审计修复推送到云端分支 + 固化「一键推送」
+
+> 分支 `fix/audit-remediation-20261005` 已推送云端（HEAD `1b8541e`，60 文件）。用户定下**长期规矩：以后每笔更改都新开分支并推送云端**（本地不持久，需尽量提交）。
+
+- **推送阻塞与解法**：沙箱无任何 GitHub 写权限（HTTPS 无 credential helper / `~/.git-credentials` / `~/.netrc`；SSH 无 key 且 22 端口超时）。用户提供 Fine-grained PAT → 落 `/workspace/.secrets/github.token`（93B，chmod 600，**仓库外、绝不入库**），用一次性 credential helper（`git -c`）推送，**未改动任何 git config**。
+- **固化**：新增 [`scripts/git_push.sh`](file:///workspace/xiaoman-treehole/scripts/git_push.sh) —— 读 token 文件、拒绝推 main/master、`push -u` 到同名远端分支（不存在即新建）。以后提交统一走它。
+- **命中文件**：`scripts/git_push.sh`（新增）、`docs/DEVLOG.md`、`.gitignore`（补 `logs/`）。
+
+---
+
 ## 2026-10-06 · 审计修复收口（WP1–WP5 全量完成 + 助手补齐阻断项，提交分支）
 
 > 承接上条：配额重置后，WP1(server)/WP2(web-js)/WP3(web-ui)/WP4(android)/WP5(scripts) 五路修复全部落盘；本轮由助手做独立验收，并**亲自补齐 6 处会阻断构建/运行或漏修的项**。分支：`fix/audit-remediation-20261005`。
