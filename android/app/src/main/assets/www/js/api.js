@@ -68,16 +68,42 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     try { return JSON.parse(text); } catch (e) {}
     const m = text.match(/\{[\s\S]*\}/);
     if (m) { try { return JSON.parse(m[0]); } catch (e) {} }
-    return { reply: text.trim(), emotion: "neutral", motion: null };
+    // 兜底：过滤 null/"null"/空/截断等无效文本，给默认话术
+    const t = (text || "").trim();
+    if (!t || /^(null|undefined|\[\]|\{\})$/i.test(t)) {
+      return { reply: "嗯……我好像走神了，你刚才说什么来着？", emotion: "neutral", motion: null };
+    }
+    return { reply: t, emotion: "neutral", motion: null };
+  }
+
+  /** 统一 fetch 带超时 */
+  async function fetchWithTimeout(url, options, timeoutMs = 5000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      return res;
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
+  /** 上传前剥离内部字段（at 等），只保留 role/content */
+  function toMessages(history) {
+    return (history || [])
+      .filter(m => m && (m.role === "user" || m.role === "assistant") && m.content)
+      .map(m => ({ role: m.role, content: m.content }));
   }
 
   /** Mock 模式：POST {base}/v1/chat/completions（mock_api.py，"我"充当的 API） */
   async function chatMock(history) {
-    const base = (loadCfg().apiBase || "http://127.0.0.1:8902").replace(/\/$/, "");
-    const res = await fetch(`${base}/v1/chat/completions`, {
+    const cfg = loadCfg();
+    const base = (cfg.apiBase || "").replace(/\/$/, "");
+    if (!base) throw new Error("mock apiBase 为空");
+    const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: history })
+      body: JSON.stringify({ messages: toMessages(history) })
     });
     if (!res.ok) throw new Error(`mock api ${res.status}`);
     const data = await res.json();
@@ -88,7 +114,8 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   async function chatOpenAI(history, opts) {
     const { apiBase, apiKey, model } = loadCfg();
     let base = (apiBase || "").replace(/\/$/, "").replace(/\/v1$/, "");  // 容错：base带不带/v1都行
-    const res = await fetch(`${base}/v1/chat/completions`, {
+    if (!base) throw new Error("openai apiBase 为空");
+    const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -99,7 +126,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
         model: model || "qwen/qwen3.8-27b:free",
         temperature: 0.85,
         reasoning: { enabled: false },  // 推理系模型必须关思考，防 JSON 被挤掉
-        messages: [{ role: "system", content: buildSystemPrompt(opts) }, ...history]
+        messages: [{ role: "system", content: buildSystemPrompt(opts) }, ...toMessages(history)]
       })
     });
     if (!res.ok) throw new Error(`api ${res.status}`);
@@ -113,11 +140,18 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     try {
       if (cfg.mode === "openai") return await chatOpenAI(history, opts);
       if (cfg.mode === "local") return await chatMock(history);
-      // auto：先试真API/mock服务，失败落本地引擎
+      // auto：有 apiKey 先试 openai，再试 mock，最后离线引擎
+      if (cfg.apiKey) {
+        try { return await chatOpenAI(history, opts); } catch (e) { console.warn("openai 失败，尝试 mock:", e.message); }
+      }
       try { return await chatMock(history); }
       catch (e1) {
-        try { return await chatOpenAI(history, opts); }
-        catch (e2) { console.warn("离线模式:", e2.message); return MockEngine.reply(history); }
+        if (cfg.apiKey) {
+          try { return await chatOpenAI(history, opts); }
+          catch (e2) { console.warn("openai 再次失败，离线模式:", e2.message); }
+        }
+        console.warn("离线模式:", e1.message);
+        return MockEngine.reply(history);
       }
     } catch (e) {
       console.warn("chat fallback:", e.message);

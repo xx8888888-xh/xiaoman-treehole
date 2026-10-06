@@ -13,7 +13,7 @@ Live2D 结构化手术脚本 · Hiyori 模型
   S3 输出手术报告 docs/live2d_surgery.md（含 before/after 对照）
 参数依据：Hiyori.cdi3.json（70 个参数，标准 Cubism 命名）
 """
-import json, os, shutil
+import json, os, shutil, sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 MODEL_DIR = os.path.join(ROOT, "web", "assets", "models", "hiyori")
@@ -44,41 +44,63 @@ def exp3(params):
         "Parameters": [{"Id": p, "Value": v, "Blend": "Overwrite"} for p, v in params]
     }, ensure_ascii=False, indent=1)
 
-os.makedirs(os.path.join(MODEL_DIR, "expressions"), exist_ok=True)
-for name, params in EXPRESSIONS.items():
-    with open(os.path.join(MODEL_DIR, "expressions", f"emo_{name}.exp3.json"), "w") as f:
-        f.write(exp3(params))
-print(f"S1 完成：{len(EXPRESSIONS)} 个表情文件")
 
-# ---------- S2: 重写 model3.json ----------
-m3path = os.path.join(MODEL_DIR, "Hiyori.model3.json")
-shutil.copy(m3path, m3path + ".orig")          # 手术前留底
-m3 = json.load(open(m3path + ".orig"))
-fr = m3["FileReferences"]
+def main():
+    # ---------- S1: 生成表情文件 ----------
+    os.makedirs(os.path.join(MODEL_DIR, "expressions"), exist_ok=True)
+    for name, params in EXPRESSIONS.items():
+        with open(os.path.join(MODEL_DIR, "expressions", f"emo_{name}.exp3.json"), "w") as f:
+            f.write(exp3(params))
+    print(f"S1 完成：{len(EXPRESSIONS)} 个表情文件")
 
-fr["Expressions"] = [{"Name": n, "File": f"expressions/emo_{n}.exp3.json"} for n in EXPRESSIONS]
+    # ---------- S2: 重写 model3.json ----------
+    m3path = os.path.join(MODEL_DIR, "Hiyori.model3.json")
+    m3orig = m3path + ".orig"
+    # 仅在原件不存在时备份一次，避免二次运行污染回滚备份（保护回滚能力）
+    if not os.path.exists(m3orig):
+        shutil.copy2(m3path, m3orig)
+        print(f"已备份原件 → {os.path.basename(m3orig)}")
+    else:
+        print(f"检测到已存在 {os.path.basename(m3orig)}，以原件重放（幂等，不改写备份）")
 
-idle_files = [m["File"] for m in fr["Motions"]["Idle"]]
-tap_files  = [m["File"] for m in fr["Motions"]["TapBody"]]
-fr["Motions"]["Greeting"] = [{"File": tap_files[0], "FadeInTime": 0.3, "FadeOutTime": 0.5}] if tap_files else []
-fr["Motions"]["Nod"]      = [{"File": idle_files[1 % len(idle_files)], "FadeInTime": 0.3, "FadeOutTime": 0.4}]
-fr["Motions"]["Shake"]    = [{"File": idle_files[2 % len(idle_files)], "FadeInTime": 0.3, "FadeOutTime": 0.4}]
-fr["Motions"]["HappyJump"]= [{"File": tap_files[1 % len(tap_files)] if len(tap_files) > 1 else tap_files[0],
-                              "FadeInTime": 0.2, "FadeOutTime": 0.5}]
+    # 始终以 .orig（真实原件）为输入，保证重复运行结果一致
+    with open(m3orig, encoding="utf-8") as f:
+        m3 = json.load(f)
 
-with open(m3path, "w") as f:
-    json.dump(m3, f, ensure_ascii=False, indent=1)
-print("S2 完成：model3.json 重写（原件存为 .orig）")
+    fr = m3.get("FileReferences", {})
+    # before 数据从原件实测读取，避免静态文案在二次运行后失真
+    before_exprs = fr.get("Expressions", [])
+    before_motions = fr.get("Motions", {})
 
-# ---------- S3: 手术报告 ----------
-motions_map = "\n".join(
-    f"| {g} | {'、'.join(m['File'] for m in v)} |" for g, v in fr["Motions"].items())
-with open(DOC, "w") as f:
-    f.write(f"""# Live2D 结构化手术报告 · Hiyori
+    motions = fr.get("Motions", {})
+    idle_files = [m["File"] for m in motions.get("Idle", []) if m.get("File")]
+    tap_files = [m["File"] for m in motions.get("TapBody", []) if m.get("File")]
+    if not idle_files or not tap_files:
+        print(f"❌ 模型动作组缺失：Idle={len(idle_files)}、TapBody={len(tap_files)}，无法手术",
+              file=sys.stderr)
+        return 1
+
+    fr["Expressions"] = [{"Name": n, "File": f"expressions/emo_{n}.exp3.json"} for n in EXPRESSIONS]
+    fr["Motions"]["Greeting"] = [{"File": tap_files[0], "FadeInTime": 0.3, "FadeOutTime": 0.5}]
+    fr["Motions"]["Nod"]      = [{"File": idle_files[1 % len(idle_files)], "FadeInTime": 0.3, "FadeOutTime": 0.4}]
+    fr["Motions"]["Shake"]    = [{"File": idle_files[2 % len(idle_files)], "FadeInTime": 0.3, "FadeOutTime": 0.4}]
+    fr["Motions"]["HappyJump"] = [{"File": tap_files[1 % len(tap_files)], "FadeInTime": 0.2, "FadeOutTime": 0.5}]
+
+    with open(m3path, "w", encoding="utf-8") as f:
+        json.dump(m3, f, ensure_ascii=False, indent=1)
+    print("S2 完成：model3.json 重写（原件存为 .orig）")
+
+    # ---------- S3: 手术报告 ----------
+    motions_map = "\n".join(
+        f"| {g} | {'、'.join(m['File'] for m in v)} |" for g, v in fr["Motions"].items())
+    before_motions_desc = "、".join(f"{g}({len(v)}个)" for g, v in before_motions.items()) or "无"
+    before_exprs_desc = f"{len(before_exprs)} 个" if before_exprs else "**无**"
+    with open(DOC, "w", encoding="utf-8") as f:
+        f.write(f"""# Live2D 结构化手术报告 · Hiyori
 
 ## 手术前（before）
-- Expressions: **无**
-- Motions 组: Idle({len(idle_files)}个)、TapBody({len(tap_files)}个)
+- Expressions: {before_exprs_desc}
+- Motions 组: {before_motions_desc}
 - 参数: 70 个（Hiyori.cdi3.json）
 
 ## 手术后（after）
@@ -107,4 +129,9 @@ with open(DOC, "w") as f:
 ### 回滚方式
 `cp web/assets/models/hiyori/Hiyori.model3.json.orig web/assets/models/hiyori/Hiyori.model3.json`
 """)
-print("S3 完成：手术报告 → docs/live2d_surgery.md")
+    print("S3 完成：手术报告 → docs/live2d_surgery.md")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

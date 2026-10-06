@@ -26,27 +26,33 @@ const Reminders = (() => {
     const now = new Date();
     let y = now.getFullYear(), mo = now.getMonth(), d = now.getDate();
     let hh = null, mi = 0;
+    let explicitDay = false;   // 显式日词（今天/明天/周X/X月X日/YYYY-MM-DD）：已过也不顺延到明天
+    let sameWeekday = false;   // 周X 恰为今天：时刻已过则顺延到下周同一天
+    let noYear = false;        // X月X日 无年份：已过则补到明年
 
     // ISO / 标准格式 YYYY-MM-DD [HH:MM]
     let m = str.match(/(\d{4})-(\d{1,2})-(\d{1,2})[ T]?(\d{1,2})?:?(\d{2})?/);
-    if (m) { y=+m[1]; mo=+m[2]-1; d=+m[3]; hh=m[4]!=null?+m[4]:9; mi=m[5]?+m[5]:0; return _mk(y,mo,d,hh,mi,str); }
+    if (m) { y=+m[1]; mo=+m[2]-1; d=+m[3]; hh=m[4]!=null?+m[4]:9; mi=m[5]?+m[5]:0; return _mk(y,mo,d,hh,mi,true); }
 
-    // 相对日：今天/明天/后天/大后天
+    // 相对日：今天/今晚/明天/后天/大后天（与周X 互斥，避免偏移叠加）
+    let relMatched = false;
     m = str.match(/(今天|今晚|明天|后天|大后天)/);
     if (m) {
-      const delta = {"今天":0,"今晚":0,"明天":1,"后天":2,"大后天":3}[m[1]];
-      d += delta;
+      d += {"今天":0,"今晚":0,"明天":1,"后天":2,"大后天":3}[m[1]];
+      relMatched = true; explicitDay = true;
     }
-    // 周X
+    // 周X：仅在没有相对日词时生效；同日取当天，时刻已过则顺延到下周同一天
     m = str.match(/(?:周|星期)([一二三四五六日天])/);
-    if (m) {
-      const target = "一二三四五六日天".indexOf(m[1]) === 6 ? 0 : "一二三四五六日天".indexOf(m[1]) + 1;
-      const cur = now.getDay();
-      d += (target - cur + 7) % 7 || 7;
+    if (m && !relMatched) {
+      const wi = "一二三四五六日天".indexOf(m[1]);
+      const target = wi === 6 ? 0 : wi + 1;
+      const offset = (target - now.getDay() + 7) % 7;
+      d += offset;
+      explicitDay = true; sameWeekday = offset === 0;
     }
-    // X月X日
+    // X月X日（无年份）
     m = str.match(/(\d{1,2})月(\d{1,2})[日号]/);
-    if (m) { mo = +m[1]-1; d = +m[2]; }
+    if (m) { mo = +m[1]-1; d = +m[2]; explicitDay = true; noYear = true; }
     // 时分：支持中文数字（八点/十点半/九点一刻）与阿拉伯（9:30/19点05）
     const cn = { "一":1,"二":2,"两":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9 };
     const cnNum = (s) => {
@@ -73,15 +79,18 @@ const Reminders = (() => {
       if (m) { hh = +m[1]; mi = +m[2]; }
     }
     if (hh == null) return null;
-    return _mk(y, mo, d, hh, mi, str);
+    const t = _mk(y, mo, d, hh, mi, explicitDay);
+    // 周X 恰为今天且时刻已过 → 顺延到下周同一天（而不是留在过去立即触发）
+    if (sameWeekday && t.getTime() < Date.now()) t.setDate(t.getDate() + 7);
+    // 无年份的 X月X日 已过 → 补到明年（跨年场景）
+    if (noYear && t.getTime() < Date.now()) t.setFullYear(t.getFullYear() + 1);
+    return t;
   }
 
-  function _mk(y, mo, d, hh, mi, raw) {
+  function _mk(y, mo, d, hh, mi, explicitDay) {
     const t = new Date(y, mo, d, hh, mi, 0);
-    // 已过时间的"明天"语义兜底（说"8点"而现在是9点→指明天）
-    if (t.getTime() < Date.now() && !/明天|后天|周|星期|\d{4}-/.test(raw)) {
-      t.setDate(t.getDate() + 1);
-    }
+    // 仅"裸时刻"（无显式日词）且已过 → 指明天（如现在 9 点说"8点"→ 明天 8 点）
+    if (!explicitDay && t.getTime() < Date.now()) t.setDate(t.getDate() + 1);
     return t;
   }
 
@@ -98,16 +107,25 @@ const Reminders = (() => {
     return item;
   }
 
-  /** 到期检查：返回到期待送列表并标记 done */
+  /** 到期检查：返回到期待送列表（不自动标记 done，由投递方成功后调用 markDone） */
   function due() {
     const now = Date.now();
     const list = load();
-    const fired = list.filter(r => !r.done && r.at <= now);
-    if (fired.length) {
-      for (const r of fired) r.done = true;
-      save(list);
+    return list.filter(r => !r.done && r.at <= now);
+  }
+
+  /** 标记指定 id 的提醒为已完成 */
+  function markDone(ids) {
+    if (!ids || !ids.length) return;
+    const list = load();
+    let changed = false;
+    for (const r of list) {
+      if (ids.includes(r.id) && !r.done) {
+        r.done = true;
+        changed = true;
+      }
     }
-    return fired;
+    if (changed) save(list);
   }
 
   function pending() { return load().filter(r => !r.done); }
@@ -126,6 +144,6 @@ const Reminders = (() => {
     return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   }
 
-  return { add, due, pending, cancel, all, parseTime, fmt };
+  return { add, due, pending, cancel, all, parseTime, fmt, markDone };
 })();
 window.Reminders = Reminders;   // const 不挂 window，跨模块守卫需显式挂载

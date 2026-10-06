@@ -5,24 +5,54 @@
  *      GET {ttsBase}/tts?text=…&voice=…  → audio/mpeg
  * 2. browser → Web Speech API（离线兜底，音质一般）
  * 播放时通过 onFrame 回调输出音量包络，供 Live2D 口型驱动。
+ * 失败语义：server 路不通 → 自动降级 browser，绝不静默无声。
  * ============================================================ */
 
 const TTS = (() => {
   let currentAudio = null;
+  let fakeTimer = null;      // 假包络 interval（Android/browser 路），全局唯一
+  let fakeStopTimer = null;  // Android 路时长估算的兜底停止定时器
 
-  /** 用 AudioContext 分析音量，驱动口型 */
-  function playWithLipSync(url, onFrame, onEnd) {
+  /** 清掉所有假包络定时器（避免连发消息时多路叠加、口型乱抖） */
+  function clearFake() {
+    if (fakeTimer) { clearInterval(fakeTimer); fakeTimer = null; }
+    if (fakeStopTimer) { clearTimeout(fakeStopTimer); fakeStopTimer = null; }
+  }
+
+  /** 停掉当前所有正在播的语音（含假包络定时器） */
+  function stop() {
+    if (currentAudio) { try { currentAudio.pause(); } catch (e) {} currentAudio = null; }
+    clearFake();
+    try { if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel(); } catch (e) {}
+    if (window.AndroidTTS && window.AndroidTTS.stop) { try { window.AndroidTTS.stop(); } catch (e) {} }
+  }
+
+  /**
+   * 用 AudioContext 分析音量，驱动口型
+   * @param onFail 播放失败（加载/解码/自动播放被拦）时回调 —— 由调用方决定降级
+   */
+  function playWithLipSync(url, onFrame, onEnd, onFail) {
     const audio = new Audio(url);
-    currentAudio && currentAudio.pause();
+    if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
     currentAudio = audio;
-    let ctx = null, analyser = null, srcNode = null, raf = 0;
+    let ctx = null, analyser = null, srcNode = null, raf = 0, settled = false;
+    const settle = (failed) => {
+      if (settled) return;
+      settled = true;
+      cancelAnimationFrame(raf);
+      if (ctx) { try { ctx.close(); } catch (e) {} }
+      if (currentAudio === audio) currentAudio = null;
+      if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
+    };
 
-    audio.onended = () => { cancelAnimationFrame(raf); ctx && ctx.close(); onEnd && onEnd(); };
-    audio.onerror = () => { cancelAnimationFrame(raf); ctx && ctx.close(); onEnd && onEnd(); };
+    audio.onended = () => settle(false);
+    audio.onerror = () => settle(true);   // 真败因（404/解码失败）走降级，不静默
 
     audio.play().then(() => {
       try {
         ctx = new (window.AudioContext || window.webkitAudioContext)();
+        // 非用户手势下 AudioContext 可能 suspended → 全部输出为 0、嘴不动
+        if (ctx.state === "suspended") ctx.resume().catch(() => {});
         srcNode = ctx.createMediaElementSource(audio);
         analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
@@ -35,53 +65,63 @@ const TTS = (() => {
           onFrame && onFrame(level);
           raf = requestAnimationFrame(loop);
         })();
-      } catch (e) { /* 分析失败就静默播，口型走兜底 */ onFrame && onFrame(-1); }
-    }).catch(() => onEnd && onEnd());
+      } catch (e) {
+        // 分析失败就静默播，口型走兜底（-1 触发 lipFrame 的随机包络）
+        onFrame && onFrame(-1);
+      }
+    }).catch(() => settle(true));
+  }
+
+  /** 浏览器 SpeechSynthesis（离线兜底） */
+  function speakBrowser(text, onFrame, onEnd) {
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "zh-CN"; u.rate = 1.02; u.pitch = 1.15;
+      const done = () => { clearFake(); onFrame && onFrame(0); onEnd && onEnd(); };
+      u.onend = done;
+      u.onerror = done;
+      clearFake();
+      fakeTimer = setInterval(() => onFrame && onFrame(0.4 + Math.random() * 0.3), 90);
+      speechSynthesis.speak(u);
+    } catch (e) { onEnd && onEnd(); }
+  }
+
+  /** Android JSBridge：系统 TTS（WebView 内 speechSynthesis 不可用时的真机方案） */
+  function speakAndroid(text, onFrame, onEnd) {
+    try {
+      if (!(window.AndroidTTS.speak(text))) return false;
+      clearFake();
+      fakeTimer = setInterval(() => onFrame && onFrame(0.35 + Math.random() * 0.35), 90);
+      const done = () => { clearFake(); onFrame && onFrame(0); onEnd && onEnd(); };
+      // 系统 TTS 无完成回调穿透 JS 时用估算兜底；中文语速约 180~200ms/字
+      fakeStopTimer = setTimeout(done, Math.max(1800, text.length * 190));
+      return true;
+    } catch (e) { console.warn("AndroidTTS 桥失败:", e); return false; }
   }
 
   async function speak(text, onFrame, onEnd) {
     const cfg = API.loadCfg();
     const mode = cfg.tts || "server";
+    stop();                                  // 先停上一段，防多路叠加
     if (mode === "off" || !text) { onEnd && onEnd(); return; }
 
-    if (mode === "server") {
-      const base = (cfg.apiBase || "http://127.0.0.1:8902").replace(/\/$/, "");
-      const url = `${base}/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(cfg.voice || "zh-CN-XiaoyiNeural")}`;
-      try {
-        playWithLipSync(url, onFrame, onEnd);
-        return;
-      } catch (e) { console.warn("server tts 失败，降级 browser:", e); }
-    }
-
-    // Android JSBridge：系统 TTS（WebView 内 speechSynthesis 不可用时的真机方案）
+    // Android 桥优先于 server（真机无本地 8903 时）
     if (window.AndroidTTS && window.AndroidTTS.available && window.AndroidTTS.available()) {
-      try {
-        const ok = window.AndroidTTS.speak(text);
-        if (ok) {
-          const fake = setInterval(() => onFrame && onFrame(0.35 + Math.random() * 0.35), 90);
-          const stopFake = () => { clearInterval(fake); onFrame && onFrame(0); onEnd && onEnd(); };
-          // 按语速粗估时长，系统TTS无完成回调穿透JS时用估算兜底
-          setTimeout(stopFake, Math.max(2500, text.length * 260));
-          return;
-        }
-      } catch (e) { console.warn("AndroidTTS 桥失败:", e); }
+      if (speakAndroid(text, onFrame, onEnd)) return;
     }
 
-    // browser 兜底
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "zh-CN"; u.rate = 1.02; u.pitch = 1.15;
-      const fake = setInterval(() => onFrame && onFrame(0.4 + Math.random() * 0.3), 90);
-      u.onend = () => { clearInterval(fake); onFrame && onFrame(0); onEnd && onEnd(); };
-      u.onerror = () => { clearInterval(fake); onEnd && onEnd(); };
-      speechSynthesis.speak(u);
-    } catch (e) { onEnd && onEnd(); }
-  }
+    if (mode === "server") {
+      const base = (cfg.ttsBase || "http://127.0.0.1:8903").replace(/\/$/, "");
+      const url = `${base}/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(cfg.voice || "zh-CN-XiaoyiNeural")}`;
+      // server 路失败（服务挂/超时/解码失败）→ 显式降级 browser，避免静默无声
+      playWithLipSync(url, onFrame, onEnd, () => {
+        console.warn("server tts 失败，降级 browser");
+        speakBrowser(text, onFrame, onEnd);
+      });
+      return;
+    }
 
-  function stop() {
-    currentAudio && currentAudio.pause();
-    speechSynthesis && speechSynthesis.cancel();
-    if (window.AndroidTTS && window.AndroidTTS.stop) try { window.AndroidTTS.stop(); } catch (e) {}
+    speakBrowser(text, onFrame, onEnd);
   }
 
   return { speak, stop };

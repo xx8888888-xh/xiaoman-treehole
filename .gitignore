@@ -13,5 +13,21 @@ upload/
 .git_askpass*
 node_modules/
 
+# 备份归档与打包产物（体积大，不入库）
+backups/
+*.apk
+*.aab
+
+# Python 缓存与脚本自测临时产物
+__pycache__/
+*.pyc
+# 脚本自测/校验的临时产物目录（不再写入 web/assets/audio/）
+.cache/
+web/assets/audio/selftest*.mp3
+web/assets/audio/selftest*.wav
+
+# 本地服务运行日志（dev_up.sh 产物）
+logs/
+
 # 系统
 .DS_Store

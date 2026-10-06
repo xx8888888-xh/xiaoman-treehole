@@ -12,6 +12,7 @@ const MemoryStore = (() => {
   const KEY = "xiaoman_memories_v1";
   const MAX = 200;              // 容量上限，FIFO 淘汰最旧的低分记忆
   const PIN_KEYS = ["昵称", "生日", "重要日"];  // 钉子户：永远注入
+  let lastHitsSave = 0;                         // hits 回写节流时间戳
 
   function load() {
     try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { return []; }
@@ -33,12 +34,20 @@ const MemoryStore = (() => {
     return true;
   }
 
-  /** 模型 memory_updates（{键:值}）批量入馆 */
+  /** 删除同 key 的旧记忆：同键新值覆盖，避免旧昵称以 pin 身份永远注入 */
+  function removeByKey(key) {
+    save(load().filter(m => !(m.tags && m.tags[0] === key) && !String(m.text).startsWith(key + "：")));
+  }
+
+  /** 模型 memory_updates（{键:值}）批量入馆（同键覆盖，只保留最新值） */
   function addUpdates(obj) {
     let n = 0;
     if (obj && typeof obj === "object") {
       for (const k of Object.keys(obj)) {
-        if (add(`${k}：${obj[k]}`, [k], k === "昵称" ? "pin" : "fact")) n++;
+        const v = obj[k];
+        if (v == null || v === "") continue;
+        removeByKey(k);
+        if (add(`${k}：${v}`, [k], k === "昵称" ? "pin" : "fact")) n++;
       }
     }
     return n;
@@ -66,7 +75,7 @@ const MemoryStore = (() => {
         for (let i = 0; i < seg.length - 1; i++) grams.push(seg.slice(i, i + 2)); // 重叠滑窗！
       for (const w of qTokens) if (text.includes(w)) s += 2.5;
       for (const g of grams) if (text.includes(g)) s += 1.2;
-      // 时间衰减：7天内满血，之后每周衰减20%
+      // 时间衰减：7天内满血，之后约 3%/天（≈21%/周），下限 0.2
       const ageDays = (now - m.ts) / 86400000;
       s *= Math.max(0.2, 1 - Math.max(0, ageDays - 7) * 0.03);
       // 钉子户与常用记忆
@@ -76,13 +85,13 @@ const MemoryStore = (() => {
     }).filter(x => x.s > 0.5)
       .sort((a, b) => b.s - a.s)
       .slice(0, k);
-    // 命中计数（下次权重+）
+    // 命中计数（下次权重+）：节流写盘，避免每条消息都落 localStorage
     const list = load();
     for (const hit of scored) {
       const item = list.find(x => x.id === hit.m.id);
       if (item) item.hits = (item.hits || 0) + 1;
     }
-    save(list);
+    if (Date.now() - lastHitsSave > 5000) { lastHitsSave = Date.now(); save(list); }
     return scored.map(x => x.m);
   }
 

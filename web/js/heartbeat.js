@@ -78,7 +78,8 @@ const Heartbeat = (() => {
   /* ── 生成主动消息（真API用模型生成，否则离线模板池） ── */
   async function generate() {
     const cfg = API.loadCfg();
-    if (cfg.mode === "openai" && cfg.apiKey) {
+    // auto 模式（默认无 mode）只要配了 key 也走模型；只有显式 local 才跳过
+    if (cfg.apiKey && cfg.mode !== "local") {
       const hist = (historyFn && historyFn(4)) || [];
       const mem = window.MemoryStore ? MemoryStore.renderContext("") : "";
       try {
@@ -103,38 +104,54 @@ const Heartbeat = (() => {
   }
 
   /* ── tick：每分钟检查 ── */
+  let running = false;    // 防重入：上一轮未返回时不再并发（避免同 tick 双投/绕过闸门）
   async function tick() {
-    if (!pushFn) return;
-    // 1) 提醒（用户自己定的，静默时段也送）
-    const fired = Reminders.due();
-    for (const r of fired) {
-      pushFn({
-        reply: `（提醒时间到）${r.text}||我说到做到的，别赖`,
-        emotion: "gentle", motion: null, kind: "reminder"
-      });
-      setState({ lastAt: Date.now() });
+    if (!pushFn || running) return;
+    running = true;
+    try {
+      // 1) 提醒（用户自己定的，静默时段也送）
+      const fired = Reminders.due();
+      for (const r of fired) {
+        // 先尝试投递，失败则放回未完成队列（不标记 done）
+        try {
+          await pushFn({
+            reply: `（提醒时间到）${r.text}||我说到做到的，别赖`,
+            emotion: "gentle", motion: null, kind: "reminder"
+          });
+          // 投递成功，标记 done
+          Reminders.markDone([r.id]);
+        } catch (e) {
+          // 投递失败：不标记 done，下一轮重试
+          console.warn("提醒投递失败，下一轮重试:", e.message);
+        }
+      }
+      if (fired.length) return;   // 送完提醒这个 tick 不再闲聊
+
+      // 2) 朋友式主动闲聊（多重闸门）
+      const cfg = API.loadCfg();
+      if (cfg.heartbeatOn === false) return;
+      if (inQuietHours(new Date())) return;
+
+      const s = state();
+      const today = new Date().toDateString();
+      if (s.dateKey !== today) Object.assign(s, { dateKey: today, count: 0 });
+      if (Date.now() - (s.lastAt || 0) < GAP_MS) return;
+      if ((s.count || 0) >= DAILY_MAX) return;
+      const recent = historyFn ? historyFn(1) : [];
+      if (recent.length) {
+        const last = recent[0];
+        if (last && Date.now() - (last.at || 0) < 10 * 60e3) return;  // 正在聊天，别插嘴
+      }
+      if (Math.random() > CHANCE) return;
+
+      const msg = await generate();
+      try {
+        await pushFn({ ...msg, kind: "ping" });
+      } catch (e) { console.warn("心跳投递失败:", e.message); return; }
+      setState({ lastAt: Date.now(), dateKey: today, count: (s.count || 0) + 1 });
+    } finally {
+      running = false;
     }
-    if (fired.length) return;   // 送完提醒这个 tick 不再闲聊
-
-    // 2) 朋友式主动闲聊（多重闸门）
-    const cfg = API.loadCfg();
-    if (cfg.heartbeatOn === false) return;
-    if (inQuietHours(new Date())) return;
-
-    const s = state();
-    const today = new Date().toDateString();
-    if (s.dateKey !== today) Object.assign(s, { dateKey: today, count: 0 });
-    if (Date.now() - (s.lastAt || 0) < GAP_MS) return;
-    if ((s.count || 0) >= DAILY_MAX) return;
-    if (historyFn && historyFn(1).length) {
-      const last = historyFn(1)[0];
-      if (last && Date.now() - (last.at || 0) < 10 * 60e3) return;  // 正在聊天，别插嘴
-    }
-    if (Math.random() > CHANCE) return;
-
-    const msg = await generate();
-    pushFn({ ...msg, kind: "ping" });
-    setState({ lastAt: Date.now(), dateKey: today, count: (s.count || 0) + 1 });
   }
 
   /** 启动：pushFn(结构化消息) historyFn(n)取最近n条聊天 */

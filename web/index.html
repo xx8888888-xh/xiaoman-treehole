@@ -2,9 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: http: https:; connect-src 'self' http: https: ws: wss:; font-src 'self' data:; object-src 'none'; base-uri 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>小满树洞 · 你的深夜倾听者</title>
 <meta name="description" content="开源 AI 树洞陪伴应用 —— Live2D 角色 + 活人感对话 + 语音回复">
+<meta name="theme-color" content="#FFF9F2">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Ccircle%20cx='16'%20cy='16'%20r='13'%20fill='%23F7A8B8'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -22,7 +25,7 @@
 
   <!-- ============ 顶栏 ============ -->
   <header class="topbar">
-    <div class="brand"><span class="brand-dot"></span>小满树洞</div>
+    <h1 class="brand"><span class="brand-dot"></span>小满树洞</h1>
     <div class="top-actions">
       <button class="icon-btn" id="memoryBtn" title="小满记得的事" aria-label="记忆">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3 C7 3 4 6.5 4 10.5 C4 13 5.2 14.6 6.6 15.8 L6 21 L10.5 17.6 C11 17.7 11.5 17.8 12 17.8 C17 17.8 20 14.3 20 10.4 C20 6.5 17 3 12 3 Z"/></svg>
@@ -34,7 +37,7 @@
   </header>
 
   <!-- ============ Live2D 舞台 ============ -->
-  <div id="stage">
+  <div id="stage" tabindex="0" role="button" aria-label="和小满互动（回车或空格摸头）">
     <span class="stage-mood"><span id="moodText">在听你说</span></span>
     <span class="stage-tip">点我一下试试 · 摸头有惊喜</span>
   </div>
@@ -42,7 +45,7 @@
   <!-- ============ 对话区 ============ -->
   <main id="chatArea">
     <div id="chatScroll">
-      <div id="messages">
+      <div id="messages" role="log" aria-live="polite" aria-relevant="additions">
         <div class="msg-row hidden" id="typingRow">
           <div class="avatar-mini">满</div>
           <div class="bubble them typing"><span></span><span></span><span></span></div>
@@ -54,7 +57,7 @@
       <button class="icon-btn mic" id="micBtn" aria-label="语音输入">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11 C5 15 8 18 12 18 C16 18 19 15 19 11"/><path d="M12 18 L12 21 M8.5 21 L15.5 21"/></svg>
       </button>
-      <input id="textInput" type="text" placeholder="跟小满说点什么…" autocomplete="off" maxlength="500">
+      <input id="textInput" type="text" placeholder="跟小满说点什么…" aria-label="给小满发消息" enterkeyhint="send" autocomplete="off" maxlength="500">
       <button class="send-btn" id="sendBtn" aria-label="发送">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L20 4 L14.5 20 L11.5 13.5 Z"/></svg>
       </button>
@@ -62,25 +65,24 @@
   </main>
 
   <!-- ============ 记忆抽屉 ============ -->
-  <div class="drawer hidden" id="memoryDrawer">
-    <div class="drawer-mask"></div>
+  <div class="drawer hidden" id="memoryDrawer" role="dialog" aria-modal="true" aria-labelledby="memoryDrawerTitle">
+    <div class="drawer-mask overlay"></div>
     <div class="drawer-panel">
-      <div class="drawer-head"><span>小满记得的事</span><button class="icon-btn" id="memoryClose" aria-label="关闭">✕</button></div>
+      <div class="drawer-head"><h2 id="memoryDrawerTitle">小满记得的事</h2><button class="icon-btn" id="memoryClose" aria-label="关闭">✕</button></div>
       <p class="drawer-sub">聊天中提到的称呼、人物、事件会自动记在这里，只保存在你手机上</p>
       <div id="reminderList"></div>
-      <div id="memoryList"></div>
       <div class="chips" id="memoryChips"></div>
       <button class="ghost-btn" id="memoryClear">清空记忆</button>
     </div>
   </div>
 
   <!-- ============ 设置弹窗 ============ -->
-  <div class="modal hidden" id="settingsModal">
-    <div class="drawer-mask"></div>
+  <div class="modal hidden" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="drawer-mask overlay"></div>
     <div class="modal-panel">
-      <div class="drawer-head"><span>设置</span><button class="icon-btn" id="settingsClose" aria-label="关闭">✕</button></div>
+      <div class="drawer-head"><h2 id="settingsTitle">设置</h2><button class="icon-btn" id="settingsClose" aria-label="关闭">✕</button></div>
       <label class="field"><span>对话服务地址（OpenAI 兼容 / 内置 Mock）</span>
-        <input id="cfgApi" type="text" placeholder="http://127.0.0.1:8902">
+        <input id="cfgApi" type="url" inputmode="url" placeholder="http://127.0.0.1:8902">
       </label>
       <label class="field"><span>语音回复</span>
         <select id="cfgTts">
@@ -104,12 +106,12 @@
     </div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 </div>
 
-<script src="js/vendor/pixi.min.js"></script>
-<script src="js/vendor/live2dcubismcore.min.js"></script>
-<script src="js/vendor/pixi-live2d-cubism4.min.js"></script>
+<script src="js/vendor/pixi.min.js" onerror="console.error('[load-fail] js/vendor/pixi.min.js')"></script>
+<script src="js/vendor/live2dcubismcore.min.js" onerror="console.error('[load-fail] js/vendor/live2dcubismcore.min.js')"></script>
+<script src="js/vendor/pixi-live2d-cubism4.min.js" onerror="console.error('[load-fail] js/vendor/pixi-live2d-cubism4.min.js')"></script>
 <script src="js/api.js"></script>
 <script src="js/mock_engine.js"></script>
 <script src="js/memory.js"></script>

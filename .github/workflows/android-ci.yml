@@ -1,14 +1,32 @@
 name: android-ci
 
 # 小满树洞 CI/CD · 出包 + 模拟器真机级验证 + UI 截图
-# 触发：push 到 main / 手动。公开仓库免费（Linux runner）。
+# 触发：push 到 main / PR / 手动。公开仓库免费（Linux runner）。
 # 说明：GitHub ubuntu runner 自带 /dev/kvm，模拟器可硬件加速启动（约1-2分钟冷启）。
 # 前提：仓库根放本项目（含 android/ 与 scripts/build_apk.sh）。
+
+permissions:
+  contents: read
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Gradle 并发/内存：覆盖 gradle.properties 的沙箱限流值
+  GRADLE_OPTS: "-Dorg.gradle.workers.max=4 -Dorg.gradle.jvmargs=-Xmx2g"
+  # 签名密钥（由 GitHub Secrets 注入，base64 编码的 keystore）
+  ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+  ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+  ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+  ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
 jobs:
   build-apk:
@@ -21,14 +39,33 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
+
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android
+            /opt/hostedtoolcache/android-sdk
+          key: android-sdk-${{ runner.os }}-${{ hashFiles('android/gradle.properties') }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-
 
       - name: Ensure Android SDK components
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" >/dev/null 2>&1 || true
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
 
-      # 首选 gradle；仓库未带 wrapper 时自动落到本项目手工流水线（零依赖，约2分钟）
-      - name: Build APK
+      - name: Decode keystore for release signing
+        if: env.ANDROID_KEYSTORE_B64 != ''
+        run: |
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/release.keystore
+          echo "ANDROID_KEYSTORE_PATH=/tmp/release.keystore" >> $GITHUB_ENV
+
+      - name: Sync web assets into android assets/www (single source of truth)
+        run: bash scripts/build_assets.sh
+
+      - name: Build Debug APK (Gradle preferred, fallback to script)
         run: |
           if [ -f android/gradlew ]; then
             (cd android && ./gradlew assembleDebug --no-daemon)
@@ -36,11 +73,71 @@ jobs:
             bash scripts/build_apk.sh
           fi
 
-      - name: Upload APK
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: xiaoman-treehole-apk
           path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble-release:
+    runs-on: ubuntu-latest
+    needs: build-apk
+    if: env.ANDROID_KEYSTORE_B64 != '' && env.ANDROID_KEYSTORE_PASSWORD != '' && env.ANDROID_KEY_ALIAS != '' && env.ANDROID_KEY_PASSWORD != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android
+            /opt/hostedtoolcache/android-sdk
+          key: android-sdk-${{ runner.os }}-${{ hashFiles('android/gradle.properties') }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-
+
+      - name: Ensure Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: Decode keystore for release signing
+        run: |
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/release.keystore
+          echo "ANDROID_KEYSTORE_PATH=/tmp/release.keystore" >> $GITHUB_ENV
+
+      - name: Sync web assets into android assets/www (single source of truth)
+        run: bash scripts/build_assets.sh
+
+      - name: Build Release APK
+        run: |
+          if [ -f android/gradlew ]; then
+            (cd android && ./gradlew assembleRelease --no-daemon)
+          else
+            echo "Gradle wrapper missing; cannot build release via script (no release signing support)"
+            exit 1
+          fi
+
+      - name: Verify Release APK signature
+        run: |
+          apksigner verify android/app/build/outputs/apk/release/*.apk
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaoman-treehole-apk-release
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
 
   emulator-smoke:
     runs-on: ubuntu-latest
@@ -48,48 +145,129 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download Debug APK from build-apk
+        uses: actions/download-artifact@v4
+        with:
+          name: xiaoman-treehole-apk
+          path: android/app/build/outputs/apk/debug/
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Build APK (artifact for install)
-        run: |
-          if [ -f android/gradlew ]; then
-            (cd android && ./gradlew assembleDebug --no-daemon)
-          else
-            bash scripts/build_apk.sh
-          fi
-
       - name: Run emulator & smoke test with screenshots
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
+          profile: pixel_4
+          force-avd-creation: true
           script: |
-            adb install -r android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk
-            # 兼容权限兜底（未声明则容忍失败）；若弹权限页则点 CONTINUE
-            adb shell pm grant com.xiaoman.treehole android.permission.READ_PHONE_STATE 2>/dev/null || true
-            adb shell pm grant com.xiaoman.treehole android.permission.WRITE_EXTERNAL_STORAGE 2>/dev/null || true
+            # Find the actual APK file (supports both Gradle and script output names)
+            APK_PATH=$(ls android/app/build/outputs/apk/debug/*.apk | head -1)
+            echo "Installing APK: $APK_PATH"
+            adb install -r "$APK_PATH"
+
+            # Start app
             adb shell am start -n com.xiaoman.treehole/.MainActivity
-            sleep 5
-            adb shell input tap 296 726   # 权限页 CONTINUE（若在）
             sleep 8
+
+            # Verify process is alive
+            adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found"; exit 1; }
+
+            # Check for FATAL in logcat
+            adb logcat -d *:E | grep -i "fatal\|exception" && { echo "ERROR: FATAL/Exception found in logcat"; exit 1; } || true
+
+            # Screenshot: home screen
             adb exec-out screencap -p > emulator_01_home.png
-            adb shell input tap 140 615   # 输入框（320x733 视口）
+
+            # Tap input field (coordinates for pixel_4 profile, fallback to percentage)
+            adb shell input tap 140 615
             sleep 1
-            adb shell input text "jin tian hao lei a"
+
+            # Input text using %s for spaces
+            adb shell input text "jin%s tian%s hao%s lei%s a"
             sleep 1
-            adb shell input tap 296 615   # 发送按钮
+
+            # Tap send button
+            adb shell input tap 296 615
             sleep 8
+
+            # Verify reply appeared via uiautomator dump
+            adb shell uiautomator dump /sdcard/window_dump.xml
+            adb pull /sdcard/window_dump.xml ./window_dump.xml
+            grep -q "小满\|xiaoman\|回复\|reply" ./window_dump.xml || { echo "WARN: Expected reply text not found in UI dump"; }
+
+            # Screenshot: chat
             adb exec-out screencap -p > emulator_02_chat.png
-            adb shell input tap 160 220   # 戳 Live2D 角色
+
+            # Poke Live2D
+            adb shell input tap 160 220
             sleep 3
+
+            # Screenshot: poke
             adb exec-out screencap -p > emulator_03_poke.png
 
       - name: Upload screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: emulator-screenshots
           path: emulator_0*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload UI dump on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uiautomator-dump
+          path: window_dump.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Web 端测试门禁（scripts/ 审计 D54）：四套脚本失败即非零退出，接入后失败可传播
+  web-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps (playwright + edge-tts)
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright edge-tts
+          python -m playwright install --with-deps chromium
+
+      - name: Start local services (mock 8902 / tts 8903 / web 8901)
+        run: bash scripts/dev_up.sh
+
+      - name: Run web test suite
+        run: |
+          set -e
+          python3 scripts/test_mock_api.py
+          python3 scripts/test_mock_api.py      # 幂等复跑：连续两次应一致通过
+          python3 scripts/test_lifeline_ui.py
+          python3 scripts/test_e2e.py
+          python3 scripts/verify_tts.py
+
+      - name: Stop local services
+        if: always()
+        run: bash scripts/dev_down.sh || true
+
+      - name: Upload logs & screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-test-logs
+          path: |
+            logs/
+            docs/shots/
+          if-no-files-found: ignore
+          retention-days: 7
