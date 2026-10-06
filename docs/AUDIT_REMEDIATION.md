@@ -2,8 +2,8 @@
 
 > 本文件是「小满树洞」2026-10-05/06 全量代码审计（148 条缺陷）的**修复与改动总账**，随分支 `fix/audit-remediation-20261005` 一并入库，供评审与回溯。
 >
-> - 分支：`fix/audit-remediation-20261005`
-> - 修复提交：`1b8541e`（全量修复，60 文件，+3716 / −1021）、`86426d0`（推送脚本 + DEVLOG）、以及本文件所在提交（文档 + 退出动画修复 + APK 去跟踪）
+> - 分支：`fix/audit-remediation-20261005`（首轮）、`fix/remediation-r2-20261006`（第二轮：本轮遗留项清零 + 固化）
+> - 修复提交：`1b8541e`（全量修复，60 文件，+3716 / −1021）、`86426d0`（推送脚本 + DEVLOG）、文档 + 退出动画修复 + APK 去跟踪；**第二轮**（本分支）：清零 4 项遗留（android D3/D9/D22 + scripts dev_down 字面量）、把 AI 长期记忆与固化清单入库
 > - 审计范围：`server/`、`web/js/`、`web/`（UI）、`android/` + CI、`scripts/`
 > - 验证：本地三服务（8901 静态站 / 8902 mock_api / 8903 tts_server）实跑，见 §八
 
@@ -16,9 +16,9 @@
 | server（mock_api / tts_server） | 15 | 12 | 3 | 0 | 安全兜底、并发、错误脱敏 |
 | web/js（前端逻辑） | 28 | 28 | 0（附加建议 3 条未采纳） | 0 | XSS、发送并发自锁、提醒丢失 |
 | web UI（index.html / css） | 25 | 23 | 2 | 0 | 可访问性、对比度、降级 |
-| android（壳 + 构建 + CI） | 26 | 16 | 9 | 1 | 编译阻断、assets 漂移、签名 |
+| android（壳 + 构建 + CI） | 26 | 19 | 6 | 1 | 编译阻断、assets 漂移、签名 |
 | scripts（构建 / 测试 / 运维） | 54 | 54 | 0 | 0 | 门禁失效、他机硬编码、环境固化 |
-| **合计** | **148** | **133** | **14** | **1** | — |
+| **合计** | **148** | **136** | **11** | **1** | — |
 
 **最高优先级、会直接阻断构建/运行或造成安全问题的项**（本轮重点）：
 
@@ -195,7 +195,7 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 
 ## 六、android（WebView 壳 + 构建 + CI）
 
-审计 26 条，已修 16 条、部分采纳 9 条、遗留 1 条（**Gradle Wrapper 未补**，D15）。
+审计 26 条，已修 19 条、部分采纳 6 条、遗留 1 条（**Gradle Wrapper 未补**，D15）。其中 D3/D9/D22 于第二轮 `fix/remediation-r2-20261006` 由「部分」转「已修」。
 
 ### 缺陷与修复清单
 
@@ -203,13 +203,13 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 |---|---|---|---|---|---|
 | D1 | 高 | `MainActivity.java:18` / `MainActivity.kt:18` | 同包同名双 Activity，Gradle 必触发 `Duplicate class`；两份行为不一致 | 删除 `MainActivity.kt`；Java 版回填 .kt 的 `setLanguage` + 完成回调，成为唯一实现 | 工作区已无 .kt；仅编译 `.java` |
 | D2 | 高 | `AndroidManifest.xml:3` | Manifest `package` 与 AGP 8.4.1 冲突 | 删除 `package`/`versionCode`/`versionName`，命名空间由 `build.gradle.kts` 的 `namespace` 提供 | XML 解析通过 |
-| D3 | 高 | `AndroidManifest.xml:4-5` vs `build.gradle.kts:14-15` | versionCode 双源（3 vs 1） | Manifest 版本属性已删；`build_apk.sh` 参数化 `VER_CODE=3`，但 Gradle DSL 仍 `versionCode=1` → **部分采纳**（两源仍不一致，因 Gradle 路径未被使用） | 静态检查 |
+| D3 | 高 | `AndroidManifest.xml:4-5` vs `build.gradle.kts:14-15` | versionCode 双源（3 vs 1） | Manifest 版本属性已删；`build_apk.sh` 参数化 `VER_CODE=3`；**第二轮** Gradle DSL `versionCode` 1→3、`versionName` 对齐 `0.3.0`，两源一致 | 静态检查：grep 两处均为 3 |
 | D4 | 高 | `android-ci.yml:31-37`；`README.md:8` | `assets/www` 与 `web/` 漂移，CI 出包前不同步 | 新增 CI 步骤 `Sync web assets into android assets/www`（build 与 release 均先跑）；`scripts/build_assets.sh` 重写同步逻辑 | `diff -rq web assets/www` 已对齐（仅剩有意排除的 `package*.json`） |
 | D5 | 高 | `MainActivity.java:44` | WebView 远程调试无条件开启 | 仅当 `(flags & FLAG_DEBUGGABLE)!=0` 时才 `setWebContentsDebuggingEnabled(true)` | 静态检查 |
 | D6 | 高 | `android-ci.yml` + `build_apk.sh:48-56` | 签名密钥明文入库且每次重建 | CI 新增 secrets 注入（`ANDROID_KEYSTORE_B64` 等）并解码 keystore；但手工 debug 路径仍新建 keystore、`KS_PASS` 默认明文 → **部分采纳** | 静态检查 |
 | D7 | 高 | `build.gradle.kts:17-21` | release 无签名、无混淆 | release 增 `isMinifyEnabled/isShrinkResources/proguardFiles` + 新增 `proguard-rules.pro` + `signingConfigs.release`（读环境变量）；CI 新增 `assemble-release` job 并 `apksigner verify` | YAML / 静态检查 |
 | D8 | 中 | `MainActivity.java:29` | TTS 未设中文，`available()` 误报 | init 回调加 `setLanguage(Locale.SIMPLIFIED_CHINESE)` 并校验语言可用性，不支持则 `ttsReady=false` | 静态检查 |
-| D9 | 中 | `MainActivity.java:50-69` | 桥接无"说完"回调，靠估算 | 新增 `UtteranceProgressListener.onDone/onError` → `evaluateJavascript("window.__ttsEnded…")`；但前端 JS 未订阅（`grep __ttsEnded` 在 `web/` 命中 0）→ **部分采纳**（Android 端仍以 190ms/字估算兜底） | 静态检查 + grep |
+| D9 | 中 | `MainActivity.java:50-69`；`web/js/tts.js` | 桥接无"说完"回调，靠估算 | 原生端 `UtteranceProgressListener.onDone/onError` → `evaluateJavascript("window.__ttsEnded()")`；**第二轮**前端在 `tts.js` 订阅 `window.__ttsEnded`：`speakAndroid` 注册完成回调 + `settled` 去重（原生回调与 190ms/字估算兜底只结算一次），`stop()` 清空回调防串台 | Playwright 桩测（§八）：原生回调 onEnd 恰一次、重复 `__ttsEnded()` 去重、兜底路径亦一次、pageerror 0 |
 | D10 | 中 | `android-ci.yml:45-63` | emulator job 重建，测的不是发布包 | 改为 `actions/download-artifact@v4` 下载 `xiaoman-treehole-apk`，删除重复构建步骤 | YAML 结构 |
 | D11 | 中 | `android-ci.yml:71` | APK 文件名写死 | 改 `APK_PATH=$(ls …/debug/*.apk \| head -1)` 动态取包 | YAML 结构 |
 | D12 | 中 | `android-ci.yml:73-74,77` | 对未声明权限 `pm grant` + 盲点权限页 | 删除 `READ_PHONE_STATE/WRITE_EXTERNAL_STORAGE` 的 `pm grant` 及"权限页 CONTINUE" tap | YAML 结构 |
@@ -222,7 +222,7 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 | D19 | 低 | `AndroidManifest.xml:20` | `configChanges` 覆盖不全 | 补 `screenLayout\|smallestScreenSize\|density\|uiMode\|locale\|fontScale` | XML 解析 |
 | D20 | 低 | `MainActivity.java:41-42` | 未实现 `onRenderProcessGone` | `WebViewClient` 覆写 `onRenderProcessGone` → 记录日志、`recreateWebView()` 重建、返回 `true` | 静态检查 |
 | D21 | 低 | `MainActivity.java:72-74` | `onBackPressed` 已废弃，未适配预测式返回 | **部分采纳**：本项目是零依赖纯 Java 壳（手工 ecj，不引 androidx），故不迁移 `OnBackPressedDispatcher`；保留覆写并加 `@SuppressWarnings("deprecation")`，行为等价 | 静态检查 |
-| D22 | 低 | assets 无用文件进 APK | `docs/` 截图与 `.orig` 被打包 | `build_assets.sh` 增 `--exclude='assets/audio/selftest.*'` 并删除两个 selftest 音频；`docs/shots`、`*.orig` 未排除 → **部分采纳** | `--stat` 显示 2 个 selftest 删除 |
+| D22 | 低 | assets 无用文件进 APK | `docs/` 截图与 `.orig` 被打包 | `build_assets.sh` 增 `--exclude='assets/audio/selftest.*'` 并删除两个 selftest 音频；**第二轮**补 `--exclude='docs/shots'`、`--exclude='*.orig'` 并重跑同步 | 同步后 `find assets/www -name '*.orig'` 为空、`assets/www/docs/shots` 不存在；`ASSETS_SYNCED 5.8M` |
 | D23 | 低 | `android-ci.yml` 全局 | 吞错、无权限约束、无缓存、无 PR 触发 | 加 `permissions: contents: read`、`concurrency`、`pull_request` 触发、`actions/cache`（Gradle/SDK）、去掉 sdkmanager 的 `\|\| true` | YAML 结构 |
 | D24 | 低 | `android-ci.yml:39-43` | artifact 缺保护参数 | Debug/Release artifact 均加 `if-no-files-found: error` + `retention-days` | YAML 结构 |
 | D25 | 低 | `MainActivity.java:34-46` | WebView 安全/状态未显式固化 | 显式 `setAllowFileAccessFromFileURLs(false)`/`setAllowUniversalAccessFromFileURLs(false)`/`setAllowContentAccess(false)`/`setGeolocationEnabled(false)`；新增 `onSaveInstanceState`→`saveState` 与 `restoreState` | 静态检查 |
@@ -246,7 +246,7 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 
 ### 小结
 
-两条**构建阻断项**已拆解：`MainActivity.kt` 删除消除同包同名冲突（D1/D17），Manifest 移除 `package` 使 AGP 8.4.1 不再因命名空间冲突报错（D2）；**assets 漂移（D4）**经 CI 强制同步 + `diff` 复核已对齐（修复前 APK 内置的过期前端有 TTS 打错端口、清记忆漏清等）。**遗留**：Gradle Wrapper 未补（D15），两条流水线 versionCode 仍 1 vs 3（D3）；**部分采纳**集中在密钥治理（D6）、桥接闭环（D9 前端未订阅 `__ttsEnded`）、冒烟断言强度（D13）、默认后端明文值（D16）。
+两条**构建阻断项**已拆解：`MainActivity.kt` 删除消除同包同名冲突（D1/D17），Manifest 移除 `package` 使 AGP 8.4.1 不再因命名空间冲突报错（D2）；**assets 漂移（D4）**经 CI 强制同步 + `diff` 复核已对齐（修复前 APK 内置的过期前端有 TTS 打错端口、清记忆漏清等）。**第二轮**再补齐三处原「部分采纳」：versionCode 两源归一为 3（D3）、前端订阅原生 TTS 完成回调 `window.__ttsEnded`（D9）、assets 同步排除 `docs/shots` 与 `*.orig`（D22）。**遗留**：Gradle Wrapper 未补（D15）；**部分采纳**余下集中在密钥治理（D6）、冒烟断言强度（D13）、默认后端明文值（D16）。
 
 ---
 
@@ -273,7 +273,7 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 | 13 | 中 | dev_up.sh:63-66 | 幂等只看端口监听，不校验监听者身份 | 端口已监听时用 `/health`（mock/tts）或 `/index.html` 指纹校验，不匹配即报「端口被陌生进程占用」并非零返回 | 静态检查 |
 | 14 | 中 | dev_up.sh:67 | 后台服务不记 PID，停止只能靠文本匹配 | 启动写 `/tmp/xiaoman_<svc>.pid`；dev_down 优先按 PID（SIGTERM→SIGKILL），pkill 仅兜底 | 静态检查 |
 | 15 | 低 | dev_up.sh:40,67 | 日志追加固定 /tmp、新旧混排且全局可预测 | 日志改仓库 `logs/`（已 gitignore）；启动前 `: > "$log"` 截断 | 静态检查 |
-| 16 | 中 | dev_down.sh:11,22-24 | `pkill -f` 模式宽且与启动命令文本耦合 | PID 文件优先；兜底模式收窄为 `mock_api\.py`/`tts_server\.py`/`http\.server 8901`（`8901` 仍为字面量，未用 `$PORT_WEB`） | 静态检查 |
+| 16 | 中 | dev_down.sh:11,22-24 | `pkill -f` 模式宽且与启动命令文本耦合 | PID 文件优先；兜底模式收窄为 `mock_api\.py`/`tts_server\.py`/`http\.server $PORT_WEB`；**第二轮**端口与描述全部取自 `env.sh` 变量，去掉 `8901` 字面量 | 静态检查 + `bash -n` |
 | 17 | 低 | dev_down.sh:26-27 | 停止后不复检端口、恒 exit 0 | 逐端口 `/dev/tcp`+curl 复检，仍有占用则列出并非零退出 | 静态检查 |
 | 18 | 高 | fetch_model.py:11,35 | 依赖不存在的 `/tmp/hiyori_test.json`，脚本非自包含 | 模型清单内置为脚本内 `MANIFEST` 常量，移除外部临时文件依赖 | grep 无 `/tmp/hiyori_test` |
 | 19 | 高 | fetch_model.py:34-35 | 无条件覆盖 model3.json，冲掉 surgery 手术成果 | 仅当不存在或 `--force` 才写；`.orig` 缺失才备份；写入前 diff 提示 | 静态检查 |
@@ -335,7 +335,7 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 
 ### 小结
 
-54 条全部闭环；唯一曾记未完成的 #54（CI 未接入）已由本轮 `web-tests` job 补齐。**遗留**：Android 审计 D15 仍无 Gradle Wrapper（非 scripts 范围）；`dev_down.sh` 兜底 pkill 模式仍内嵌字面量 `8901`；`shot.py` 的 pageerror 默认仅打印（`SHOT_STRICT=1` 才门禁）。
+54 条全部闭环；唯一曾记未完成的 #54（CI 未接入）已由 `web-tests` job 补齐。**第二轮**清掉 `dev_down.sh` 内嵌 `8901` 字面量（改取 `env.sh` 变量）。**遗留**：Android 审计 D15 仍无 Gradle Wrapper（非 scripts 范围）；`shot.py` 的 pageerror 默认仅打印（`SHOT_STRICT=1` 才门禁），属非阻断的刻意取舍。
 
 ---
 
@@ -354,22 +354,46 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 | 静态检查 | `node --check`（8 js）/`bash -n`（7 sh）/`py_compile`（server+scripts）/XML/YAML 解析 | 全绿 |
 | 环境固化 | `bash scripts/setup_dsh.sh` | exit 0（Node24 + dsh + 依赖 + 自检） |
 
+**第二轮 `fix/remediation-r2-20261006` 追加证据**（同一套三服务实跑）：
+
+| 项 | 命令 / 方式 | 结果 |
+|---|---|---|
+| 回归复跑 | `test_mock_api` / `test_lifeline_ui` / `test_e2e` | **8/8 · 5/5 · 5/5**，均 exit 0 |
+| TTS 完成回调订阅（D9） | Playwright 桩测：注入 `AndroidTTS` 桩 + 触发 `window.__ttsEnded()` | `typeof __ttsEnded === "function"`；原生回调 onEnd **恰 1 次**、重复调用**去重**、无回调时估算兜底**恰 1 次**；pageerror 0 |
+| assets 排除（D22） | `bash scripts/build_assets.sh` 后 `find`/`ls` | assets/www 内 `*.orig` 与 `docs/shots` 均不存在；`ASSETS_SYNCED 5.8M` |
+| 版本双源归一（D3） | grep `versionCode`（Gradle vs build_apk.sh） | 均为 **3** |
+| 环境固化 + 记忆还原 | 先移除 `/workspace/.trae/rules/` 再 `bash scripts/setup_dsh.sh` | exit 0；`cmp docs/AI_RULES.md /workspace/.trae/rules/project_rules.md` **一致** |
+| 静态检查 | `node --check`（8 js）/`bash -n`（8 sh）/`py_compile`/XML/YAML | 全绿 |
+
 ---
 
 ## 九、遗留与未采纳项（如实记录）
 
-| 模块 | 项 | 现状 |
-|---|---|---|
-| android | **D15 Gradle Wrapper 未补** | CI 走手工 `build_apk.sh`（已验证可用）；补 Wrapper 后两条构建链可统一 |
-| android | D3 versionCode 双源（Gradle 1 vs 手工 3） | 因 Gradle 路径未使用，暂未统一 |
-| android | D9 前端未订阅 `window.__ttsEnded` | Android 端仍以 190ms/字估算兜底；真实完成回调已具备、待前端接入 |
-| android | D6 debug 签名口令默认明文、每次重建 keystore | 仅 debug 用途；release 走 CI secrets |
-| android | D16 默认后端仍为 `127.0.0.1` | 真机联调需在设置页改 LAN IP（`network_security_config.xml` 需补该 IP） |
-| android | D22 `docs/shots`、`*.orig` 未从 assets 排除 | 仅 `selftest.*` 已排除 |
-| server | #1 危机专业分级量表/模型判别、#2 记忆值白名单、#7 Origin 白名单与鉴权 | 未落地，仍是风险面 |
-| web/js | #16/#19/#27 的附加建议（旧值保留为 history / ping 复用 busy / opts.voice 传参） | 核心缺陷已修，附加建议未采纳 |
-| web UI | D18 `gap`/`overflow-wrap:anywhere`/`scroll-behavior` 旧 WebKit 回退 | 仅关键 `inset` 已回退 |
-| scripts | `dev_down.sh` 兜底 pkill 内嵌 `8901` 字面量；`shot.py` pageerror 默认仅打印 | 非阻断 |
+> 处置口径：**可低风险修复的项都已修**（第二轮清零 4 项）；下列为**有意不修**（附理由）或**需外部条件/决策**的项。不修不是遗漏，是决策。
+
+### 9.1 第二轮已清零（原遗留/部分项）
+
+| 原项 | 处置 |
+|---|---|
+| android D3 versionCode 双源（Gradle 1 vs 手工 3） | 已修：Gradle `versionCode` 1→3，与 `build_apk.sh` 同源 |
+| android D9 前端未订阅 `window.__ttsEnded` | 已修：`tts.js` 订阅原生完成回调并去重 |
+| android D22 `docs/shots`、`*.orig` 进 APK | 已修：`build_assets.sh` 增排除并重跑同步 |
+| scripts `dev_down.sh` 内嵌 `8901` 字面量 | 已修：端口/描述改取 `env.sh` 变量 |
+
+### 9.2 有意不修及理由（助手决策，2026-10-06）
+
+| 模块 | 项 | 不修理由 | 触发条件 |
+|---|---|---|---|
+| android | **D15 Gradle Wrapper 未补** | 手工 `build_apk.sh` 链路已验证可用；补 Wrapper 需下载 Gradle 发行包（体积/网络）并统一两条构建链，属架构决策，当前收益不抵风险 | 需走 Gradle/CI 标准构建时 |
+| android | D6 debug 签名口令默认明文、每次重建 keystore | 仅 debug 用途，且已支持 `KS_PASS` 环境变量覆盖；release 走 CI secrets，无真实暴露面 | 若要对外分发 debug 包 |
+| android | D16 默认后端仍 `127.0.0.1` | 真机联调需**用户的具体 LAN IP**（`network_security_config.xml` 要白名单该 IP），无法凭空生成；默认离线引擎可兜底 | 用户提供联调网段/IP |
+| android | D13 冒烟坐标写死 / D21 `onBackPressed` 未迁移 / D26 gradle.properties 沙箱值 | D13 需真机反复校准；D21 迁移 `OnBackPressedDispatcher` 需引 androidx，违背"零依赖纯 Java 壳"约束；D26 值系沙箱刻意限流且 CI 已覆盖 | 非阻断，按需再议 |
+| server | #1 危机专业分级量表/模型判别 | 需**临床/产品侧的分级标准与模型选型**（专业决策，非工程可拍板）；mock 仅离线兜底，线上主路径是真 LLM + 前端危机层 | 产品给出分级量表/合规要求 |
+| server | #2 记忆值白名单 | mock 端记忆仅本地调试用途，真实记忆由前端 `memory.js` 管理（已有同键覆盖/空值跳过），加白名单收益低 | mock 若用于对外演示 |
+| server | #7 CORS Origin 仍 `*`、无 token 鉴权 | 仅绑定本地/局域网的开发 mock；收紧 Origin 会打断本地联调与 Playwright 测试，需先定鉴权方案 | 若要暴露到不可信网络 |
+| web/js | #16/#19/#27 附加建议（旧值保留为 history / ping 复用 busy / opts.voice 传参） | 均为"锦上添花"：核心缺陷已修；#16 反会引入历史矛盾、#19 的并发防护已由 `withSendLock` 承担 | 出现对应体验问题时 |
+| web UI | D18 `gap`/`overflow-wrap:anywhere`/`scroll-behavior` 旧 WebKit 回退 | 目标运行时（现代 Android WebView / Chromium）均原生支持，补 margin 兜底反有布局回归风险，属低价值改动 | 需兼容极旧 WebView |
+| scripts | `shot.py` pageerror 默认仅打印 | 设计取舍：截图工具默认不因页面告警中断，`SHOT_STRICT=1` 可开门禁 | 无 |
 
 ---
 
@@ -378,3 +402,23 @@ python3 -c "import yaml;yaml.safe_load(open('.github/workflows/android-ci.yml'))
 - 提交 `1b8541e`：**60 files changed, +3716 / −1021**（含 `web/` 与 `android/.../assets/www/` 双份同步）。
 - 提交 `86426d0`：新增 `scripts/git_push.sh` + DEVLOG。
 - 本文件所在提交：新增 `docs/AUDIT_REMEDIATION.md`、修复 UI D21 退出动画选择器（`web/css/style.css` + 同步 `assets/www`）、取消根 APK 跟踪（`小满树洞-v0.3-debug.apk`）。
+
+### 第二轮 `fix/remediation-r2-20261006`（本轮，多笔原子提交）
+
+| 提交主题 | 触及文件 |
+|---|---|
+| fix(android): versionCode 两源归一 3 | `android/app/build.gradle.kts` |
+| fix(android): assets 排除 docs/shots 与 *.orig + 重同步 | `scripts/build_assets.sh`、`android/.../assets/www/**` |
+| fix(web): 前端订阅原生 TTS 完成回调 `__ttsEnded` | `web/js/tts.js`、`android/.../assets/www/js/tts.js` |
+| fix(scripts): dev_down 端口参数化（去 8901 字面量） | `scripts/dev_down.sh` |
+| chore(solidify): AI 长期记忆入库 + 重置自还原 | `docs/AI_RULES.md`（新增）、`scripts/setup_dsh.sh` |
+| docs: 总账/日志/状态同步 | `docs/AUDIT_REMEDIATION.md`、`docs/DEVLOG.md`、`docs/PROJECT_STATE.md` |
+
+---
+
+## 十一、固化与文档维护（长期机制）
+
+- **AI 长期记忆入库**：`docs/AI_RULES.md` 是 `/workspace/.trae/rules/project_rules.md` 的仓库内同源副本（沙箱重置会清掉仓库外 `.trae/rules/`）；`scripts/setup_dsh.sh` 每次运行都会把它还原到该路径（已实测：移除后重跑脚本，`cmp` 一致）。
+- **变更留痕三件套**（详见 `docs/AI_RULES.md` 铁律 7）：原子提交 + `docs/DEVLOG.md` 追加 + 总账/状态更新，且**必须推云端**才算留痕。
+- **文档维护**：每次会话收尾核对三件套、订正过期数字与遗留清单；文档索引见 `docs/AI_RULES.md` §7.2。
+- **重置恢复**：`bash scripts/setup_dsh.sh` 一条命令恢复环境 + 记忆；凭据（`.secrets/`）需用户重新提供。见 `docs/AI_RULES.md` §7.4。

@@ -1,10 +1,10 @@
 # PROJECT_STATE · 小满树洞（Xiaoman Treehole）
 
 > 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完本文件即可掌握全局。
-> 最后更新：2026-10-06（本轮：OneRouter 免费模型接入 DSH 验证通过 + 环境固化补强 + 清理 DSH 半成品回归，见 DEVLOG 顶条） ｜ 当前版本：v0.3.0 ｜ 状态：**全需求闭环** · 开源仓库已上线 · 等真API增强
+> 最后更新：2026-10-06（第二轮 `fix/remediation-r2-20261006`：清零 4 项审计遗留 + AI 长期记忆/环境固化入库，见 DEVLOG 顶条） ｜ 当前版本：v0.3.0 ｜ 状态：**全需求闭环** · 开源仓库已上线 · 等真API增强
 > 测试基线（全部实跑，均 exit 0）：Mock 契约 8/8（幂等 ×2）· UI 集成 5/5 · 端到端 5/5（含危机/记忆/TTS 落点）· XSS 回归通过 · 舞台降级通过 · verify_tts mp3 PASS（ASR 因本机缺 z-ai-web-dev-sdk 为 SKIP）
-> 代码审计（DSH 逐行精读，报告见 `/workspace/.dsh_audit/`）：合计 **148 条缺陷/风险**（高 22 / 中 69 / 低 56 / 中高 1）；**WP3(web UI 25 条) 未开始、WP2(28)/WP5(54) 部分完成**，余项待续
-> ⚠️ 环境与额度：环境一键重建 `bash scripts/setup_dsh.sh`（Node24+dsh+免费模型路由+edge-tts+chromium+系统依赖）；DSH 免费模型额度 **50 次/日**（次日 00:00 UTC 重置），耗尽后全量 429，须按"小步串行"下发任务
+> 代码审计（DSH 逐行精读，报告见 `/workspace/.dsh_audit/`）：合计 **148 条缺陷/风险**（高 22 / 中 69 / 低 56 / 中高 1）。修复进度以 [`docs/AUDIT_REMEDIATION.md`](file:///workspace/xiaoman-treehole/docs/AUDIT_REMEDIATION.md) 为准：**已修 136 / 部分 11 / 遗留 1**；第二轮清零 4 项，其余为"有意不修"（逐条附理由，见该文档 §9.2）
+> ⚠️ 环境与额度：环境一键重建 `bash scripts/setup_dsh.sh`（Node24+dsh+免费模型路由+edge-tts+chromium+系统依赖+**AI 长期记忆还原**）；DSH 免费模型额度 **50 次/日**（次日 00:00 UTC 重置），耗尽后全量 429 —— 额度耗尽时由助手直接执行并记录
 
 ---
 
@@ -59,6 +59,7 @@ bash scripts/build_apk.sh   # 需 ANDROID_HOME；构建器依赖已固化在脚�
 2. **备份先行**：每次重大代码变更前，先做备份（scripts/backup.sh，产物进 backups/）。
 3. 全程自主决策，不问用户；任务完成前不停。
 4. 沙箱资源有限（无 GPU，内存紧张），所有重活走"后台+轮询"。
+5. **变更留痕 + 固化（2026-10-06 新增）**：每笔改动走「原子提交 + DEVLOG 追加 + 总账/状态更新」三件套，且必须推云端；规则与记忆固化见 [`docs/AI_RULES.md`](file:///workspace/xiaoman-treehole/docs/AI_RULES.md) 铁律 7 —— 沙箱重置后 `bash scripts/setup_dsh.sh` 一条命令还原环境与长期记忆（`docs/AI_RULES.md` → `/workspace/.trae/rules/project_rules.md`）。
 
 ### 执行者优先级（成本铁律）
 - **DeepSeek Harness (dsh) 是免费的，必须优先承担实际执行工作**：基础代码编写、函数实现、文件生成、样板代码、批量重构、单测/脚本编写、文档草拟、数据整理。
@@ -155,6 +156,9 @@ treehole-app/
 | 10-05 | Mock 契约测试（scripts/test_mock_api.py） | **8/8 passed** |
 | 10-05 | UI 集成（记忆/提醒/心跳，scripts/test_lifeline_ui.py） | **5/5 PASS**，控制台错误 0 |
 | 10-05 | 端到端实测（浏览器真跑） | **11 项全通过**：TTS 打到 8903、音频 200/`audio/mpeg`、危机拦截含 12356、记忆写入与清空、零控制台错误、无 HTTP≥400（仅 favicon 404，非缺陷） |
+| 10-06 | 第二轮回归（三服务实跑） | Mock **8/8** · Lifeline UI **5/5** · E2E **5/5**，均 exit 0 |
+| 10-06 | D9 原生 TTS 完成回调订阅（Playwright 桩测） | PASS：`__ttsEnded` 触发 onEnd 恰 1 次、重复调用去重、无回调时兜底恰 1 次、pageerror 0 |
+| 10-06 | 沙箱重置自还原 | PASS：移除 `.trae/rules` 后跑 `setup_dsh.sh`，长期记忆还原且 `cmp` 一致（exit 0） |
 
 ## 10. 已知问题 / 风险
 
@@ -177,4 +181,6 @@ treehole-app/
 | 手术报告 | docs/live2d_surgery.md |
 | 用户视角自评 | docs/USER_REVIEW.md |
 | 操作日志 | docs/DEVLOG.md |
+| 审计修复总账（148 条逐条） | docs/AUDIT_REMEDIATION.md |
+| AI 长期记忆 / 项目规则（仓库内同源） | docs/AI_RULES.md |
 | 备份 | backups/（3个快照，含模型原始态与两次重大变更前态） |

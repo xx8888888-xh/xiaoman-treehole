@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-10-06 · 第二轮：清零 4 项遗留 + 长期记忆/环境固化（分支 `fix/remediation-r2-20261006`）
+
+> 用户明示「自己决策修哪些、修完提交；每一步变更都要有迹可循、每次修改写文档并定期维护；沙箱会重置导致记忆缺失/软件失效，要固化」。开局先查额度：`free_model_daily_requests` 已 used 67 / limit 50 → **免费额度耗尽，DSH 全量 429**，故按铁律 1 例外**由助手直接执行**并在此记录。
+
+### 决策：修 4 项、有意不修 10 类
+- **修（低风险、可验证）**：android D3（versionCode 双源 1→3）、android D9（前端订阅 `window.__ttsEnded`）、android D22（assets 排除 `docs/shots`/`*.orig`）、scripts dev_down 端口参数化（去 `8901` 字面量）。
+- **有意不修**：android D15 Gradle Wrapper（架构决策）、D16 LAN IP（需用户提供网段）、server #1 危机分级量表（需临床/产品决策）、#2/#7、web/js 附加建议、UI D18 旧 WebKit 回退、`shot.py` pageerror。理由与触发条件逐条记入 `docs/AUDIT_REMEDIATION.md` §9.2，不修是决策不是遗漏。
+
+### 落地与固化
+1. **修复**：`android/app/build.gradle.kts`（versionCode 3）· `scripts/build_assets.sh`（+2 排除项）· `web/js/tts.js`（订阅 `__ttsEnded` + settled 去重）· `scripts/dev_down.sh`（端口取 `env.sh`）。
+2. **固化 AI 长期记忆**：新增 [`docs/AI_RULES.md`](file:///workspace/xiaoman-treehole/docs/AI_RULES.md) —— `/workspace/.trae/rules/project_rules.md`（在仓库外、重置即丢）的**仓库内同源副本**，并新增**铁律 7「变更留痕 + 文档维护 + 沙箱重置固化」**；`scripts/setup_dsh.sh` 增「记忆还原」步骤。
+3. **验证重置自还原**：手动移除 `/workspace/.trae/rules/` → 跑 `setup_dsh.sh` → 记忆已还原且 `cmp` 一致（exit 0）。
+
+### 验证（三服务实跑，均 exit 0）
+- `test_mock_api` **8/8** · `test_lifeline_ui` **5/5** · `test_e2e` **5/5**。
+- **D9 专项**（Playwright 桩测）：`__ttsEnded` 为函数；原生回调 onEnd **恰 1 次**、重复调用**去重**、无回调时兜底**恰 1 次**；pageerror 0。
+- **D22**：assets/www 内 `*.orig`、`docs/shots` 均不存在（`ASSETS_SYNCED 5.8M`）。
+- 静态检查全绿：`node --check`(8 js) / `bash -n`(8 sh) / `py_compile` / XML / YAML。
+
+### 触及文件
+`android/app/build.gradle.kts` · `scripts/build_assets.sh` · `scripts/dev_down.sh` · `scripts/setup_dsh.sh` · `web/js/tts.js` · `android/app/src/main/assets/www/**`（同步） · `docs/AI_RULES.md`（新增） · `docs/AUDIT_REMEDIATION.md` · `docs/PROJECT_STATE.md` · `docs/DEVLOG.md`
+
+---
+
 ## 2026-10-06 · 补全审计修复文档（148 条总账）+ 修 UI D21 + APK 去跟踪
 
 > 用户要求「云端分支要包含详细的 bug 修复说明和代码改动说明」。新增总账文档 `docs/AUDIT_REMEDIATION.md`（§一 总览 / §三~§七 逐条缺陷+代码改动 / §八 验证证据 / §九 遗留），并据文档核验顺带修掉两处真实项。
