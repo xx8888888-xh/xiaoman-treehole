@@ -53,7 +53,7 @@
    cd /workspace/xiaoman-treehole && dsh headless "<任务：精确到目标 + 期望产物 + 验收点>"
    # 需要多任务并行时：多个 dsh headless 进程同时跑（已实测 4 进程无锁冲突）
    ```
-   - 默认模型 `nvidia/nemotron-3-ultra-550b-a55b:free`（provider `onerouter`，OpenRouter 免费路由），单任务耗时可达数分钟，用"后台 + 轮询"跑，别用阻塞等待。
+   - 默认模型 `nvidia/nemotron-3.5-lightning:free`（provider `onerouter`，OpenRouter 免费路由），单任务耗时可达数分钟，用"后台 + 轮询"跑，别用阻塞等待。
    - 任务描述要契约明确（目标文件 / 函数签名 / 输入输出 / 验收命令）。
    - DSH 跑完，助手要**独立复核结果**（Read 或重跑测试），不能只信它的自述。
 
@@ -107,7 +107,7 @@ cd /workspace/xiaoman-treehole && bash scripts/setup_dsh.sh
 - **新增任何环境依赖，必须先写进 `setup_dsh.sh` 再执行**；禁止只在本机手装、不落脚本（否则下次重置又要重来）。
 - 密钥规则：只从 `/workspace/.secrets/onerouter.key`（chmod 600）读取，**绝不写入仓库、绝不提交**。
   首次写入：`ONEROUTER_API_KEY=sk-or-v1-xxx bash scripts/setup_dsh.sh`。
-- 模型规则（用户明示）：**只允许调用免费模型**。默认 `nvidia/nemotron-3-ultra-550b-a55b:free`（provider `onerouter`），
+- 模型规则（用户明示）：**只允许调用免费模型**。默认 `nvidia/nemotron-3.5-lightning:free`（provider `onerouter`），
   备选见 `cordis.patch.yml` 的 models 列表（均已实测支持工具调用）。**不得配置/使用付费模型。**
 - 新增 provider/模型：改 `setup_dsh.sh` 内嵌的 cordis.patch.yml heredoc 块（唯一真源），再重跑脚本使生效。
 - ⚠️ **免费额度硬约束（2026-10-06 实测）**：OpenRouter 免费档 `free-models-per-day = 50`，**按 key 跨任务共享**，
@@ -180,3 +180,5 @@ python3 scripts/test_freemodels.py    # 免费模型可用性
 1. 全程自主决策，不问用户；任务完成前不停。
 2. 沙箱资源有限（无 GPU、2 核、内存紧张），重活走"后台 + 轮询"。
 3. 用户的钱要省：付费模型只做规划与验收。
+
+> ⚠️ 2026-10-06 更新（zhiqiu）：原默认 nemotron-3-ultra-550b:free 与 qwen3.8-27b:free 均已从 OpenRouter 下架，现默认 nvidia/nemotron-3.5-lightning:free（备选见 web/js/api.js 注释）。Spacebunny provider 亦已下架。

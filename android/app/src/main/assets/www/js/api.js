@@ -123,7 +123,9 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       },
       body: JSON.stringify({
         // 默认免费模型（用户规矩：只选免费档）；OpenRouter 兼容接口
-        model: model || "qwen/qwen3.8-27b:free",
+        model: model || "nvidia/nemotron-3.5-lightning:free",
+        // 免费档迁移备选（qwen3.8-27b:free 已下架，2026-10-06 核实）:
+        // inclusionai/ling-3.0-flash-sante:free · thinkingmachines/inkling-small:free · dots-studio/dots-3-note-preview:free
         temperature: 0.85,
         reasoning: { enabled: false },  // 推理系模型必须关思考，防 JSON 被挤掉
         messages: [{ role: "system", content: buildSystemPrompt(opts) }, ...toMessages(history)]
