@@ -32,6 +32,8 @@ env:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    outputs:
+      keystore_present: ${{ steps.keystore_check.outputs.present }}
     steps:
       - uses: actions/checkout@v4
 
@@ -85,7 +87,7 @@ jobs:
   assemble-release:
     runs-on: ubuntu-latest
     needs: build-apk
-    if: env.ANDROID_KEYSTORE_B64 != '' && env.ANDROID_KEYSTORE_PASSWORD != '' && env.ANDROID_KEY_ALIAS != '' && env.ANDROID_KEY_PASSWORD != ''
+    if: needs.build-apk.outputs.keystore_present == 'true'
     steps:
       - uses: actions/checkout@v4
 
