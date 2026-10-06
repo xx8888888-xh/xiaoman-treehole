@@ -1,11 +1,10 @@
 # PROJECT_STATE · 小满树洞（Xiaoman Treehole）
 
 > 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完本文件即可掌握全局。
-> 最后更新：2026-10-06（第二轮 `fix/remediation-r2-20261006`：清零 4 项审计遗留 + AI 长期记忆/环境固化入库，见 DEVLOG 顶条） ｜ 当前版本：v0.3.0 ｜ 状态：**全需求闭环** · 开源仓库已上线 · 等真API增强
+> 最后更新：2026-10-06（分支合并日：audit+r2+zhiqiu/dev 三线合一）｜ 当前版本：v0.4.0 ｜ 状态：**朋友定位+记忆/提醒/心跳三大生命线全绿** · 全需求闭环 · 开源仓库已上线 · 等真API增强 ｜ 分支：main=稳定线，知秋=zhiqiu/dev（多AI协同）
 > 测试基线（全部实跑，均 exit 0）：Mock 契约 8/8（幂等 ×2）· UI 集成 5/5 · 端到端 5/5（含危机/记忆/TTS 落点）· XSS 回归通过 · 舞台降级通过 · verify_tts mp3 PASS（ASR 因本机缺 z-ai-web-dev-sdk 为 SKIP）
-> 代码审计（DSH 逐行精读，报告见 `/workspace/.dsh_audit/`）：合计 **148 条缺陷/风险**（高 22 / 中 69 / 低 56 / 中高 1）。修复进度以 [`docs/AUDIT_REMEDIATION.md`](file:///workspace/xiaoman-treehole/docs/AUDIT_REMEDIATION.md) 为准：**已修 136 / 部分 11 / 遗留 1**；第二轮清零 4 项，其余为"有意不修"（逐条附理由，见该文档 §9.2）
-> ⚠️ 环境与额度：环境一键重建 `bash scripts/setup_dsh.sh`（Node24+dsh+免费模型路由+edge-tts+chromium+系统依赖+**AI 长期记忆还原**）；DSH 免费模型额度 **50 次/日**（次日 00:00 UTC 重置），耗尽后全量 429 —— 额度耗尽时由助手直接执行并记录
-
+> 代码审计（DSH 逐行精读，报告见 \`/workspace/.dsh_audit/\`）：合计 **148 条缺陷/风险**（高 22 / 中 69 / 低 56 / 中高 1）。修复进度以 \`docs/AUDIT_REMEDIATION.md\` 为准：**已修 136 / 部分 11 / 遗留 1**；第二轮清零 4 项，其余为"有意不修"（逐条附理由，见该文档 §9.2）
+> ⚠️ 环境与额度：环境一键重建 \`bash scripts/setup_dsh.sh\`（Node24+dsh+免费模型路由+edge-tts+chromium+系统依赖+**AI 长期记忆还原**）；DSH 免费模型额度 **50 次/日**（次日 00:00 UTC 重置），耗尽后全量 429 —— 额度耗尽时由助手直接执行并记录
 ---
 
 ## 0. 项目一句话
