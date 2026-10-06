@@ -32,6 +32,8 @@ env:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    outputs:
+      keystore_present: ${{ steps.keystore_check.outputs.present }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +58,15 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: Detect keystore secret availability
+        id: keystore_check
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Decode keystore for release signing
         if: env.ANDROID_KEYSTORE_B64 != ''
@@ -85,7 +96,7 @@ jobs:
   assemble-release:
     runs-on: ubuntu-latest
     needs: build-apk
-    if: env.ANDROID_KEYSTORE_B64 != '' && env.ANDROID_KEYSTORE_PASSWORD != '' && env.ANDROID_KEY_ALIAS != '' && env.ANDROID_KEY_PASSWORD != ''
+    if: needs.build-apk.outputs.keystore_present == 'true'
     steps:
       - uses: actions/checkout@v4
 
