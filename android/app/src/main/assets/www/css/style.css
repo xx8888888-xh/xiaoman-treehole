@@ -115,10 +115,11 @@ body {
 .modal-panel { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--cream); border-radius: 24px; padding: 18px 18px calc(env(safe-area-inset-bottom, 0px) + 22px); animation: popin 0.28s cubic-bezier(0.2,0.9,0.3,1); }
 @keyframes slideup { from { transform: translate(-50%, 40%); opacity: 0; } }
 @keyframes popin { from { transform: translate(-50%,-46%) scale(0.94); opacity: 0; } }
-/* 退出动画：JS 关闭时先加 .is-closing，动画结束后再挂 .hidden */
-.drawer-mask.is-closing, .overlay.is-closing { animation: overlayfade 0.2s ease forwards; }
-.drawer-panel.is-closing { animation: slidedown 0.2s ease forwards; }
-.modal-panel.is-closing { animation: popout 0.2s ease forwards; }
+/* 退出动画：JS 关闭时给根节点（.drawer/.modal）加 .is-closing，动画结束后再挂 .hidden。
+   注意选择器必须走“根节点 .is-closing 的后代”，因为 app.js closePanel() 把类加在根节点上。 */
+.drawer.is-closing .drawer-mask, .modal.is-closing .drawer-mask { animation: overlayfade 0.2s ease forwards; }
+.drawer.is-closing .drawer-panel { animation: slidedown 0.2s ease forwards; }
+.modal.is-closing .modal-panel { animation: popout 0.2s ease forwards; }
 @keyframes overlayfade { to { opacity: 0; } }
 @keyframes slidedown { to { transform: translate(-50%, 40%); opacity: 0; } }
 @keyframes popout { to { transform: translate(-50%,-46%) scale(0.94); opacity: 0; } }

@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-10-06 · 补全审计修复文档（148 条总账）+ 修 UI D21 + APK 去跟踪
+
+> 用户要求「云端分支要包含详细的 bug 修复说明和代码改动说明」。新增总账文档 `docs/AUDIT_REMEDIATION.md`（§一 总览 / §三~§七 逐条缺陷+代码改动 / §八 验证证据 / §九 遗留），并据文档核验顺带修掉两处真实项。
+
+- **新增** [`docs/AUDIT_REMEDIATION.md`](file:///workspace/xiaoman-treehole/docs/AUDIT_REMEDIATION.md)：聚合 148 条审计（server 15 / web-js 28 / web-ui 25 / android 26 / scripts 54）的缺陷、修复方式与验证证据，含 133 已修 / 14 部分 / 1 遗留。
+- **修复 UI D21（真实缺陷）**：退出动画 CSS 选择器落在子元素（`.drawer-panel.is-closing`），而 `app.js closePanel()` 把 `is-closing` 加在**根节点**（`.drawer`/`.modal`）→ 动画从不命中。改为后代选择器 `.drawer.is-closing .drawer-panel` 等，并同步 `assets/www`。
+- **取消根 APK 跟踪**：`小满树洞-v0.3-debug.apk`（5.3MB）此前虽已加 `.gitignore` 但仍被 git 跟踪，`git rm --cached` 去跟踪（文件保留在磁盘）。
+- **命中文件**：`docs/AUDIT_REMEDIATION.md`（新增）、`web/css/style.css`、`android/app/src/main/assets/www/css/style.css`、`docs/DEVLOG.md`、根 APK（去跟踪）。
+
+---
+
 ## 2026-10-06 · 审计修复推送到云端分支 + 固化「一键推送」
 
 > 分支 `fix/audit-remediation-20261005` 已推送云端（HEAD `1b8541e`，60 文件）。用户定下**长期规矩：以后每笔更改都新开分支并推送云端**（本地不持久，需尽量提交）。
