@@ -183,6 +183,8 @@ jobs:
           arch: x86_64
           profile: pixel_4
           force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072 -no-audio
+          emulator-boot-timeout: 600
           script: |
             # Find the actual APK file (supports both Gradle and script output names)
             APK_PATH=${APK_PATH:?no apk located in earlier step}
@@ -193,8 +195,14 @@ jobs:
             adb shell am start -n com.xiaoman.treehole/.MainActivity
             sleep 8
 
-            # Verify process is alive
-            adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found — crash evidence follows"; adb logcat -d | tail -300 || true; exit 1; }
+            # Verify process is alive (retry: cold start may be slow / LMK pressure)
+            for i in 1 2 3; do
+              if adb shell pidof com.xiaoman.treehole; then echo "process alive (attempt $i)"; break; fi
+              echo "attempt $i: process not found; re-launching"
+              adb shell am start -n com.xiaoman.treehole/.MainActivity || true
+              sleep 10
+            done
+            adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found after 3 attempts — crash evidence follows"; adb logcat -d | rg -i "xiaoman|FATAL|AndroidRuntime|lowmemorykiller" | tail -100 || adb logcat -d | tail -200 || true; exit 1; }
 
             # Check for FATAL in logcat
             adb logcat -d *:E | grep -i "fatal\|exception" && { echo "ERROR: FATAL/Exception found in logcat"; exit 1; } || true
