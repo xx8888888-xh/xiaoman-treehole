@@ -76,11 +76,19 @@ jobs:
             bash scripts/build_apk.sh
           fi
 
+      - name: Normalize APK to fixed path
+        run: |
+          APK=$(find . -name "*.apk" -path "*debug*" 2>/dev/null | head -1)
+          [ -n "$APK" ] || { echo "No debug APK produced"; exit 1; }
+          mkdir -p artifact-staging
+          cp "$APK" artifact-staging/xiaoman-treehole.apk
+          ls -la artifact-staging/
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: xiaoman-treehole-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: artifact-staging/xiaoman-treehole.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -152,7 +160,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: xiaoman-treehole-apk
-          path: android/app/build/outputs/apk/debug/
+          path: downloaded-apk/
+
+      - name: Locate downloaded APK (diagnostics)
+        run: |
+          echo "== downloaded tree =="
+          find downloaded-apk -type f -printf "%p (%s bytes)\n" 2>/dev/null || ls -R downloaded-apk
+          APK_PATH=$(find . -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK_PATH" ]; then echo "ERROR: no APK found after download"; exit 1; fi
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV" 
 
       - name: Enable KVM
         run: |
@@ -169,7 +185,7 @@ jobs:
           force-avd-creation: true
           script: |
             # Find the actual APK file (supports both Gradle and script output names)
-            APK_PATH=$(find . -name "*.apk" -path "*debug*" 2>/dev/null | head -1)
+            APK_PATH=${APK_PATH:?no apk located in earlier step}
             echo "Installing APK: $APK_PATH"
             adb install -r "$APK_PATH"
 
