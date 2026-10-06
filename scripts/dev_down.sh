@@ -66,10 +66,10 @@ port_still_listening() {
 
 echo "▶ 停止小满树洞本地环境 ..."
 
-# 1) 优先按 PID 文件停止
-kill_by_pid "$PID_MOCK" "mock 对话服务(:8902)" || pkill_fallback "mock 对话服务(:8902)" "mock_api\.py"
-kill_by_pid "$PID_TTS"  "TTS 语音服务(:8903)"  || pkill_fallback "TTS 语音服务(:8903)"  "tts_server\.py"
-kill_by_pid "$PID_WEB"  "前端静态站(:8901)"    || pkill_fallback "前端静态站(:8901)"    "http\.server 8901"
+# 1) 优先按 PID 文件停止（描述与 pkill 兜底模式均取自 env.sh 端口变量，不再硬编码）
+kill_by_pid "$PID_MOCK" "mock 对话服务(:${PORT_MOCK})" || pkill_fallback "mock 对话服务(:${PORT_MOCK})" "mock_api\.py"
+kill_by_pid "$PID_TTS"  "TTS 语音服务(:${PORT_TTS})"  || pkill_fallback "TTS 语音服务(:${PORT_TTS})"  "tts_server\.py"
+kill_by_pid "$PID_WEB"  "前端静态站(:${PORT_WEB})"    || pkill_fallback "前端静态站(:${PORT_WEB})"    "http\.server ${PORT_WEB}"
 
 # 2) 校验端口释放
 FAILED=()
@@ -85,5 +85,5 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
   exit 1
 fi
 
-echo "✅ 已停止，端口 8901/8902/8903 均已释放"
+echo "✅ 已停止，端口 ${PORT_WEB}/${PORT_MOCK}/${PORT_TTS} 均已释放"
 exit 0
