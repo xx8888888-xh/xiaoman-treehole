@@ -10,7 +10,7 @@
     </domain-config>
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
-            <certificates source="system" />
+            <certificates src="system" />
         </trust-anchors>
     </base-config>
 </network-security-config>
