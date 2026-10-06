@@ -9,6 +9,8 @@
 #   4) 凭据存放于 /workspace/.secrets/onerouter.key（权限 600，绝不入库）
 #   5) 可选插件（modsearch），best-effort
 #   6) Python 依赖（edge-tts 供 TTS 服务、playwright + chromium 供 UI 测试）
+#   7) AI 长期记忆还原：docs/AI_RULES.md → /workspace/.trae/rules/project_rules.md
+#      （仓库外的 .trae/rules 会被沙箱重置清掉，故以仓库内副本为源还原）
 #
 # 用法：
 #   ONEROUTER_API_KEY=sk-or-v1-xxx bash scripts/setup_dsh.sh   # 首次：写入密钥并固化
@@ -163,6 +165,23 @@ if [ "${SKIP_PYDEPS:-0}" != "1" ]; then
   fi
 else
   log "SKIP_PYDEPS=1，跳过 Python 依赖"
+fi
+
+# ---------- 7. AI 长期记忆还原（仓库内副本 → 仓库外 .trae/rules） ----------
+# 沙箱重置会清掉 /workspace/.trae/rules/；docs/AI_RULES.md 随 git 入库，是唯一真源。
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RULES_SRC="$REPO_ROOT/docs/AI_RULES.md"
+RULES_DST="/workspace/.trae/rules/project_rules.md"
+if [ -f "$RULES_SRC" ]; then
+  mkdir -p "$(dirname "$RULES_DST")"
+  if cmp -s "$RULES_SRC" "$RULES_DST"; then
+    log "AI 长期记忆已就绪（与仓库同源）"
+  else
+    cp "$RULES_SRC" "$RULES_DST"
+    log "已还原 AI 长期记忆 → $RULES_DST"
+  fi
+else
+  log "警告：未找到 $RULES_SRC，跳过长期记忆还原"
 fi
 
 # ---------- 自检 ----------
