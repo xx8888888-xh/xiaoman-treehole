@@ -12,6 +12,18 @@ const TTS = (() => {
   let currentAudio = null;
   let fakeTimer = null;      // 假包络 interval（Android/browser 路），全局唯一
   let fakeStopTimer = null;  // Android 路时长估算的兜底停止定时器
+  let androidSettle = null;  // 当前 Android TTS 的完成回调（供原生 __ttsEnded 触发）
+
+  // 原生系统 TTS 完成回调穿透：MainActivity UtteranceProgressListener.onDone/onError
+  // → evaluateJavascript("window.__ttsEnded && window.__ttsEnded()")。
+  // 前端订阅后，口型结束不再依赖「190ms/字」估算（审计 android D9）。
+  if (typeof window !== "undefined") {
+    window.__ttsEnded = () => {
+      const fn = androidSettle;
+      androidSettle = null;
+      if (fn) fn();
+    };
+  }
 
   /** 清掉所有假包络定时器（避免连发消息时多路叠加、口型乱抖） */
   function clearFake() {
@@ -22,6 +34,7 @@ const TTS = (() => {
   /** 停掉当前所有正在播的语音（含假包络定时器） */
   function stop() {
     if (currentAudio) { try { currentAudio.pause(); } catch (e) {} currentAudio = null; }
+    androidSettle = null;   // 丢弃上一段 Android TTS 的完成回调，防止串台
     clearFake();
     try { if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel(); } catch (e) {}
     if (window.AndroidTTS && window.AndroidTTS.stop) { try { window.AndroidTTS.stop(); } catch (e) {} }
@@ -92,8 +105,17 @@ const TTS = (() => {
       if (!(window.AndroidTTS.speak(text))) return false;
       clearFake();
       fakeTimer = setInterval(() => onFrame && onFrame(0.35 + Math.random() * 0.35), 90);
-      const done = () => { clearFake(); onFrame && onFrame(0); onEnd && onEnd(); };
-      // 系统 TTS 无完成回调穿透 JS 时用估算兜底；中文语速约 180~200ms/字
+      let settled = false;
+      const done = () => {
+        if (settled) return;            // 原生回调与兜底定时器只结算一次，避免 onEnd 重复
+        settled = true;
+        androidSettle = null;
+        clearFake();
+        onFrame && onFrame(0);
+        onEnd && onEnd();
+      };
+      // 原生完成回调（__ttsEnded）优先；未穿透时用估算兜底（中文语速约 180~200ms/字）
+      androidSettle = done;
       fakeStopTimer = setTimeout(done, Math.max(1800, text.length * 190));
       return true;
     } catch (e) { console.warn("AndroidTTS 桥失败:", e); return false; }
