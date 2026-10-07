@@ -84,7 +84,7 @@ public class MainActivity extends Activity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
-            public boolean onRenderProcessGone(android.webkit.RenderProcessGoneDetail detail) {
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
                 Log.e("MainActivity", "WebView render process gone: " + detail);
                 recreateWebView();
                 return true;
@@ -137,7 +137,7 @@ public class MainActivity extends Activity {
             ws.setGeolocationEnabled(false);
             webView.setWebViewClient(new WebViewClient() {
                 @Override
-                public boolean onRenderProcessGone(android.webkit.RenderProcessGoneDetail detail) {
+                public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
                     Log.e("MainActivity", "WebView render process gone: " + detail);
                     recreateWebView();
                     return true;
