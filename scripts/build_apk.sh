@@ -44,9 +44,10 @@ echo "[2/6] javac"
 find "$WORK/gen" "$MAIN/java" -name "*.java" > "$WORK/sources.txt"
 # 优先用系统 javac（GitHub runner/本地JDK均有），否则回落 ecj（沙箱JRE-only环境）
 if command -v javac >/dev/null 2>&1; then
-  # 编译错误不应被 rg 过滤器隐藏：用 PIPESTATUS 检查 javac 退出码
-  javac -source 1.8 -target 1.8 -nowarn -classpath "$JAR" -d "$WORK/classes" @"$WORK/sources.txt" 2>"$WORK/javac.err" | rg -v "bootstrap|deprecat" || true
-  JAVAC_EXIT=${PIPESTATUS[0]}
+  # 编译错误不应被过滤器隐藏：先跑 javac 拿真实退出码，再过滤回显 stderr（CI runner 可能无 rg）
+  javac -source 1.8 -target 1.8 -nowarn -classpath "$JAR" -d "$WORK/classes" @"$WORK/sources.txt" 2>"$WORK/javac.err"
+  JAVAC_EXIT=$?
+  grep -v -e bootstrap -e deprecat "$WORK/javac.err" >&2 || true
   if [ "$JAVAC_EXIT" -ne 0 ]; then
     echo "❌ javac 编译失败（退出码 $JAVAC_EXIT），错误日志：" >&2
     cat "$WORK/javac.err" >&2
@@ -68,8 +69,9 @@ else
       echo "⚠ 缺少 sha256sum，无法校验 ecj.jar 完整性" >&2
     fi
   fi
-  java -jar "$ECJ_JAR" -source 1.8 -target 1.8 -nowarn -classpath "$JAR" -d "$WORK/classes" @"$WORK/sources.txt" 2>"$WORK/ecj.err" | rg -v "bootstrap|deprecat|warning" || true
-  ECJ_EXIT=${PIPESTATUS[0]}
+  java -jar "$ECJ_JAR" -source 1.8 -target 1.8 -nowarn -classpath "$JAR" -d "$WORK/classes" @"$WORK/sources.txt" 2>"$WORK/ecj.err"
+  ECJ_EXIT=$?
+  grep -v -e bootstrap -e deprecat -e warning "$WORK/ecj.err" >&2 || true
   if [ "$ECJ_EXIT" -ne 0 ]; then
     echo "❌ ecj 编译失败（退出码 $ECJ_EXIT），错误日志：" >&2
     cat "$WORK/ecj.err" >&2
@@ -80,6 +82,7 @@ fi
 echo "[3/6] d8 → dex"
 # 避免 word-splitting 与 ARG_MAX：用 find -print0 | xargs -0
 find "$WORK/classes" -name "*.class" -print0 | xargs -0 "$BT/d8" --release --lib "$JAR" --min-api 24 --output "$WORK/dex"
+echo "[3.1] class files: $(find "$WORK/classes" -name '*.class' | wc -l), dex: $(ls -la "$WORK/dex" | tail -1)"
 # classes.dex 必须在 APK 根目录
 cp "$WORK/base.apk" "$OUT/app-unsigned.apk"
 cd "$WORK/dex" && zip -q -j "$OUT/app-unsigned.apk" classes.dex
