@@ -47,6 +47,12 @@ if command -v javac >/dev/null 2>&1; then
   # 编译错误不应被过滤器隐藏：先跑 javac 拿真实退出码，再过滤回显 stderr（CI runner 可能无 rg）
   javac -source 1.8 -target 1.8 -nowarn -classpath "$JAR" -d "$WORK/classes" @"$WORK/sources.txt" 2>"$WORK/javac.err"
   JAVAC_EXIT=$?
+  echo "[javac] sources: $(wc -l < "$WORK/sources.txt") entries; classes produced: $(find "$WORK/classes" -name '*.class' 2>/dev/null | wc -l)"
+  if [ "$JAVAC_EXIT" -ne 0 ]; then
+    echo "---- javac.err ----" >&2
+    cat "$WORK/javac.err" >&2
+    echo "-------------------" >&2
+  fi
   grep -v -e bootstrap -e deprecat "$WORK/javac.err" >&2 || true
   if [ "$JAVAC_EXIT" -ne 0 ]; then
     echo "❌ javac 编译失败（退出码 $JAVAC_EXIT），错误日志：" >&2
