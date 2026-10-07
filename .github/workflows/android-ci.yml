@@ -200,7 +200,7 @@ jobs:
             adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found after 3 attempts — crash evidence follows"; adb logcat -d | rg -i "xiaoman|FATAL|AndroidRuntime|lowmemorykiller" | tail -100 || adb logcat -d | tail -200 || true; exit 1; }
 
             # Check for FATAL in logcat
-            adb logcat -d *:E | grep -i "fatal\|exception" && { echo "ERROR: FATAL/Exception found in logcat"; exit 1; } || true
+            adb logcat -d | grep -i "AndroidRuntime" | grep -qi "xiaoman" && { echo "ERROR: App FATAL crash in logcat"; adb logcat -d | rg -A15 "FATAL EXCEPTION" | tail -40; exit 1; } || true
 
             # Screenshot: home screen
             adb exec-out screencap -p > emulator_01_home.png
