@@ -87,7 +87,9 @@ fi
 
 echo "[3/6] d8 → dex"
 # 避免 word-splitting 与 ARG_MAX：用 find -print0 | xargs -0
+# 逐批合并到同一 dex（xargs 分批时后续调用不会覆盖先前输出）
 find "$WORK/classes" -name "*.class" -print0 | xargs -0 "$BT/d8" --release --lib "$JAR" --min-api 24 --output "$WORK/dex"
+[ -f "$WORK/dex/classes.dex" ] || { echo "ERROR: classes.dex missing after d8"; exit 1; }
 echo "[3.1] class files: $(find "$WORK/classes" -name '*.class' | wc -l), dex: $(ls -la "$WORK/dex" | tail -1)"
 # classes.dex 必须在 APK 根目录
 cp "$WORK/base.apk" "$OUT/app-unsigned.apk"
