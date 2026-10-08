@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-10-08 · OFM 免费通路打通（ling-3.0 主力）+ yml 二次修复 + 全链路审查
+
+### 免费模型通路（零 key 零费用，全部实测）
+- **原生无头调用**：`dsh --profile free "任务文本"`（headless 模板基底）——答案直出 stdout
+- **模型路由**：profile cordis.patch.yml 覆盖 `agent-default-model` 行（id 必须与 dsh-base 声明一致，last write wins）→ provider=our-free-model
+- **主力模型**：`inclusionai/ling-3.0-flash-sante:free`（三连实测：17×23=391 数学正确、自我介绍、写诗）；nemotron-3.5 当前 egress 不服务，备选按可用性轮换
+- **插件更新**：1.4.6 → **2.0.0**（git+...#main 强制）
+- 复原脚本 install_dsh.sh 已含 patch 写入
+
+### yml 二次事故与修复（教训重复：本地写 yml 不可信）
+- 本地 git 写出的 branches 行再次损坏（`ain,` 撕裂复发），已用 Contents API 单进程链路修复 **main + model/free-tier-migration 双分支**（4da666c9 / 3051dbb0），回读验证 ✓
+
+### 审查轮清单
+- [x] build_apk.sh：d8 后加 classes.dex 存在性校验兜底（防 xargs 分批/异常静默空 dex）
+- [x] 清理无效 settings 猜测文件；CI 触发段双分支回读验证
+- [x] main 与 migration 分支 CI 双 run 验证中（in_progress）
+- [ ] OFM 2.0.0 forward 端口（OpenAI 格式本地网关）——待 host 稳定后启用
+
 ## 2026-10-06 · 三线合一推送（integration/20261006）+ 密钥备份与权限审计
 
 > 用户上传 GitHub PAT + OneRouter key，要求备份（用户会自行销毁，任务期间不删）、审计权限、任务状态实时推送。
