@@ -140,7 +140,10 @@ const b64 = "{b64}";
 const res = await zai.audio.asr.create({{ file_base64: b64 }});
 console.log(JSON.stringify({{text: res.text}}));
 """
-    tmpdir = tempfile.mkdtemp(prefix="verify_tts_")
+    # 临时 mjs 必须放在项目内（向上解析能命中 node_modules）；
+    # 放 /tmp 会因 ESM bare specifier 解析失败而 ERR_MODULE_NOT_FOUND
+    tmpdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_tmp_asr")
+    os.makedirs(tmpdir, exist_ok=True)
     try:
         mjs = os.path.join(tmpdir, ".asr_test.mjs")
         with open(mjs, "w", encoding="utf-8") as f:
