@@ -254,6 +254,50 @@ async def main():
             print("⑦d-3 告知幂等不重复:", "PASS" if ok7d3 else f"FAIL (rows={n_rows})")
             check("⑦d-3 告知幂等不重复", ok7d3)
 
+            # —— ⑦e 关系进展感知（P1-1：判定单测 + 端到端天数问答 + 里程碑 + 月度回放） ——
+            rq = await pg.evaluate(
+                "() => [__isRelationQ('我们认识多久了'), __isRelationQ('我们聊过多少次啦'), "
+                "__isRelationQ('这个月我们都聊了什么'), __isRelationQ('你和你男朋友认识多久了'), "
+                "__isRelationQ('我们老板又骂我')]")
+            ok7e1 = rq == [True, True, True, False, False]
+            print("⑦e-1 前端关系判定:", "PASS " + str(rq) if ok7e1 else "FAIL " + str(rq))
+            check("⑦e-1 前端关系判定", ok7e1)
+
+            # ⑦e-2 端到端：预置 30 天前首见 → 问天数 → 本地确定性应答（不走服务端话题池）
+            await pg.evaluate(
+                "() => { localStorage.setItem('xiaoman_first_met', "
+                "String(Date.now() - 30*86400000)); }")
+            await pg.fill("#textInput", "我们认识多久了")
+            await pg.click("#sendBtn")
+            days = await wait_contains(pg, "#messages", "认识30天", timeout=12)
+            ok7e2 = "认识30天" in days
+            print("⑦e-2 端到端天数问答:", "PASS" if ok7e2 else f"FAIL {days[-60:]!r}")
+            check("⑦e-2 端到端天数问答", ok7e2)
+            await pg.screenshot(path=os.path.join(SHOTS, "14_p11_relation_days.png"))
+
+            # ⑦e-3 里程碑：rounds=99 → 发一轮（bump→100）→ 跨100播报（幂等键写入）
+            await pg.evaluate(
+                "() => { localStorage.setItem('xiaoman_rounds', '99'); "
+                "localStorage.removeItem('xiaoman_ms_done'); }")
+            await pg.fill("#textInput", "嗯")
+            await pg.click("#sendBtn")
+            ms = await wait_contains(pg, "#messages", "聊满100次", timeout=15)
+            ok7e3 = "聊满100次" in ms
+            print("⑦e-3 里程碑跨100播报:", "PASS" if ok7e3 else f"FAIL（未见里程碑行）")
+            check("⑦e-3 里程碑跨100播报", ok7e3)
+
+            # ⑦e-4 月度回放：预置 9 月真实记忆索引 → 清 month_done → reload greet 回放上月话题
+            await pg.evaluate(
+                "() => { localStorage.setItem('xiaoman_memories_v1', JSON.stringify(["
+                "{id:'e1', text:'大事：期中考试', tags:['大事'], kind:'fact', ts: Date.now()-32*86400000, hits:0},"
+                "{id:'e2', text:'宠物：橘猫', tags:['宠物'], kind:'fact', ts: Date.now()-31*86400000, hits:0}])); "
+                "localStorage.removeItem('xiaoman_month_done'); location.reload(); }")
+            replay = await wait_contains(pg, "#messages", "上个月你跟我聊过", timeout=12)
+            ok7e4 = "上个月你跟我聊过" in replay and "期中考试" in replay
+            print("⑦e-4 月度回放(真实记忆索引):", "PASS" if ok7e4 else f"FAIL {replay[-80:]!r}")
+            check("⑦e-4 月度回放(真实记忆索引)", ok7e4)
+            await pg.screenshot(path=os.path.join(SHOTS, "15_p11_month_replay.png"))
+
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")
         finally:

@@ -423,6 +423,105 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G6 node可用", False, "node 不在 PATH")
 
 
+def g7_relation():
+    """G7 关系进展感知（P1-1）：相识天数/轮数问答 + 月度话题时间轴 + 里程碑幂等
+    + 误伤防护 + 优雅降级。铁律验收：时间轴只报记忆索引里有的，零虚构。
+    架构定位：数据唯一权威源=客户端 localStorage（服务端无跨重启状态），
+    客户端拦截先于所有 API 路径（先例同危机/提醒）；服务端不做关系应答。"""
+    # ---------- 服务端对照（定位文档化：服务端收到关系问题走正常话题池，不编数据） ----------
+    sid0 = "p11-g7s-" + uuid.uuid4().hex
+    r0 = chat("我们认识多久了", sid0)
+    check("G7-0① 服务端不做关系应答(客户端拦截层职责)", "小本本" not in r0["reply"], r0["reply"][:40])
+
+    # ---------- 离线引擎（node 直调 + localStorage shim，与 app.js 同源正则/数据键） ----------
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const DAY = 86400000;
+// localStorage shim：mock_engine 的 lsGet/lsSet 走 global.localStorage
+const store = {};
+global.localStorage = {
+  getItem: k => (k in store ? store[k] : null),
+  setItem: (k, v) => { store[k] = String(v); },
+};
+const src = fs.readFileSync(ROOT + '/web/js/mock_engine.js', 'utf8');
+const MockEngine = new Function('window', src + '; return MockEngine;')(undefined);
+const out = [];
+const say = (history, t) => {
+  history.push({role: 'user', content: t});
+  const r = MockEngine.reply(history);
+  history.push({role: 'assistant', content: r.reply + (r.hook ? '||' + r.hook : '')});
+  return r;
+};
+const now = Date.now();
+const prevMonth = new Date(now); prevMonth.setDate(1); prevMonth.setMonth(prevMonth.getMonth() - 1);
+const pmTs = prevMonth.getTime();
+// 上月真实记忆索引（3 条：两大事+一宠物——宠物与大事算话题，昵称不算）
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id: 'a1', text: '大事：期中考试', tags: ['大事'], kind: 'fact', ts: pmTs, hits: 0},
+  {id: 'a2', text: '宠物：橘猫', tags: ['宠物'], kind: 'fact', ts: pmTs, hits: 0},
+  {id: 'a3', text: '大事：搬家准备', tags: ['大事'], kind: 'fact', ts: pmTs + DAY, hits: 0},
+]);
+// ① 天数问答精确（30 天前首见）
+store['xiaoman_first_met'] = String(now - 30 * DAY);
+const H1 = [];
+const r1 = say(H1, '我们认识多久了');
+out.push({n: 'G7-1① 天数问答精确(30天)', ok: r1.reply.includes('30'), info: r1.reply.slice(0, 30)});
+// ② 轮数问答（123 次）
+store['xiaoman_rounds'] = '123';
+const r2 = say(H1, '我们聊过多少次了');
+out.push({n: 'G7-1② 轮数问答精确(123次)', ok: r2.reply.includes('123'), info: r2.reply.slice(0, 30)});
+// ③ 月度话题=真实索引，零虚构（含期中考试+橘猫；不含索引外的"前男友"）
+const r3 = say(H1, '上个月我们聊了什么');
+out.push({n: 'G7-1③ 月度话题来自真实索引', ok: r3.reply.includes('期中考试') && r3.reply.includes('橘猫'), info: r3.reply.slice(0, 40)});
+out.push({n: 'G7-1④ 月度零虚构(不报索引外话题)', ok: !r3.reply.includes('前男友') && !r3.reply.includes('相亲'), info: ''});
+// ⑤ 误伤：第三方主语不触发（落 love 话题池）
+const H2 = [];
+const r5 = say(H2, '你和你男朋友认识多久了');
+out.push({n: 'G7-1⑤ 误伤防护(第三方主语不触发)', ok: !r5.reply.includes('小本本'), info: r5.reply.slice(0, 20)});
+// ⑥ 无数据优雅降级（没记第一天=不编造）
+delete store['xiaoman_first_met'];
+const r6 = say(H1, '我们认识多久了');
+out.push({n: 'G7-1⑥ 无首见数据优雅降级', ok: r6.reply.includes('没记咱俩第一天'), info: r6.reply.slice(0, 30)});
+// ⑦ greet 里程碑：rounds=100（模拟 app.js bumpRounds 后状态）→ 播报+写幂等键
+store['xiaoman_rounds'] = '100';
+delete store['xiaoman_ms_done'];
+const H3 = [];
+const r7 = say(H3, '在吗');
+out.push({n: 'G7-2① greet里程碑跨100播报', ok: r7.reply.includes('聊满100次'), info: r7.reply.slice(0, 50)});
+out.push({n: 'G7-2② 里程碑幂等键写入', ok: (JSON.parse(store['xiaoman_ms_done'] || '[]')).includes(100), info: store['xiaoman_ms_done'] || '(空)'});
+// ⑧ 幂等：再 greet 不重复
+const r8 = say(H3, '在吗');
+out.push({n: 'G7-2③ 里程碑幂等不重复', ok: !r8.reply.includes('聊满100次'), info: r8.reply.slice(0, 30)});
+// ⑨ 月度回放：month_done 空 → greet 追加上月话题；写键
+delete store['xiaoman_month_done'];
+const r9 = say(H3, '在吗');
+out.push({n: 'G7-2④ 月度回放含上月真实话题', ok: r9.reply.includes('上个月你跟我聊过') && r9.reply.includes('期中考试'), info: r9.reply.slice(0, 60)});
+out.push({n: 'G7-2⑤ 月度回放幂等键写入', ok: store['xiaoman_month_done'] === (prevMonth.getFullYear() + '-' + String(prevMonth.getMonth() + 1).padStart(2, '0')), info: store['xiaoman_month_done'] || '(空)'});
+// ⑩ 月度回放幂等：再 greet 不重复
+const r10 = say(H3, '在吗');
+out.push({n: 'G7-2⑥ 月度回放幂等不重复', ok: !r10.reply.includes('上个月你跟我聊过'), info: r10.reply.slice(0, 30)});
+// ⑪ 危机优先级：危机句+关系词 → 走危机线
+const H4 = [];
+const r11 = say(H4, '活着没意思，我们认识多久了');
+out.push({n: 'G7-3① 危机优先级高于关系查询', ok: r11.crisis === true, info: String(r11.crisis)});
+// ⑫ 本月问答（本月无记忆 → 优雅降级不编造）
+const r12 = say(H1, '这个月我们都聊了什么');
+out.push({n: 'G7-3② 本月无话题优雅降级', ok: r12.reply.includes('没聊出什么新故事') || r12.reply.includes('聊过'), info: r12.reply.slice(0, 40)});
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G7 离线引擎可加载", False, (p.stderr or p.stdout)[-300:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G7 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -432,7 +531,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation):
         try:
             fn()
         except Exception as e:

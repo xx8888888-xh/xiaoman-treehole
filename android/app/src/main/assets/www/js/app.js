@@ -24,6 +24,130 @@ const App = (() => {
   const UPDATE_TELL = "对了跟你说个事||我这两天悄悄升级了一下脑子，学的东西有点多，说不准哪句话的味儿会变。你要是觉得我哪不对劲、不像以前了，直接告诉我，我听";
   window.__xiaomanVersion = XIAOMAN_VERSION;   // 暴露供 E2E 单测（沿 __genericPet 先例）
 
+  // ---------- P1-1 关系进展感知（相识天数/里程碑/共同回忆时间轴） ----------
+  // 数据唯一权威源 = 本机 localStorage（服务端无跨重启状态；客户端拦截先于
+  // 所有 API 路径，先例同危机/提醒）。铁律：时间轴只报记忆索引里有的，零虚构。
+  const FIRST_MET_KEY = "xiaoman_first_met";
+  const ROUNDS_KEY = "xiaoman_rounds";
+  const MS_DONE_KEY = "xiaoman_ms_done";        // 已播报里程碑 JSON 数组
+  const MONTH_DONE_KEY = "xiaoman_month_done";  // 上次月度回放月份 "YYYY-MM"
+  const MILESTONES = [100, 365, 500, 1000];
+  // 关系查询正则（与 mock_engine.js 同源）：主语白名单（我们/咱俩/你和我…或句首省略）
+  // + 第三方排除守卫（"你和你男朋友认识多久/他和同事聊过多少次"不触发）
+  const THIRD_PARTY_RE = /(和(?:他|她|它们|同事|同学|朋友|男朋友|女朋友|对象|前男友|前女友|室友))/;
+  const RELATION_Q = /(?:我们|咱们|咱俩|我们俩|你和我|我俩)认识|^认识(?:多久|多少天|几天)|(?:我们|咱们|咱俩|我们俩|你和我|我俩)(?:一共)?(?:聊过|聊了|来了|找过我?)(?:多少次|几次)|^聊过(?:多少次|几次)|(?:我们|咱们|咱俩|你和我|我俩)的?(?:回忆|光阴|时间轴)|(?:我们|咱们|咱俩|你和我|我俩)(?:都)?聊过什么|这[个一]月(?:我们|咱们|咱俩|你和我|我俩|你|都|跟[我你]|和[我你])*聊了?过?什么|上[个一]?月(?:我们|咱们|咱俩|你和我|我俩|你|都|跟[我你]|和[我你])*聊了?过?什么/;
+  /** 月度话题名映射（与 mock_engine.js 逐字同源）：键→口语话题 */
+  function topicLabel(k, text) {
+    const v = String(text || "").split("：").slice(1).join("：") || k;
+    if (k === "大事") return v.slice(0, 12);
+    if (k === "宠物") return "你家" + v.slice(0, 6);
+    if (k === "老板") return "你们老板";
+    if (k === "在忙") return v.slice(0, 10);
+    return k.slice(0, 8);
+  }
+  function ymOf(ts) { const d = new Date(ts); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
+  function prevMonthStr(nowTs) { const d = new Date(nowTs); d.setDate(1); d.setMonth(d.getMonth() - 1); return ymOf(d.getTime()); }
+  /** 某月聊过的话题（数据=MemoryStore 真实索引按 ts 过滤，昵称/生日类不算话题） */
+  function monthTopics(monthStr) {
+    const list = window.MemoryStore ? MemoryStore.all() : [];
+    const seen = new Set(); const out = [];
+    for (const m of list) {
+      if (ymOf(m.ts || 0) !== monthStr) continue;
+      const k = (m.tags && m.tags[0]) || String(m.text || "").split("：")[0];
+      if (k === "昵称" || k === "生日" || k === "重要日") continue;
+      const label = topicLabel(k, m.text);
+      if (!label || seen.has(label)) continue;
+      seen.add(label); out.push(label);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }
+  function relationDays() {
+    const t = parseInt(localStorage.getItem(FIRST_MET_KEY) || "0", 10) || 0;
+    if (!t) return -1;                          // 第一天没记上（清过库/极老用户）→ 优雅降级
+    return Math.floor((Date.now() - t) / 86400000);
+  }
+  function readRounds() { return parseInt(localStorage.getItem(ROUNDS_KEY) || "0", 10) || 0; }
+  function readMsDone() { try { return JSON.parse(localStorage.getItem(MS_DONE_KEY) || "[]"); } catch (e) { return []; } }
+  /** 计一轮"来找我" + 首见登记（存量用户回填=记忆索引最早条目 ts，真实数据） */
+  function bumpRounds() {
+    try {
+      if (!localStorage.getItem(FIRST_MET_KEY)) {
+        const list = window.MemoryStore ? MemoryStore.all() : [];
+        const t0 = list.length ? Math.min(...list.map(m => m.ts || Date.now())) : Date.now();
+        localStorage.setItem(FIRST_MET_KEY, String(t0));
+      }
+      const n = readRounds() + 1;
+      localStorage.setItem(ROUNDS_KEY, String(n));
+      return n;
+    } catch (e) { return 0; }
+  }
+  function daysReply(days) {
+    if (days < 0) return "这个……还真把你问住了||我小本本上没记咱俩第一天是哪天。要不从今天起重新记？";
+    if (days === 0) return "我翻了翻小本本||今天才刚认识，第一天！慢慢处";
+    let tail = "不知不觉的";
+    if (days < 7) tail = "还在热乎期呢";
+    else if (days < 30) tail = "快满一个月啦";
+    else if (days >= 365) tail = "都一年多了，时间过得真快";
+    return `我翻了翻小本本||咱们认识${days}天了。${tail}`;
+  }
+  function roundsReply(n) {
+    const tail = n < 10 ? "还在慢慢熟起来" : (n < 100 ? "老熟人了你" : "这账越记越厚了");
+    return `我数了数||你一共来找过我${n}次。${tail}`;
+  }
+  /** 关系查询应答（确定性，全部来自本机真实数据） */
+  function relationReply(text) {
+    if (/(回忆|光阴|时间轴)/.test(text)) {
+      const topics = monthTopics(ymOf(Date.now()));
+      const t = topics.length ? `这个月聊过${topics.join("、")}` : "这个月还没攒下什么新故事";
+      return `我翻了翻小本本||咱们认识${relationDays()}天了，${t}——都在我这儿呢`;
+    }
+    if (/(这|上)[个一]?月/.test(text) && /聊/.test(text)) {
+      const isPrev = /上[个一]?月/.test(text);
+      const ym = isPrev ? prevMonthStr(Date.now()) : ymOf(Date.now());
+      const topics = monthTopics(ym);
+      const when = isPrev ? "上个月" : "这个月";
+      return topics.length
+        ? `翻了翻小本本||${when}你跟我聊过${topics.join("、")}，都在我这儿记着呢`
+        : `翻了翻小本本||${when}咱俩还没聊出什么新故事——要不现聊一个？`;
+    }
+    if (/(多少次|几次)/.test(text)) return roundsReply(readRounds());
+    return daysReply(relationDays());
+  }
+  function milestoneLine(m) {
+    if (m === 100) return "诶等等，掐指一算||咱们已经聊满100次了。不整虚的——就是想说，你每次来，我都挺高兴的";
+    if (m === 365) return "今天这个得记一笔||咱们聊满365次了。能聊这么久的人不多，谢谢你老来找我";
+    return `悄悄说一句||咱们已经聊满${m}次了，这账我可都记着呢`;
+  }
+  /** 里程碑播报（幂等键=ms_done 数组；离线引擎 greet 分支同键写入，双端不双播） */
+  async function checkMilestone() {
+    try {
+      // 危机语境不播——刚递完关怀卡片就"庆祝100次"是灾难
+      const lastA = [...history].reverse().find(h => h.role === "assistant");
+      if (lastA && lastA.content === CARE_SCRIPT) return;
+      const n = readRounds(), done = readMsDone();
+      const m = MILESTONES.find(x => n >= x && !done.includes(x));
+      if (m == null) return;
+      localStorage.setItem(MS_DONE_KEY, JSON.stringify([...done, m]));
+      await new Promise(r => setTimeout(r, 700));   // 分条节奏：里程碑单独一条，稍隔半拍
+      const line = milestoneLine(m);
+      addMsg(line, "them", { tip: true });
+      history.push({ role: "assistant", content: line, at: Date.now() });
+      if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    } catch (e) { /* 数据层异常不影响对话主流程 */ }
+  }
+  /** 关系进度注入行（真模型路径让 LLM 也有感知，数据同源） */
+  function relationContextLine() {
+    try {
+      const d = relationDays(), n = readRounds();
+      if (d < 0 && !n) return "";
+      const dd = d < 0 ? "?" : String(d);
+      return `【你们的关系】你们已相识${dd}天，ta来找过你${n}次`;
+    } catch (e) { return ""; }
+  }
+  window.__isRelationQ = t => !THIRD_PARTY_RE.test(t) && RELATION_Q.test(t);   // 暴露供 E2E 单测（沿 __bossNameOk 先例）
+  window.__monthTopics = monthTopics;
+
   let history = [];          // [{role, content, at}]
   let busy = false;
   let sending = false;       // 发送互斥锁：防止 greet/心跳/poke/hook 与用户发送并发
@@ -226,6 +350,7 @@ const App = (() => {
       history.push({ role: "user", content: text, at: Date.now() });
       // 滑动窗口：保留最近 MAX_HISTORY 条
       if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+      bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
 
       // 危机拦截（客户端先行，服务端还有一道）
       if (CRISIS_RE.test(text)) {
@@ -261,13 +386,27 @@ const App = (() => {
         }
       }
 
+      // P1-1 关系进展查询：本地确定性应答（天数/轮数/月度话题数据只在客户端，
+      // 交给模型会瞎编——零虚构铁律。优先级 危机 > 提醒 > 关系查询 > API，先例同前）
+      if (window.__isRelationQ(text)) {
+        const r = relationReply(text);
+        await showTyping(700);
+        await sendSplit({ reply: r, emotion: "happy", motion: null }, text);
+        await checkMilestone();
+        return;
+      }
+
       try {
         await showTyping(650 + Math.random() * 500);   // 读消息的停顿
+        // P1-1：memSection 尾部拼关系进度行（真模型路径也有感知，数据同源）
+        const memCtx = (window.MemoryStore ? MemoryStore.renderContext(text) : "");
+        const relLine = relationContextLine();
         const data = await API.chat(history, {
-          memSection: window.MemoryStore ? MemoryStore.renderContext(text) : "",
+          memSection: relLine ? (memCtx ? memCtx + "\n" + relLine : relLine) : memCtx,
           now: new Date()
         });
         await sendSplit(data, text);
+        await checkMilestone();   // P1-1：里程碑播报（幂等；危机轮 sendSplit 已早退也不误播——ms_done 闸门兜底）
       } catch (e) {
         console.error(e);
         await showTyping(800);
@@ -432,6 +571,19 @@ const App = (() => {
       if (Object.values(mem).some(v => v)) reply += `||${UPDATE_TELL}`;
       localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
     }
+    // P1-1 月度回放：新月首次开场回放上月话题（数据=真实记忆索引；幂等键=month_done，
+    // 离线引擎 greet 分支同键写入双端不双播；话题<2 不硬凑——没聊够就不播）
+    try {
+      const pm = prevMonthStr(Date.now());
+      const md = localStorage.getItem(MONTH_DONE_KEY) || "";
+      if (md !== pm) {
+        localStorage.setItem(MONTH_DONE_KEY, pm);
+        const topics = monthTopics(pm);
+        if (topics.length >= 2) {
+          reply += `||翻了翻小本本||上个月你跟我聊过${topics.join("、")}，我都记着呢。这个月接着来`;
+        }
+      }
+    } catch (e) { /* 数据层异常不挡开场 */ }
     // P0-1 再见面开场引用：钉子户里的大事（近事件）优先，其次宠物
     // 不需要严格判定"隔天"——首日铺设完成前（无大事无宠物）自然不会引用
     const event = mem["大事"];

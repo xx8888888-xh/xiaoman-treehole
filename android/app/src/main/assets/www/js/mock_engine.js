@@ -41,6 +41,100 @@ const MockEngine = (() => {
     XIAOMAN_UPDATES.slice(0, 3).map(([d, n]) => parseInt(d.slice(8, 10), 10) + "号" + n).join("；") +
     "||要是觉得我哪里变了不像以前，尽管说，我改";
 
+  // ---------- P1-1 关系进展感知（与 app.js 同源；本层兜底直调/拦截漏网场景） ----------
+  // 数据在客户端 localStorage（node 直调时读不到→天数/轮数优雅降级，零虚构铁律：
+  // 推不出来就不编）。幂等键 ms_done/month_done 与 app.js 双端同键不双播。
+  const FIRST_MET_KEY = "xiaoman_first_met", ROUNDS_KEY = "xiaoman_rounds",
+        MS_DONE_KEY = "xiaoman_ms_done", MONTH_DONE_KEY = "xiaoman_month_done";
+  const MILESTONES = [100, 365, 500, 1000];
+  const THIRD_PARTY_RE = /(和(?:他|她|它们|同事|同学|朋友|男朋友|女朋友|对象|前男友|前女友|室友))/;
+  const RELATION_Q = /(?:我们|咱们|咱俩|我们俩|你和我|我俩)认识|^认识(?:多久|多少天|几天)|(?:我们|咱们|咱俩|我们俩|你和我|我俩)(?:一共)?(?:聊过|聊了|来了|找过我?)(?:多少次|几次)|^聊过(?:多少次|几次)|(?:我们|咱们|咱俩|你和我|我俩)的?(?:回忆|光阴|时间轴)|(?:我们|咱们|咱俩|你和我|我俩)(?:都)?聊过什么|这[个一]月(?:我们|咱们|咱俩|你和我|我俩|你|都|跟[我你]|和[我你])*聊了?过?什么|上[个一]?月(?:我们|咱们|咱俩|你和我|我俩|你|都|跟[我你]|和[我你])*聊了?过?什么/;
+  function lsGet(k) { try { return (typeof localStorage !== "undefined" && localStorage.getItem) ? localStorage.getItem(k) : null; } catch (e) { return null; } }
+  function lsSet(k, v) { try { if (typeof localStorage !== "undefined" && localStorage.setItem) localStorage.setItem(k, v); } catch (e) {} }
+  function ymOf(ts) { const d = new Date(ts); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
+  function prevMonthStr(nowTs) { const d = new Date(nowTs); d.setDate(1); d.setMonth(d.getMonth() - 1); return ymOf(d.getTime()); }
+  /** 月度话题（数据=xiaoman_memories_v1 真实索引；与 app.js/topicLabel 同源表） */
+  function monthTopics(monthStr) {
+    let list = [];
+    try { list = JSON.parse(lsGet("xiaoman_memories_v1") || "[]") || []; } catch (e) { list = []; }
+    const seen = new Set(); const out = [];
+    for (const m of list) {
+      if (ymOf((m && m.ts) || 0) !== monthStr) continue;
+      const k = (m.tags && m.tags[0]) || String(m.text || "").split("：")[0];
+      if (k === "昵称" || k === "生日" || k === "重要日") continue;
+      const v = String(m.text || "").split("：").slice(1).join("：") || k;
+      let label;
+      if (k === "大事") label = v.slice(0, 12);
+      else if (k === "宠物") label = "你家" + v.slice(0, 6);
+      else if (k === "老板") label = "你们老板";
+      else if (k === "在忙") label = v.slice(0, 10);
+      else label = k.slice(0, 8);
+      if (!label || seen.has(label)) continue;
+      seen.add(label); out.push(label);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }
+  function relationDays() {
+    const t = parseInt(lsGet(FIRST_MET_KEY) || "0", 10) || 0;
+    return t ? Math.floor((Date.now() - t) / 86400000) : -1;
+  }
+  function readRounds() { return parseInt(lsGet(ROUNDS_KEY) || "0", 10) || 0; }
+  function readMsDone() { try { return JSON.parse(lsGet(MS_DONE_KEY) || "[]"); } catch (e) { return []; } }
+  function daysReply(days) {
+    if (days < 0) return "这个……还真把你问住了||我小本本上没记咱俩第一天是哪天。要不从今天起重新记？";
+    if (days === 0) return "我翻了翻小本本||今天才刚认识，第一天！慢慢处";
+    let tail = "不知不觉的";
+    if (days < 7) tail = "还在热乎期呢";
+    else if (days < 30) tail = "快满一个月啦";
+    else if (days >= 365) tail = "都一年多了，时间过得真快";
+    return `我翻了翻小本本||咱们认识${days}天了。${tail}`;
+  }
+  function roundsReply(n) {
+    const tail = n < 10 ? "还在慢慢熟起来" : (n < 100 ? "老熟人了你" : "这账越记越厚了");
+    return `我数了数||你一共来找过我${n}次。${tail}`;
+  }
+  function relationReply(text) {
+    if (/(回忆|光阴|时间轴)/.test(text)) {
+      const topics = monthTopics(ymOf(Date.now()));
+      const t = topics.length ? `这个月聊过${topics.join("、")}` : "这个月还没攒下什么新故事";
+      return `我翻了翻小本本||咱们认识${relationDays()}天了，${t}——都在我这儿呢`;
+    }
+    if (/(这|上)[个一]?月/.test(text) && /聊/.test(text)) {
+      const isPrev = /上[个一]?月/.test(text);
+      const ym = isPrev ? prevMonthStr(Date.now()) : ymOf(Date.now());
+      const topics = monthTopics(ym);
+      const when = isPrev ? "上个月" : "这个月";
+      return topics.length
+        ? `翻了翻小本本||${when}你跟我聊过${topics.join("、")}，都在我这儿记着呢`
+        : `翻了翻小本本||${when}咱俩还没聊出什么新故事——要不现聊一个？`;
+    }
+    if (/(多少次|几次)/.test(text)) return roundsReply(readRounds());
+    return daysReply(relationDays());
+  }
+  function milestoneLine(m) {
+    if (m === 100) return "诶等等，掐指一算||咱们已经聊满100次了。不整虚的——就是想说，你每次来，我都挺高兴的";
+    if (m === 365) return "今天这个得记一笔||咱们聊满365次了。能聊这么久的人不多，谢谢你老来找我";
+    return `悄悄说一句||咱们已经聊满${m}次了，这账我可都记着呢`;
+  }
+  /** greet 分支里程碑+月度回放（幂等键同 app.js；node 无 localStorage 时静默跳过） */
+  function greetAnnex() {
+    let out = "";
+    try {
+      const n = readRounds(), done = readMsDone();
+      const m = MILESTONES.find(x => n >= x && !done.includes(x));
+      if (m != null) { out += "||" + milestoneLine(m); lsSet(MS_DONE_KEY, JSON.stringify([...done, m])); }
+      const pm = prevMonthStr(Date.now());
+      const md = lsGet(MONTH_DONE_KEY) || "";
+      if (md !== pm) {
+        lsSet(MONTH_DONE_KEY, pm);
+        const topics = monthTopics(pm);
+        if (topics.length >= 2) out += `||翻了翻小本本||上个月你跟我聊过${topics.join("、")}，我都记着呢。这个月接着来`;
+      }
+    } catch (e) { /* 兜底层不挡主流程 */ }
+    return out;
+  }
+
   const TOPIC = {
     work: [
       "啊？当着全组？这也太过分了||那方案你熬了多久你自己知道……能力不行他当初把你招进来干嘛",
@@ -211,6 +305,11 @@ const MockEngine = (() => {
     if (LEX.update_query.test(userText))
       return { reply: UPDATE_REPLY, emotion: "shy", motion: "Shake", memory_updates: {}, hook: null, crisis: false };
 
+    // P1-1 关系进展查询：确定性应答（数据=客户端 localStorage；正则/守卫与 app.js 同源。
+    // 优先级 危机 > meta > 更新查询 > 关系查询 > 话题池，与服务端同序）
+    if (!THIRD_PARTY_RE.test(userText) && RELATION_Q.test(userText))
+      return { reply: relationReply(userText), emotion: "happy", motion: null, memory_updates: {}, hook: null, crisis: false };
+
     const topic = topicOf(userText);
     let msg = pick(TOPIC[topic] || TOPIC.generic);
     if (msg.startsWith("@CTX|")) {
@@ -224,6 +323,8 @@ const MockEngine = (() => {
       const told = history.some(h => h.role === "assistant" && String(h.content || "").includes("升级了一下脑子"));
       const hasMem = Object.keys(recallMemories(history.slice(0, -1))).length > 0;
       if (!told && hasMem) msg = UPDATE_TELL;
+      // P1-1 里程碑+月度回放（幂等键与 app.js 双端同键；播报时写键，不双播）
+      msg += greetAnnex();
     }
     if (topic !== "greet") lastTopic = topic;
     const [emotion, motion] = EMO_MAP[topic] || ["neutral", null];
