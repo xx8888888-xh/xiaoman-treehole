@@ -99,6 +99,20 @@ def _clean_name(v):
             return v[:-len(suf)]
     return v
 
+# ---------------- P0-2 遗留守卫：泛指不覆盖具体（提取层信息劣化防护） ----------------
+# 现象：已存"橘猫"后用户说"我家那只猫拆家了"，宠物正则的 group2 会把
+# "那只"当名字前缀吃进去提取出"那只猫"——指示词+数量词+基名词=零信息泛指，
+# 覆盖旧值属于信息劣化（模板回提会从"你家橘猫"退化成"你家那只猫"）。
+# 判定：剥离指示/数量/称谓虚词后只剩基名词（猫/狗/兔(子)）→ 泛指。
+# 规则：泛指新值只在旧值缺失或旧值同为泛指时落库；旧值具体 → 跳过（保留）。
+PET_GENERIC_STRIP = set("一这那每某该个小条只家我有")
+PET_BASE_RE = re.compile(r"^(?:猫|狗|兔子?)$")
+
+def _pet_generic(v):
+    """'那只猫/我家猫/一只狗/有只猫'→True；'橘猫/英短猫/金毛狗'→False"""
+    core = "".join(c for c in v if c not in PET_GENERIC_STRIP)
+    return bool(PET_BASE_RE.match(core))
+
 def extract_memory(text, old):
     out = {}
     for key, pat in MEM_PATTERNS:
@@ -115,6 +129,10 @@ def extract_memory(text, old):
             # 语气尾缀词不进记忆值（"我们老板张三吧"→"张三"，前后端口径一致）
             val = _clean_name(val)
             if val and old.get(key) != val:
+                # 泛指不覆盖具体：旧值具体（"橘猫"）时，泛指新值（"那只猫"）不落库
+                if (key == "宠物" and old.get(key)
+                        and _pet_generic(val) and not _pet_generic(old[key])):
+                    continue
                 out[key] = val
     return out
 

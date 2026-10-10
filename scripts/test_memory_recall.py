@@ -179,6 +179,78 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G3 node可用", False, "node 不在 PATH")
 
 
+def g4_generic_guard():
+    """G4 泛指不覆盖具体（P0-2 遗留守卫）：提取层信息劣化防护，服务端+离线双端"""
+    # ---------- 服务端 ----------
+    sid = "p02-g4a-" + uuid.uuid4().hex
+    chat("我养了一只橘猫", sid)               # 轮1 存具体值"橘猫"（NAME hook 期）
+    d = chat("我家那只猫拆家了", sid)         # 轮2 泛指"那只猫" → 守卫应拦截
+    upd = d.get("memory_updates") or {}
+    check("G4-1① 服务端泛指轮不产出宠物更新", "宠物" not in upd,
+          json.dumps(upd, ensure_ascii=False))
+    chat("叫我小夏", sid)                     # 轮3 补昵称（过 NAME 引导期）
+    chat("下周要期中考试", sid)               # 轮4 补大事（过 EVENT 引导期）
+    chat("今天随便聊聊", sid)                 # 轮5 填充（过大事提取间隔）
+    d = chat("路过宠物店看了一眼", sid)       # 轮6 宠物话题回提 → 应引用"橘猫"非"那只猫"
+    hook = d.get("hook") or ""
+    check("G4-1② 服务端记忆未劣化(回提引用橘猫)", "橘猫" in hook and "那只猫" not in hook,
+          f"hook={hook!r}")
+    sid2 = "p02-g4b-" + uuid.uuid4().hex
+    d = chat("我家有只猫", sid2)              # 首次提及：泛指也落库（无旧值可保护）
+    upd = d.get("memory_updates") or {}
+    check("G4-1③ 首次泛指可落库(无旧值)", "宠物" in upd,
+          json.dumps(upd, ensure_ascii=False))
+    d = chat("我养了一只英短猫", sid2)        # 具体新值 → 升级覆盖泛指旧值
+    upd = d.get("memory_updates") or {}
+    check("G4-1④ 具体值可升级覆盖泛指", upd.get("宠物") == "英短猫",
+          json.dumps(upd, ensure_ascii=False))
+
+    # ---------- 离线兜底（node 直调，与服务端同源同剧本） ----------
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const src = fs.readFileSync(ROOT + '/web/js/mock_engine.js', 'utf8');
+const MockEngine = new Function('window', src + '; return MockEngine;')(undefined);
+const out = [];
+const say = (history, t) => {
+  history.push({role: 'user', content: t});
+  const r = MockEngine.reply(history);
+  history.push({role: 'assistant', content: r.reply + (r.hook ? '||' + r.hook : '')});
+  return r;
+};
+const H = [];
+say(H, '我养了一只橘猫');              // 轮1 存具体值
+const r2 = say(H, '我家那只猫拆家了'); // 轮2 泛指 → 返回值守卫应拦截
+out.push({n: 'G4-2① 离线泛指轮不产出宠物更新', ok: !r2.memory_updates['宠物'],
+          info: JSON.stringify(r2.memory_updates)});
+say(H, '叫我小夏');                    // 轮3 昵称
+say(H, '下周要期中考试');              // 轮4 大事
+say(H, '今天随便聊聊');                // 轮5 填充
+const r6 = say(H, '路过宠物店看了一眼'); // 轮6 宠物回提 → 应引用"橘猫"
+const h6 = r6.hook || '';
+out.push({n: 'G4-2② 离线记忆未劣化(回提引用橘猫)', ok: h6.includes('橘猫') && !h6.includes('那只猫'),
+          info: h6});
+const H2 = [];
+const s1 = say(H2, '我家有只猫');       // 首次泛指落库
+out.push({n: 'G4-2③ 离线首次泛指可落库', ok: !!s1.memory_updates['宠物'],
+          info: JSON.stringify(s1.memory_updates)});
+const s2 = say(H2, '我养了一只英短猫'); // 具体升级覆盖
+out.push({n: 'G4-2④ 离线具体值可升级覆盖', ok: s2.memory_updates['宠物'] === '英短猫',
+          info: JSON.stringify(s2.memory_updates)});
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G4 离线引擎可加载", False, (p.stderr or p.stdout)[-200:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G4 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -188,7 +260,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard):
         try:
             fn()
         except Exception as e:

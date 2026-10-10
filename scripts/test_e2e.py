@@ -160,6 +160,30 @@ async def main():
             mems = await wait_mem_contains(pg, "阿秋", timeout=15)
             print("⑦ 记忆:", mems if mems is not None else "MemoryStore 不可用")
 
+            # —— ⑦b 泛指不覆盖具体（P0-2 遗留守卫：前端判定单测 + 端到端不劣化） ——
+            gp = await pg.evaluate(
+                "() => [__genericPet('那只猫'), __genericPet('橘猫'), "
+                "__genericPet('一只狗'), __genericPet('英短猫')]")
+            ok7b1 = gp == [True, False, True, False]
+            print("⑦b-1 前端泛指判定:", "PASS " + str(gp) if ok7b1 else "FAIL " + str(gp))
+            check("⑦b-1 前端泛指判定", ok7b1)
+
+            n_before = await pg.evaluate("document.querySelectorAll('#messages .msg-row').length")
+            await pg.fill("#textInput", "我家那只猫拆家了")
+            await pg.click("#sendBtn")
+            stable, last_n = 0, n_before
+            for _ in range(30):   # 等回复渲染稳定（全部分条+打字动画结束后才走记忆合并）
+                await asyncio.sleep(0.5)
+                n_now = await pg.evaluate("document.querySelectorAll('#messages .msg-row').length")
+                stable = stable + 1 if n_now == last_n else 0
+                last_n = n_now
+                if n_now > n_before + 1 and stable >= 3:
+                    break
+            m = await pg.evaluate("() => JSON.parse(localStorage.getItem('xiaoman_memory') || '{}')")
+            ok7b2 = m.get("宠物") == "橘猫"
+            print("⑦b-2 端到端记忆不劣化:", "PASS 宠物=橘猫" if ok7b2 else f"FAIL 宠物={m.get('宠物')!r}")
+            check("⑦b-2 端到端记忆不劣化", ok7b2)
+
             await pg.click("#memoryBtn")
             await asyncio.sleep(1)
             drawer = await pg.inner_text("#memoryDrawer")

@@ -30,6 +30,14 @@ const App = (() => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   function loadMem() { try { return JSON.parse(localStorage.getItem(MEM_KEY)) || {}; } catch (e) { return {}; } }
   function saveMem(m) { localStorage.setItem(MEM_KEY, JSON.stringify(m)); renderMem(); }
+  /** 泛指宠物值判定（与 mock_api.py/_pet_generic、mock_engine.js/petGeneric 三端同源）：
+   *  "那只猫/我家猫/一只狗"→true（零信息泛指）；"橘猫/英短猫"→false（具体值）。
+   *  P0-2 遗留守卫：防止泛指覆盖具体导致记忆退化。暴露 window 供 E2E 单测 */
+  function genericPet(v) {
+    const core = String(v).replace(/[一这那每某该个小条只家我有]/g, "");
+    return /^(?:猫|狗|兔子?)$/.test(core);
+  }
+  window.__genericPet = genericPet;
   function timeBand() {
     const h = new Date().getHours();
     if (h < 5) return "凌晨";
@@ -282,8 +290,17 @@ const App = (() => {
 
       // 记忆：双写（旧抽屉 + 新索引库）
       if (data.memory_updates && Object.keys(data.memory_updates).length) {
-        saveMem({ ...loadMem(), ...data.memory_updates });
-        if (window.MemoryStore) MemoryStore.addUpdates(data.memory_updates);
+        // 泛指不覆盖具体（P0-2 遗留守卫·前端兜底，三端同源判定）：
+        // 服务端已挡在线路径；这里收敛其余来源（离线引擎/未来协议漂移）
+        const upd = { ...data.memory_updates };
+        const cur = loadMem();
+        if (upd["宠物"] && cur["宠物"] && genericPet(upd["宠物"]) && !genericPet(cur["宠物"])) {
+          delete upd["宠物"];
+        }
+        if (Object.keys(upd).length) {
+          saveMem({ ...cur, ...upd });
+          if (window.MemoryStore) MemoryStore.addUpdates(upd);
+        }
       }
 
       // 模型路径的提醒协议（补充：客户端没截获但模型识别到了）

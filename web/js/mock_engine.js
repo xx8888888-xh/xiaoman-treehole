@@ -104,11 +104,24 @@ const MockEngine = (() => {
   };
   const RECALL_EXTRACT_GAP = 3, RECALL_COOLDOWN = 6, RECALL_MAX = 4;
   let memHits = {}, memExtracted = {}, recallCount = 0;
+  /** 泛指宠物值判定（与 mock_api.py/_pet_generic 同源）："那只猫/我家猫/一只狗"→true；
+   *  "橘猫/英短猫/金毛狗"→false。泛指=零信息量，覆盖旧具体值属于信息劣化 */
+  function petGeneric(v) {
+    const core = String(v).replace(/[一这那每某该个小条只家我有]/g, "");
+    return /^(?:猫|狗|兔子?)$/.test(core);
+  }
   /** 离线版会话记忆：扫全量历史 user 消息提取（最后出现覆盖先前的，
    *  与服务端 update 语义一致；localStorage 老记忆归 app.js MemoryStore 管） */
   function recallMemories(history) {
     const mem = {};
-    for (const h of history) if (h.role === "user") Object.assign(mem, extractMemory(h.content));
+    for (const h of history) if (h.role === "user") {
+      const u = extractMemory(h.content);
+      for (const k of Object.keys(u)) {
+        // 泛指不覆盖具体（P0-2 遗留守卫，与服务端 extract_memory 同源）
+        if (k === "宠物" && mem["宠物"] && petGeneric(u["宠物"]) && !petGeneric(mem["宠物"])) continue;
+        mem[k] = u[k];
+      }
+    }
     return mem;
   }
 
@@ -166,6 +179,13 @@ const MockEngine = (() => {
     // P0-2 主动回提：引导完成后接管（优先级：引导 > 回提 > 常规随机，与服务端同序）
     onbTurns++;
     const memUpdates = extractMemory(userText);
+    // 泛指不覆盖具体（P0-2 遗留守卫·返回值防线）：用当前轮之前的会话状态判定，
+    // 阻止"那只猫"式泛指值发给 app.js 覆盖 localStorage 里的具体值（"橘猫"）。
+    // prior=去掉当前 user 消息后的历史（reply 约定：history 末尾即当前轮）
+    const prior = recallMemories(history.slice(0, -1));
+    if (memUpdates["宠物"] && prior["宠物"] && petGeneric(memUpdates["宠物"]) && !petGeneric(prior["宠物"])) {
+      delete memUpdates["宠物"];
+    }
     for (const k of Object.keys(memUpdates)) memExtracted[k] = onbTurns; // 闸门0数据
     let hook = null;
     if (!askedName && onbTurns <= 4) {
