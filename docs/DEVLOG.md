@@ -19,7 +19,7 @@
 - 昨日「双测 cron 无执行痕迹」疑团 **解决**：job 创建于 10-09 21:25 晚于当日两个触发点；今日首触发正常执行并产出本条记录 → cron 调度本身健康，无需再查。
 - 10-08 `[ ] OFM 2.0.0 forward 端口` 维持挂起（前置条件「host 稳定」未满足）。
 
-触及：docs/DEVLOG.md（本条，纯 docs 无代码变更）、docs/shots/07_memory_reminder_drawer.png（本轮 UI 测试副产物再生成，作实测证据）
+触及：docs/DEVLOG.md（本条，纯 docs 无代码变更）、docs/shots/07–11（本轮 UI 测试副产物再生成，作实测证据一并提交）
 
 ---
 
