@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-10-10 · 晚间环境升级：DSH 解锁 shell 执行 + 迭代引擎上线（用户指示）
+
+- **DSH 升级** `0.2.0-rc.2 → 0.2.1-alpha.2`（npm latest 为 rc.2，alpha 更新；沙箱网络慢，安装 ~20min）
+- **权限破案（推翻"DSH 禁 shell"旧结论）**：默认 `workspace-write` 下 bash 被 sandbox 拦截+approval 无人应答，此前误判为能力缺失。**解锁**：`DSH_PERMISSION_MODE=danger-full-access dsh --profile free "任务"`——实测 DSH 真跑 shell（`bash -n`/`ls|wc`/`node --test`/`py_compile` 均真实执行，退出码与输出经本会话交叉验证一致）。三档：read-only / workspace-write / danger-full-access（approval=never）
+- **委托纪律更新**：DSH 可跑只读/低危命令（审查/批量查找/测试）；git 写、删除、推送等高危仍本会话亲自执行；产出须抽查校验
+- **每小时 cron 语义升级**：从"条件检查（空闲即 OK）"改为**迭代引擎**——任务清空即取 docs/PRODUCT_ROADMAP.md 下一项（P0→P1→P2）开工，禁止空转；路线图清空后转"用户视角体检"挖新迭代项
+
+触及：无仓库代码（环境级变更，细则沉淀 TOOLS.md / 长期记忆 / cron prompt）
+
+---
+
 ## 2026-10-10 · 晨间双测 5 项全绿（cron 首次真实触发 + 昨日挂账闭环）
 
 > 08:53 双测任务触发（即昨日挂账观察的「9:00 双测 cron 首触发」本体，提前数分钟到达）。全清单执行完毕，**零异常、零修复项**。
