@@ -104,15 +104,16 @@ def extract_memory(text, old):
     for key, pat in MEM_PATTERNS:
         m = pat.search(text)
         if m:
-            # 老板用 group3（姓名）；大事取整段短语；昵称清洗尾部废话词；其余用 group2
+            # 老板用 group3（姓名）；大事取整段短语；其余用 group2
             if key == "老板":
-                val = m.group(3).strip() or m.group(2).strip()
+                val = (m.group(3) or m.group(2) or "").strip()
             elif key == "大事":
-                val = _clean_name((m.group(1) or m.group(2) or "").strip())
+                val = (m.group(1) or "").strip()
             else:
-                val = m.group(2).strip() or m.group(1).strip()
-                if key == "昵称":
-                    val = _clean_name(val)
+                val = (m.group(2) or m.group(1) or "").strip()
+            # P0-2 对齐：所有键统一尾缀清洗（与前端 cleanName 同源同表）——
+            # 语气尾缀词不进记忆值（"我们老板张三吧"→"张三"，前后端口径一致）
+            val = _clean_name(val)
             if val and old.get(key) != val:
                 out[key] = val
     return out
@@ -123,6 +124,51 @@ ONBOARD_NAME_HOOK = "对了，聊了这么久还不知道怎么称呼你——�
 ONBOARD_EVENT_HOOK = "还有呀，你最近有啥大事吗？考试、搬家、换工作那种，说一件，我帮你记着"
 ONBOARD_NAME_TURNS = 4   # 称号引导最晚轮次
 ONBOARD_EVENT_TURNS = 8  # 大事引导最晚轮次
+
+# ---------------- P0-2 主动回提（"被记住"的核心体验） ----------------
+# 回提谁：话题关联映射（当前 LEX 类目 → 候选记忆键，优先级序）；
+# insomnia/happy → 大事：熬夜累/开心话题常与备考赶稿等大事相关（设计定稿口径）
+RECALL_MAP = {
+    "work": ["老板", "在忙"],
+    "insomnia": ["大事"],
+    "happy": ["大事"],
+}
+PET_TOPIC_RE = re.compile(r"(猫|狗|兔|团子|宠物|毛孩|铲屎)")
+# 怎么提：值零加工直填模板（记忆原文原样嵌入——不张冠李戴的结构性保证）
+RECALL_TEMPLATES = {
+    "大事": "你上次说{v}——准备得怎么样啦？",
+    "宠物": "你家{v}呢？今天乖不乖",
+    "老板": "{v}今天没又折腾你吧",
+    "在忙": "你之前说在{v}，现在缓过来了吗",
+}
+RECALL_EXTRACT_GAP = 3  # 闸门0：提取后至少隔 3 轮才可回提（"你上次说"须指向足够久之前，防复读感）
+RECALL_COOLDOWN = 6    # 闸门1：同记忆两次回提间隔 ≥6 轮（"从未被引用"视为通过）
+RECALL_MAX = 4         # 闸门2：每会话回提总次数上限（含 greet 开场引用；频控哲学与心跳一致）
+
+def _pick_recall(memories, mem_updates, topic, user_text, sess, turn):
+    """P0-2 回提决策：返回 (hook 文本, 命中键) 或 (None, None)。确定性触发，不掷骰子。
+    昵称不回提（称呼里天然高频使用，回提显得刻意）。"""
+    hits = sess.setdefault("memory_hits", {})
+    extracted = sess.setdefault("mem_extracted", {})
+    # 闸门2：每会话总额（含 greet 开场引用）
+    if sess.get("recall_count", 0) >= RECALL_MAX:
+        return None, None
+    # 候选键：话题关联 → 宠物词表命中 → 兜底大事（最重要钉子户）
+    cands = [k for k in RECALL_MAP.get(topic, []) if k in memories]
+    if PET_TOPIC_RE.search(user_text) and "宠物" in memories:
+        cands.append("宠物")
+    if not cands and "大事" in memories:
+        cands = ["大事"]
+    for k in cands:
+        if k in mem_updates:
+            continue  # 当轮刚提取：用户正聊这个，回提=复读
+        ext = extracted.get(k)
+        if ext is not None and turn - ext < RECALL_EXTRACT_GAP:
+            continue  # 闸门0：提取后不足 2 轮，"你上次说"指向太近
+        hit = hits.get(k)
+        if hit is None or turn - hit >= RECALL_COOLDOWN:
+            return RECALL_TEMPLATES[k].format(v=memories[k]), k
+    return None, None
 
 # ---------------- 回复模板（源自实测打磨的语料） ----------------
 def topic_of(text):
@@ -242,6 +288,17 @@ class _State:
         sess["turns"] = sess.get("turns", 0) + 1
         return sess["turns"]
 
+    def get_session(self, session_id):
+        """P0-2：暴露会话 dict（memory_hits/mem_extracted/recall_count 读写）"""
+        return self._get_session(session_id)
+
+    def mark_recall(self, session_id, key, turn):
+        """P0-2：标记记忆回提（引用轮次 + 总次数计数，greet 开场引用同走此口）"""
+        sess = self._get_session(session_id)
+        sess.setdefault("memory_hits", {})[key] = turn
+        sess["recall_count"] = sess.get("recall_count", 0) + 1
+        return sess["recall_count"]
+
 
 _STATE = _State()
 
@@ -300,14 +357,31 @@ def make_reply(messages, session_id=None):
         _STATE.set_last_topic(session_id, topic)
     emo, motion = EMO_MAP.get(topic, ("neutral", None))
     # P0-1 首日引导：新会话前几轮用确定性 hook 自然铺钉子户（称呼→大事）
+    # P0-2 主动回提：引导完成/超轮后接管 hook 通道（优先级：引导 > 回提 > 常规随机）
     turn = _STATE.next_turn(session_id)
     memories = _STATE.get_memories(session_id)
+    sess = _STATE.get_session(session_id)
+    # P0-2 闸门0数据：记录本轮新提取记忆的提取轮次（防隔 1 轮复读"你上次说"）
+    if mem_updates:
+        extracted = sess.setdefault("mem_extracted", {})
+        for k in mem_updates:
+            extracted[k] = turn
+    # P0-2 greet 开场引用同步标记：再访首句时前端会拼"上次说{大事/宠物}"，
+    # 服务端给未引用过的大事/宠物打标记（hit+总额），防止回提紧跟开场双提
+    if topic == "greet":
+        for k in ("大事", "宠物"):
+            if k in memories and sess.setdefault("memory_hits", {}).get(k) is None:
+                _STATE.mark_recall(session_id, k, turn)
     if "昵称" not in memories and turn <= ONBOARD_NAME_TURNS:
         hook = ONBOARD_NAME_HOOK
     elif "大事" not in memories and turn <= ONBOARD_EVENT_TURNS:
         hook = ONBOARD_EVENT_HOOK
     else:
-        hook = HOOKS.get(topic) if random.random() < 0.55 else None
+        hook, hit_key = _pick_recall(memories, mem_updates, topic, user_text, sess, turn)
+        if hook is not None:
+            _STATE.mark_recall(session_id, hit_key, turn)
+        else:
+            hook = HOOKS.get(topic) if random.random() < 0.55 else None
     return {"reply": reply, "emotion": emo, "motion": motion,
             "memory_updates": mem_updates, "hook": hook, "crisis": False}
 

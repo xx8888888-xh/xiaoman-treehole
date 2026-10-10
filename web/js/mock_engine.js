@@ -92,6 +92,26 @@ const MockEngine = (() => {
   const ONBOARD_EVENT_HOOK = "还有呀，你最近有啥大事吗？考试、搬家、换工作那种，说一件，我帮你记着";
   let onbTurns = 0, askedName = false, askedEvent = false;
 
+  // ---------------- P0-2 主动回提（离线兜底同源简化版） ----------------
+  // 与 mock_api.py 同源同表：话题映射→宠物词表→兜底大事；三重闸门防烦人
+  const RECALL_MAP = { work: ["老板", "在忙"], insomnia: ["大事"], happy: ["大事"] };
+  const PET_TOPIC_RE = /(猫|狗|兔|团子|宠物|毛孩|铲屎)/;
+  const RECALL_TPL = {
+    "大事": v => `你上次说${v}——准备得怎么样啦？`,
+    "宠物": v => `你家${v}呢？今天乖不乖`,
+    "老板": v => `${v}今天没又折腾你吧`,
+    "在忙": v => `你之前说在${v}，现在缓过来了吗`
+  };
+  const RECALL_EXTRACT_GAP = 3, RECALL_COOLDOWN = 6, RECALL_MAX = 4;
+  let memHits = {}, memExtracted = {}, recallCount = 0;
+  /** 离线版会话记忆：扫全量历史 user 消息提取（最后出现覆盖先前的，
+   *  与服务端 update 语义一致；localStorage 老记忆归 app.js MemoryStore 管） */
+  function recallMemories(history) {
+    const mem = {};
+    for (const h of history) if (h.role === "user") Object.assign(mem, extractMemory(h.content));
+    return mem;
+  }
+
   let lastTopic = null;
   const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 
@@ -104,12 +124,16 @@ const MockEngine = (() => {
     const out = {};
     for (const [key, re] of MEM_PATTERNS) {
       const m = text.match(re);
-      if (m) out[key] = cleanName((m[2] || m[1] || "").trim());
+      if (m) {
+        // 老板取 m[3]（姓名组，与服务端 group3 同口径）；大事 m[1]；其余 m[2]
+        const v = key === "老板" ? (m[3] || m[2] || "") : (m[2] || m[1] || "");
+        out[key] = cleanName(v.trim());
+      }
     }
     return out;
   }
-  /** 昵称尾部废话词清洗（与 mock_api.py 同源同表）；
-   *  非"昵称"键不受影响——cleanName 仅截命中后缀表 */
+  /** 所有键统一尾缀清洗（与 mock_api.py 同源同表，P0-2 对齐）：
+   *  语气尾缀词不进记忆值——"我们老板张三吧"→"张三" */
   function cleanName(v) {
     const SUFS = ["就行", "就好", "好了", "可以", "吧", "呀", "啦", "哈", "呢", "哦", "啊", "呗"];
     for (const suf of SUFS) if (v.endsWith(suf) && v.length > suf.length) return v.slice(0, -suf.length);
@@ -138,21 +162,49 @@ const MockEngine = (() => {
     }
     if (topic !== "greet") lastTopic = topic;
     const [emotion, motion] = EMO_MAP[topic] || ["neutral", null];
-    // P0-1 首日引导：前几轮确定性引导（称呼→大事），之后退回常规随机 hook
+    // P0-1 首日引导：前几轮确定性引导（称呼→大事）
+    // P0-2 主动回提：引导完成后接管（优先级：引导 > 回提 > 常规随机，与服务端同序）
     onbTurns++;
-    let hook = Math.random() < 0.55 ? (HOOKS[topic] || null) : null;
+    const memUpdates = extractMemory(userText);
+    for (const k of Object.keys(memUpdates)) memExtracted[k] = onbTurns; // 闸门0数据
+    let hook = null;
     if (!askedName && onbTurns <= 4) {
       hook = ONBOARD_NAME_HOOK;
       askedName = true;
     } else if (!askedEvent && onbTurns <= 8) {
       hook = ONBOARD_EVENT_HOOK;
       askedEvent = true;
+    } else {
+      hook = pickRecall(memUpdates, topic, userText, history);
+      if (!hook) hook = Math.random() < 0.55 ? (HOOKS[topic] || null) : null;
     }
     return {
       reply: msg, emotion, motion,
-      memory_updates: extractMemory(userText),
+      memory_updates: memUpdates,
       hook, crisis: false
     };
+  }
+
+  /** P0-2 回提决策（离线版，无服务端会话状态）：三重闸门内确定性触发。
+   *  简化差异：不含 greet 开场标记（app.js 的开场引用不经本引擎） */
+  function pickRecall(memUpdates, topic, userText, history) {
+    if (recallCount >= RECALL_MAX) return null;
+    const mem = recallMemories(history);
+    let cands = (RECALL_MAP[topic] || []).filter(k => mem[k]);
+    if (PET_TOPIC_RE.test(userText) && mem["宠物"]) cands.push("宠物");
+    if (!cands.length && mem["大事"]) cands = ["大事"];
+    for (const k of cands) {
+      if (k in memUpdates) continue;                       // 当轮刚提取：回提=复读
+      const ext = memExtracted[k];
+      if (ext !== undefined && onbTurns - ext < RECALL_EXTRACT_GAP) continue; // 闸门0
+      const hit = memHits[k];
+      if (hit === undefined || onbTurns - hit >= RECALL_COOLDOWN) {           // 闸门1
+        memHits[k] = onbTurns;
+        recallCount++;                                       // 闸门2 计数
+        return RECALL_TPL[k](mem[k]);
+      }
+    }
+    return null;
   }
 
   return { reply };
