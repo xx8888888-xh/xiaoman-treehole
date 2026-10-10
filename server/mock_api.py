@@ -72,26 +72,57 @@ CRISIS_SCRIPT = CRISIS_SCRIPTS[0]  # 默认兼容旧测试
 
 # ---------------- 记忆提取 ----------------
 # 修复：昵称正则加词边界；老板正则取 group3（姓名）；宠物/在忙保持
+# P0-1 新增"大事"：最近的重要事件（考试/搬家/面试…），整段匹配作值
 MEM_PATTERNS = [
     ("昵称", re.compile(r"(我叫|叫我|你可以叫我)\s*([一-龥A-Za-z]{1,4})(?=\b|[，。！？,.!?\s]|$)")),
     ("老板", re.compile(r"(我们?|我的)\s*(老板|领导|上司)\s*([一-龥a-zA-Z]{1,6})")),
     ("宠物", re.compile(r"((?:我家|我)?养?的?(?:了)?[一两]?[只条个]?\s*)([一-龥]{0,3}(?:猫|狗|兔)子?)")),
     ("在忙", re.compile(r"(我在|正在)\s*(加班|赶稿|开会|搬家|复习|写论文)")),
+    ("大事", re.compile(
+        r"((?:下周|下个月|下学期|明天|后天|这?周五|这?周六|这?周日|月底|年底|马上|快)\s*"
+        r"(?:要|得|准备|打算)?\s*"
+        r"(?:考试|月考|期中考试|期末考试|期中|期末|中考|高考|考研|复试|答辩|"
+        r"面试|搬家|入职|报到|交稿|交报告|交方案|比赛|演出|体检|领证)"
+        r"(?:啦|了)?"
+        r"|"
+        r"(?:要|得|准备|打算)\s*"
+        r"(?:考试|月考|期中考试|期末考试|期中|期末|中考|高考|考研|复试|答辩|"
+        r"面试|搬家|入职|报到|交稿|交报告|交方案|比赛|演出|体检|领证)"
+        r"(?:啦|了)?)"
+    )),
 ]
+
+def _clean_name(v):
+    """昵称尾部废话词清洗：'阿秋就行'→'阿秋'（P0-1 钉子户内容质量）"""
+    for suf in ("就行", "就好", "好了", "可以", "吧", "呀", "啦", "哈", "呢", "哦", "啊", "呗"):
+        if v.endswith(suf) and len(v) > len(suf):
+            return v[:-len(suf)]
+    return v
 
 def extract_memory(text, old):
     out = {}
     for key, pat in MEM_PATTERNS:
         m = pat.search(text)
         if m:
-            # 老板用 group3（姓名），其余用 group2
+            # 老板用 group3（姓名）；大事取整段短语；昵称清洗尾部废话词；其余用 group2
             if key == "老板":
                 val = m.group(3).strip() or m.group(2).strip()
+            elif key == "大事":
+                val = _clean_name((m.group(1) or m.group(2) or "").strip())
             else:
                 val = m.group(2).strip() or m.group(1).strip()
+                if key == "昵称":
+                    val = _clean_name(val)
             if val and old.get(key) != val:
                 out[key] = val
     return out
+
+# ---------------- 首日引导（P0-1：不搞表单，聊着聊着铺钉子户） ----------------
+# 前几轮通过 hook 自然带出"称呼→大事"；已有记忆或超轮次则退回常规随机 hook
+ONBOARD_NAME_HOOK = "对了，聊了这么久还不知道怎么称呼你——我叫你什么顺口？"
+ONBOARD_EVENT_HOOK = "还有呀，你最近有啥大事吗？考试、搬家、换工作那种，说一件，我帮你记着"
+ONBOARD_NAME_TURNS = 4   # 称号引导最晚轮次
+ONBOARD_EVENT_TURNS = 8  # 大事引导最晚轮次
 
 # ---------------- 回复模板（源自实测打磨的语料） ----------------
 def topic_of(text):
@@ -163,8 +194,8 @@ class _State:
     """进程内会话状态：支持多会话隔离，带 TTL 清理"""
     def __init__(self):
         self._lock = threading.Lock()
-        self._sessions = {}  # session_id -> {"last_topic": ..., "memories": {}, "crisis_count": 0, "updated": time.time()}
-        self._default_session = {"last_topic": None, "memories": {}, "crisis_count": 0, "updated": time.time()}
+        self._sessions = {}  # session_id -> {"last_topic": ..., "memories": {}, "crisis_count": 0, "turns": 0, "updated": time.time()}
+        self._default_session = {"last_topic": None, "memories": {}, "crisis_count": 0, "turns": 0, "updated": time.time()}
         self._cleanup_interval = 300  # 5分钟清理一次
         self._last_cleanup = time.time()
 
@@ -180,7 +211,7 @@ class _State:
             if session_id is None:
                 return self._default_session
             if session_id not in self._sessions:
-                self._sessions[session_id] = {"last_topic": None, "memories": {}, "crisis_count": 0, "updated": now}
+                self._sessions[session_id] = {"last_topic": None, "memories": {}, "crisis_count": 0, "turns": 0, "updated": now}
             self._sessions[session_id]["updated"] = now
             return self._sessions[session_id]
 
@@ -204,6 +235,12 @@ class _State:
 
     def get_crisis_count(self, session_id):
         return self._get_session(session_id)["crisis_count"]
+
+    def next_turn(self, session_id):
+        """计一轮正常对话，返回当前轮次（P0-1 首日引导用；危机/元问题不计）"""
+        sess = self._get_session(session_id)
+        sess["turns"] = sess.get("turns", 0) + 1
+        return sess["turns"]
 
 
 _STATE = _State()
@@ -262,7 +299,15 @@ def make_reply(messages, session_id=None):
     if topic != "greet":
         _STATE.set_last_topic(session_id, topic)
     emo, motion = EMO_MAP.get(topic, ("neutral", None))
-    hook = HOOKS.get(topic) if random.random() < 0.55 else None
+    # P0-1 首日引导：新会话前几轮用确定性 hook 自然铺钉子户（称呼→大事）
+    turn = _STATE.next_turn(session_id)
+    memories = _STATE.get_memories(session_id)
+    if "昵称" not in memories and turn <= ONBOARD_NAME_TURNS:
+        hook = ONBOARD_NAME_HOOK
+    elif "大事" not in memories and turn <= ONBOARD_EVENT_TURNS:
+        hook = ONBOARD_EVENT_HOOK
+    else:
+        hook = HOOKS.get(topic) if random.random() < 0.55 else None
     return {"reply": reply, "emotion": emo, "motion": motion,
             "memory_updates": mem_updates, "hook": hook, "crisis": False}
 

@@ -381,8 +381,17 @@ const App = (() => {
       下午: `${name}下午好。忙里偷闲来找我啦`,
       晚上: `${name}晚上好呀。一天过去了，有想说的吗`
     };
+    let reply = G[band] || G.深夜;
+    // P0-1 再见面开场引用：钉子户里的大事（近事件）优先，其次宠物
+    // 不需要严格判定"隔天"——首日铺设完成前（无大事无宠物）自然不会引用
+    const event = mem["大事"];
+    if (event) {
+      reply += `||对了，你上次说${event}——怎么样啦？我一直记着呢`;
+    } else if (mem["宠物"]) {
+      reply += `||还有，你家${mem["宠物"]}最近乖不乖？`;
+    }
     setTimeout(() => {
-      sendSplit({ reply: G[band] || G.深夜, emotion: "gentle", motion: "Greeting" });
+      sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
     }, 900);
   }
 

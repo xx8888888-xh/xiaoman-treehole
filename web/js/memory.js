@@ -11,7 +11,8 @@
 const MemoryStore = (() => {
   const KEY = "xiaoman_memories_v1";
   const MAX = 200;              // 容量上限，FIFO 淘汰最旧的低分记忆
-  const PIN_KEYS = ["昵称", "生日", "重要日"];  // 钉子户：永远注入
+  // 钉子户：永远注入。P0-1 扩充——大事（考试/搬家等近事件，开场要引用）、宠物（长期存在的事实）
+  const PIN_KEYS = ["昵称", "生日", "重要日", "大事", "宠物"];
   let lastHitsSave = 0;                         // hits 回写节流时间戳
 
   function load() {
@@ -47,7 +48,7 @@ const MemoryStore = (() => {
         const v = obj[k];
         if (v == null || v === "") continue;
         removeByKey(k);
-        if (add(`${k}：${v}`, [k], k === "昵称" ? "pin" : "fact")) n++;
+        if (add(`${k}：${v}`, [k], PIN_KEYS.includes(k) ? "pin" : "fact")) n++;
       }
     }
     return n;
