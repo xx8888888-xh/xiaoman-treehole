@@ -9,8 +9,16 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-TOKEN_FILE="${XIAOMAN_GITHUB_TOKEN_FILE:-/workspace/.secrets/github.token}"
 BRANCH="${1:-$(git -C "$REPO" rev-parse --abbrev-ref HEAD)}"
+
+# token 路径：环境变量覆盖 > 候选路径探测（新沙箱 /home/z 优先，旧沙箱 /workspace 兜底）
+if [ -z "${XIAOMAN_GITHUB_TOKEN_FILE:-}" ]; then
+  for _cand in /home/z/.secrets/github.token /workspace/.secrets/github.token; do
+    if [ -f "$_cand" ]; then XIAOMAN_GITHUB_TOKEN_FILE="$_cand"; break; fi
+  done
+fi
+TOKEN_FILE="${XIAOMAN_GITHUB_TOKEN_FILE:-/workspace/.secrets/github.token}"
+export XIAOMAN_GITHUB_TOKEN_FILE
 
 if [ ! -f "$TOKEN_FILE" ]; then
   echo "❌ 缺少 GitHub 凭据：$TOKEN_FILE" >&2
@@ -31,7 +39,7 @@ trap 'rm -f "$helper"' EXIT
 cat > "$helper" <<'EOS'
 #!/usr/bin/env bash
 case "$1" in
-  get) printf 'username=x-access-token\npassword=%s\n' "$(tr -d '\r\n' < "${XIAOMAN_GITHUB_TOKEN_FILE:-/workspace/.secrets/github.token}")" ;;
+  get) printf 'username=x-access-token\npassword=%s\n' "$(tr -d '\r\n' < "${XIAOMAN_GITHUB_TOKEN_FILE:-/home/z/.secrets/github.token}")" ;;
 esac
 EOS
 chmod +x "$helper"
