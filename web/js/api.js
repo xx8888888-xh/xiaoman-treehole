@@ -107,17 +107,32 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     return sid;
   }
 
+  /** P1-3 失败分类（免费模型限流 = 确定性配额拒绝，与瞬时网络问题分开处理）：
+   *  kind ∈ "limit"(429/402 配额限额) | "timeout"(AbortError) | "network"(连接失败) | "http"(其他状态码) */
+  function tagError(e, status) {
+    const err = (e instanceof Error) ? e : new Error(String(e));
+    if (!err.kind) {
+      if (status === 429 || status === 402) err.kind = "limit";
+      else if (status != null) err.kind = "http";
+      else if (err.name === "AbortError") err.kind = "timeout";
+      else err.kind = "network";
+    }
+    if (status != null) err.status = status;
+    return err;
+  }
+
   /** Mock 模式：POST {base}/v1/chat/completions（mock_api.py，"我"充当的 API） */
   async function chatMock(history) {
     const cfg = loadCfg();
     const base = (cfg.apiBase || "").replace(/\/$/, "");
     if (!base) throw new Error("mock apiBase 为空");
-    const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
+    let res;
+    try { res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: toMessages(history), session_id: sessionId() })
-    });
-    if (!res.ok) throw new Error(`mock api ${res.status}`);
+    }); } catch (e) { throw tagError(e); }
+    if (!res.ok) throw tagError(new Error(`mock api ${res.status}`), res.status);
     const data = await res.json();
     return parseStructured(data.choices[0].message.content);
   }
@@ -127,7 +142,8 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     const { apiBase, apiKey, model } = loadCfg();
     let base = (apiBase || "").replace(/\/$/, "").replace(/\/v1$/, "");  // 容错：base带不带/v1都行
     if (!base) throw new Error("openai apiBase 为空");
-    const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
+    let res;
+    try { res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -142,8 +158,8 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
         reasoning: { enabled: false },  // 推理系模型必须关思考，防 JSON 被挤掉
         messages: [{ role: "system", content: buildSystemPrompt(opts) }, ...toMessages(history)]
       })
-    });
-    if (!res.ok) throw new Error(`api ${res.status}`);
+    }); } catch (e) { throw tagError(e); }
+    if (!res.ok) throw tagError(new Error(`api ${res.status}`), res.status);
     const data = await res.json();
     return parseStructured(data.choices[0].message.content);
   }
@@ -151,12 +167,23 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   async function chat(history, opts) {
     const cfg = loadCfg();
     // 三级降级：真API(openai) → 本地mock服务 → 离线引擎（真机离线可用）
+    // P1-3 限流政策：429/402 = 配额限额（服务端明确拒绝）→ 不静默降级、上抛给
+    // app 层做排队文案 + 记忆兜底。静默降级 = 人格偷换（Replika 教训：变了不告诉）；
+    // timeout/network 仍走降级链——离线引擎本来就是"连不上"场景的本职兜底。
     try {
       if (cfg.mode === "openai") return await chatOpenAI(history, opts);
       if (cfg.mode === "local") return await chatMock(history);
       // auto：有 apiKey 先试 openai，再试 mock，最后离线引擎
       if (cfg.apiKey) {
-        try { return await chatOpenAI(history, opts); } catch (e) { console.warn("openai 失败，尝试 mock:", e.message); }
+        try { return await chatOpenAI(history, opts); }
+        catch (e) {
+          if (e.kind === "limit") {
+            // 限流是确定性的（立刻重试 openai 无意义）：先试本地 mock（开发兜底），
+            // mock 也不在（真机无本地服务）→ 上抛走排队 UX
+            try { return await chatMock(history); } catch (e1) { throw e; }
+          }
+          console.warn("openai 失败，尝试 mock:", e.message);
+        }
       }
       try { return await chatMock(history); }
       catch (e1) {
@@ -168,6 +195,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
         return MockEngine.reply(history);
       }
     } catch (e) {
+      if (e && e.kind === "limit") throw e;   // 限流不降级：app 层排队 UX（P1-3）
       console.warn("chat fallback:", e.message);
       return MockEngine.reply(history);
     }

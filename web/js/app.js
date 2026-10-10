@@ -148,6 +148,54 @@ const App = (() => {
   window.__isRelationQ = t => !THIRD_PARTY_RE.test(t) && RELATION_Q.test(t);   // 暴露供 E2E 单测（沿 __bossNameOk 先例）
   window.__monthTopics = monthTopics;
 
+  // ---------- P1-3 免费模型限流排队（配额兜底：不丢消息、不冷场报错） ----------
+  // 429/402 时 api.js 上抛 kind="limit"（限流不静默降级——人格偷换是 Replika 教训）。
+  // 此处职责：①排队文案（诚实告知"信号不好"，像朋友不像报错）②消息落盘 pending
+  // 队列（跨会话恢复时注回 history 让模型补话）③恢复即清队。危机/提醒/关系问答
+  // 在 API 之前已被客户端截获，天然不受限流影响（P0 安全网顺序保证）。
+  const PENDING_KEY = "xiaoman_pending";   // 排队消息 [{content, at}]
+  const PENDING_MAX = 12;                  // 上限保护（丢最老；12+18=30 ≤ MAX_HISTORY 可完整注回）
+  const LIMIT_LINES = [                    // 排队首条：完整告知（诚实+给出口）
+    "我这边信号有点飘……||但你刚说的我记下了，等我缓过来第一时间回你，丢不了",
+    "呃，脑子有点转不动，得歇会儿||你说的先记我小本本上——回来第一件事就是回你",
+    "信号不太好……||不过你说的每句我都留着，晚点一起回你",
+    "我这儿卡住了（估计是累着了）||你说的记着呢，等信号稳了马上接上",
+  ];
+  const LIMIT_SHORT = [                    // 排队中连发：短确认（真人信号差时越说越短）
+    "还在卡||这条也记下了",
+    "（还是没信号……先攒着）",
+    "呃还没缓过来||继续记着",
+  ];
+  let lastLimitLine = "";                  // 连续排队不重样
+  let pendingInjected = false;             // 本会话是否已做跨会话 pending 注回（幂等）
+
+  function loadPending() { try { return JSON.parse(localStorage.getItem(PENDING_KEY)) || []; } catch (e) { return []; } }
+  function savePending(q) { try { localStorage.setItem(PENDING_KEY, JSON.stringify((q || []).slice(-PENDING_MAX))); } catch (e) {} }
+  function queuePending(text) { const q = loadPending(); q.push({ content: text, at: Date.now() }); savePending(q); }
+  function pickLimitLine(wasQueued) {
+    const pool = wasQueued ? LIMIT_SHORT : LIMIT_LINES;
+    if (pool.length < 2) return pool[0];
+    let line;
+    do { line = pool[Math.floor(Math.random() * pool.length)]; }
+    while (line === lastLimitLine);
+    lastLimitLine = line;
+    return line;
+  }
+  /** 跨会话恢复：欠回复的消息按时间序注回 history 头部（模型恢复后自然补话）。
+   *  同会话 429 的消息本就在 history（send 在调 API 前已入列）——按内容判重只补缺的 */
+  function injectPending() {
+    if (pendingInjected) return;
+    pendingInjected = true;
+    const q = loadPending();
+    if (!q.length) return;
+    const inHistory = new Set(history.filter(h => h && h.role === "user").map(h => h.content));
+    const msgs = q.filter(p => !inHistory.has(p.content))
+      .map(p => ({ role: "user", content: p.content, at: p.at || Date.now() }));
+    if (msgs.length) history = [...msgs, ...history].slice(-MAX_HISTORY);
+  }
+  window.__pendingMsgs = loadPending;               // E2E 探针（沿 __genericPet 先例）
+  window.__lastLimitLine = () => lastLimitLine;     // E2E：连发不重样断言
+
   let history = [];          // [{role, content, at}]
   let busy = false;
   let sending = false;       // 发送互斥锁：防止 greet/心跳/poke/hook 与用户发送并发
@@ -397,6 +445,7 @@ const App = (() => {
       }
 
       try {
+        injectPending();   // P1-3：跨会话排队的消息注回上下文（模型恢复后自然补话）
         await showTyping(650 + Math.random() * 500);   // 读消息的停顿
         // P1-1：memSection 尾部拼关系进度行（真模型路径也有感知，数据同源）
         const memCtx = (window.MemoryStore ? MemoryStore.renderContext(text) : "");
@@ -405,13 +454,25 @@ const App = (() => {
           memSection: relLine ? (memCtx ? memCtx + "\n" + relLine : relLine) : memCtx,
           now: new Date()
         });
+        savePending([]);   // P1-3：真模型回复成功 = 欠的话补上了，清排队队列
         await sendSplit(data, text);
         await checkMilestone();   // P1-1：里程碑播报（幂等；危机轮 sendSplit 已早退也不误播——ms_done 闸门兜底）
       } catch (e) {
+        if (e && e.kind === "limit") {
+          // P1-3 排队 UX：诚实告知信号不好（不静默换离线人格），消息落盘不丢，
+          // 排队文案进 history（模型恢复后看得到"自己欠过回复"，自然补话）
+          const wasQueued = loadPending().length >= 1;
+          queuePending(text);
+          const line = pickLimitLine(wasQueued);
+          await showTyping(600);
+          await sendSplit({ reply: line, emotion: "neutral", motion: null }, text);
+          return;
+        }
         console.error(e);
+        // P1-3：极端兜底也入队（原版只回显文案不落盘，刷新即丢——补"不丢消息"）
+        queuePending(text);
         await showTyping(800);
-        addMsg("（信号飘走了…你还在吗？再发一次试试）", "them", { tip: false });
-        if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+        await sendSplit({ reply: "（信号飘走了…你还在吗？||你说的我记下了，缓过来我找补回来）", emotion: "neutral", motion: null }, text);
       }
     });
     busy = false; $("sendBtn").disabled = false;
@@ -592,6 +653,13 @@ const App = (() => {
     } else if (mem["宠物"]) {
       reply += `||还有，你家${mem["宠物"]}最近乖不乖？`;
     }
+    // P1-3 排队提示：还有欠回复的消息时给明确入口（说一句话即触发补话，零 API
+    // 依赖——信号好不好都先亮态度：话没丢，人记得）
+    try {
+      if (loadPending().length) {
+        reply += `||对了，你之前跟我说的那几句话我都记着||刚才信号不太好没接上——你随便说句什么，我缓过来就回你`;
+      }
+    } catch (e) { /* 数据层异常不挡开场 */ }
     setTimeout(() => {
       sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
     }, 900);

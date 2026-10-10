@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-10-11 · 06:47–07:0x P1-3 免费模型限流排队收口（迭代引擎 06:47 轮，挂账续跑到闭环）
+
+> 续跑检查：P1-2（b7fa796）**已被上会话完整闭环**——CI 四绿（check-runs 实测 emulator-smoke/build-apk/web-tests success）+ origin/main 已合并，DEVLOG 顶部"下一步"为陈旧描述，本条目即补记确认。**新挂账**：工作区躺着 P1-3 完整 WIP（api.js +42 / app.js +72 / E2E ⑦g +132 / 截图 17 已产生）——上会话被切断。按铁律「没完成就继续」收口。备份 pre_p13_close（backup.sh 幂等前缀探测产出 pre_pre_p13_close_20261011_064807.tar.gz）。
+
+### 挂账收口内容（本轮补齐的缺口）
+1. **验证挂账代码**：node --check / py_compile 双绿 → E2E 首跑 24/25，唯一 FAIL 为 **⑦g-7 测试时序缺陷**（非产品 bug：wait_contains 检测到 greet 分条首条"我都记着"即返回，末条"信号不太好"尚在 typing 队列——从输出可证消息已渲染）→ 修测试等待目标为末条 → **复跑 E2E 25/25**
+2. **全套回归**：契约 8/8 + onboarding 9/9 + 记忆 84/84 + 生命线 5/5 + TTS 3/3，全绿
+3. **同步 assets/www**：api.js/app.js → android assets（P0-3 教训不再犯）
+4. **路线图 P1-3 标记已实现** → **P1 阶段 3/3 全清**，下一项 P2-1 小满的自我叙事
+
+### P1-3 实现摘要（WIP 代码为上会话产出，本轮验证收口）
+- **核心决策：限流不静默降级**——429/402 是确定性配额拒绝（立刻重试无意义），静默切离线引擎=人格偷换（Replika"变了不告诉"教训）；timeout/network 仍走三级降级链（连不上是离线引擎本职）
+- **api.js**：`tagError` 失败分类（limit/timeout/network/http）+ auto 链限流上抛（mock 不在则 throw 原始 e）
+- **app.js**：排队文案池（首条完整告知 4 池 × 连发短池 3，不重样）+ `xiaoman_pending` 落盘（上限 12，丢最老；12+18≤MAX_HISTORY 保完整注回）+ `injectPending()` 跨会话欠账注回（内容判重）+ 回复成功即清队 + greet 见欠账给补话入口 + 极端兜底也入队
+- **安全网顺序实证**：危机/提醒/关系问答在 API 之前客户端截获 → 限流下危机仍被拦（g-4）
+- **E2E ⑦g 7 点**：route 拦截模拟 429/200（含 CORS 预检）——排队文案/落盘不丢/连发不重样/危机不挡/恢复补话+清队+上下文含欠账/跨会话注回+greet 提示
+
+### 环境备注
+- 本轮 Bash 网关连续 504 闪断（4 次）——已知现象重试即过；长测试改 nohup 后台 + 轮询日志模式（E2E ~4min、五套回归 ~7min 串行），零丢失
+- 触及文件：web/js/api.js、web/js/app.js、scripts/test_e2e.py（⑦g-7 时序修复）、android assets 同步、docs/PRODUCT_ROADMAP.md、docs/DEVLOG.md、docs/shots/09-17
+
+→ 下一步：提交推送 zhiqiu/dev → CI 绿后 main 合并 → 路线图下一项 **P2-1 小满的自我叙事**
+
+---
+
 ## 2026-10-11 · 04:47–05:1x P1-2 心跳问候情境化闭环（迭代引擎 04:47 轮）
 
 > 续跑检查：P1-1 已完整闭环（三方 ref 一致 fb8e3e9，CI 绿，main 合并完毕），无挂账 → 按引擎规矩取路线图下一项 P1-2 开工。备份 pre_unnamed_20261011_044925.tar.gz。

@@ -328,6 +328,140 @@ async def main():
             check("⑦f-2 心跳引用率≥60%+值零加工", ok7f2)
             await pg.screenshot(path=os.path.join(SHOTS, "16_p12_heartbeat_ctx.png"))
 
+            # —— ⑦g 免费模型限流排队（P1-3：429 → 排队文案+不丢消息+危机不挡+恢复清队+跨会话注入） ——
+            # 独立 context（localStorage 与主流程隔离）：cfg=openai 指向无服务端口，
+            # route 拦截模拟 429/200，验证"不丢消息、不冷场报错"两条验收线
+            ctx2 = await b.new_context(viewport={"width": 390, "height": 844})
+            pg2 = await ctx2.new_page()
+            err_g = []
+            pg2.on("pageerror", lambda e: err_g.append(str(e)))
+            api_state = {"mode": "429", "bodies": []}
+
+            def _ok_body():
+                import json as _j
+                return _j.dumps({"choices": [{"message": {"content": _j.dumps(
+                    {"reply": "信号回来啦||欠你的那句我看到了，这不就来了", "emotion": "happy",
+                     "motion": None, "memory_updates": {}})}}]})
+
+            async def _api_route(route):
+                # 跨源（页面 8901 → API 8999）：CORS 头必须带，否则预检/响应都会 TypeError
+                cors = {"Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "POST, OPTIONS",
+                        "Access-Control-Allow-Headers": "Content-Type, Authorization"}
+                if route.request.method == "OPTIONS":
+                    await route.fulfill(status=204, headers=cors)
+                    return
+                api_state["bodies"].append(route.request.post_data or "")
+                if api_state["mode"] == "429":
+                    await route.fulfill(status=429, content_type="application/json",
+                                        headers=cors,
+                                        body='{"error":{"code":429,"message":"rate limit"}}')
+                else:
+                    await route.fulfill(status=200, content_type="application/json",
+                                        headers=cors, body=_ok_body())
+
+            await pg2.route("**/v1/chat/completions", _api_route)
+            # 注：本环境 add_init_script 实测不执行（探针验证），沿仓库既有 evaluate 注入
+            # 模式；cfg 每次调用惰性读取，页面加载后直接写即生效
+            await pg2.goto(BASE, wait_until="domcontentloaded")
+            await pg2.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg2.evaluate(
+                "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
+                "{mode:'openai', apiBase:'http://127.0.0.1:8999', apiKey:'test-key'}))")
+
+            async def _wait_line(unlike="", timeout=10):
+                end = time.time() + timeout
+                v = ""
+                while time.time() < end:
+                    v = await pg2.evaluate("window.__lastLimitLine ? window.__lastLimitLine() : ''")
+                    if v and v != unlike:
+                        return v
+                    await asyncio.sleep(0.5)
+                return v
+
+            # g-1 限流 → 排队文案真实渲染（诚实告知），非"信号飘走了"冷场文案，无页面错误
+            await pg2.fill("#textInput", "我周五要交报告好烦")
+            await pg2.click("#sendBtn")
+            line1 = await _wait_line()
+            ok_g1 = bool(line1) and ("记" in line1 or "留" in line1)
+            if ok_g1:
+                msgs_g = await wait_contains(pg2, "#messages", line1.split("||")[0], timeout=6)
+                ok_g1 = line1.split("||")[0] in msgs_g and "信号飘走了" not in msgs_g
+            ok_g1 = ok_g1 and not err_g
+            print("⑦g-1 限流排队文案+无冷场报错:",
+                  f"PASS | {line1[:24]}…" if ok_g1 else f"FAIL | line={line1!r} err={err_g}")
+            check("⑦g-1 限流排队文案+无冷场报错", ok_g1)
+
+            # g-2 消息入队不丢（localStorage 落盘）
+            pend1 = await pg2.evaluate("() => __pendingMsgs().map(p => p.content)")
+            ok_g2 = pend1 == ["我周五要交报告好烦"]
+            print("⑦g-2 排队消息落盘不丢:", "PASS" if ok_g2 else f"FAIL {pend1}")
+            check("⑦g-2 排队消息落盘不丢", ok_g2)
+
+            # g-3 排队中连发：短池文案+不重样+追加入队
+            await pg2.fill("#textInput", "而且老板还在催")
+            await pg2.click("#sendBtn")
+            line2 = await _wait_line(unlike=line1)
+            pend2 = await pg2.evaluate("() => __pendingMsgs().map(p => p.content)")
+            ok_g3 = bool(line2) and line2 != line1 and \
+                pend2 == ["我周五要交报告好烦", "而且老板还在催"]
+            print("⑦g-3 连发短文案不重样+追加:",
+                  f"PASS | {line2[:16]}…" if ok_g3 else f"FAIL line2={line2!r} pend={pend2}")
+            check("⑦g-3 连发短文案不重样+追加", ok_g3)
+
+            # g-4 危机不被限流挡（客户端先行拦截，不入队——安全网优先级高于一切）
+            await pg2.fill("#textInput", "我不想活了")
+            await pg2.click("#sendBtn")
+            crisis_g = await wait_contains(pg2, "#messages", "12356", timeout=12)
+            pend3 = await pg2.evaluate("() => __pendingMsgs().length")
+            ok_g4 = "12356" in crisis_g and pend3 == 2
+            print("⑦g-4 限流下危机仍被拦截:", "PASS" if ok_g4 else
+                  f"FAIL（crisis={'12356' in crisis_g}, pending={pend3}）")
+            check("⑦g-4 限流下危机仍被拦截", ok_g4)
+
+            # g-5 恢复（200）：补话清队，且请求上下文含欠的 2 条（模型看得到才答得上）
+            api_state["mode"] = "200"
+            n_before = len(api_state["bodies"])
+            await pg2.fill("#textInput", "在吗")
+            await pg2.click("#sendBtn")
+            recov_g = await wait_contains(pg2, "#messages", "信号回来啦", timeout=12)
+            pend4 = await pg2.evaluate("() => __pendingMsgs().length")
+            body_new = api_state["bodies"][n_before:] if len(api_state["bodies"]) > n_before else []
+            ok_g5 = "信号回来啦" in recov_g and pend4 == 0 and \
+                any("周五要交报告" in b and "老板还在催" in b for b in body_new)
+            print("⑦g-5 恢复补话+清队+上下文含欠账:",
+                  f"PASS | body含欠账={any('周五要交报告' in b for b in body_new)}" if ok_g5
+                  else f"FAIL recov={'信号回来啦' in recov_g} pend={pend4} bodies={len(body_new)}")
+            check("⑦g-5 恢复补话+清队+上下文含欠账", ok_g5)
+            await pg2.screenshot(path=os.path.join(SHOTS, "17_p13_limit_queue.png"))
+
+            # g-6/g-7 跨会话恢复：预置 pending → reload → greet 提示 + 注回上下文
+            await pg2.evaluate(
+                "() => { localStorage.setItem('xiaoman_pending', JSON.stringify("
+                "[{content:'上周说的搬家的事', at: Date.now()-86400000}])); location.reload(); }")
+            await pg2.wait_for_selector("#textInput", state="visible", timeout=15000)
+            # greet 分条发送：等末条"信号不太好"出现（此时前序条已全部渲染）——
+            # 等首条会在 typing 队列中途返回，末条未出造成时序假 FAIL（06:51 轮实测）
+            greet_g = await wait_contains(pg2, "#messages", "信号不太好", timeout=12)
+            ok_g7 = "我都记着" in greet_g and "信号不太好" in greet_g
+            print("⑦g-7 重访 greet 排队提示:", "PASS" if ok_g7 else f"FAIL {greet_g[-60:]!r}")
+            check("⑦g-7 重访 greet 排队提示", ok_g7)
+            n2 = len(api_state["bodies"])
+            await pg2.fill("#textInput", "在吗现在")
+            await pg2.click("#sendBtn")
+            for _ in range(20):
+                if len(api_state["bodies"]) > n2:
+                    break
+                await asyncio.sleep(0.5)
+            body2 = api_state["bodies"][n2] if len(api_state["bodies"]) > n2 else ""
+            pend5 = await pg2.evaluate("() => __pendingMsgs().length")
+            ok_g6 = ("搬家" in body2) and pend5 == 0
+            print("⑦g-6 跨会话注回+补话清队:",
+                  f"PASS | 注回={'搬家' in body2}" if ok_g6 else
+                  f"FAIL body含搬家={'搬家' in body2} pend={pend5}")
+            check("⑦g-6 跨会话注回+补话清队", ok_g6)
+            await ctx2.close()
+
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")
         finally:
