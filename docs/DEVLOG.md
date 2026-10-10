@@ -28,10 +28,13 @@
 - 顺手清理：`server/__pycache__/*.pyc` 误跟踪 2 文件去跟踪（.gitignore 已覆盖，历史残留）
 
 ### 遗留（下一步）
-- [ ] zhiqiu/dev 推送后 **CI 验证**（build-apk/web-tests/emulator-smoke），绿了才合 main（main 只收已验证内容）
-- [ ] 路线图下一项：**P0-2 主动引用记忆**（对话中自然回提用户既有事实——“你上次说的那个 XX”，验收口径：注入测试集召回引用率 ≥80% 不张冠李戴）
+- [x] zhiqiu/dev 推送后 **CI 验证** → **已闭环**：edf2fab CI 四项全绿（build-apk ✅ web-tests ✅ emulator-smoke ✅，assemble-release skipped=预期无签名密钥；注：85d79c0 run 被后续推送自动取消，edf2fab 包含全部内容），main 快进合并并推送（a46c290→edf2fab）
+- [x] 路线图下一项 P0-2 **设计定稿**（详见 PRODUCT_ROADMAP.md P0-2 条目下实现设计 v1：话题关联映射选记忆 + 三重闸门频控 + 模板零加工防张冠李戴 + test_memory_recall.py 验收口径）——实现留给下轮
 
-触及：server/mock_api.py · web/js/api.js · web/js/app.js · web/js/memory.js · web/js/mock_engine.js · scripts/test_onboarding.py（新增）· docs/shots/12（新增）+ 07–11（再生成）· __pycache__（去跟踪）· docs/DEVLOG.md（本条）
+### 本轮补丁（顺手）
+- `git_push.sh`：token 路径候选探测（新沙箱 /home/z/.secrets/ 优先，旧 /workspace/ 兜底）——修复旧沙箱硬编码，免每次手工传环境变量
+
+触及：server/mock_api.py · web/js/api.js · web/js/app.js · web/js/memory.js · web/js/mock_engine.js · scripts/test_onboarding.py（新增）· docs/shots/12（新增）+ 07–11（再生成）· __pycache__（去跟踪）· scripts/git_push.sh · docs/PRODUCT_ROADMAP.md（P0-2 设计）· docs/DEVLOG.md（本条）
 
 ---
 
