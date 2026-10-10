@@ -522,6 +522,111 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G7 node可用", False, "node 不在 PATH")
 
 
+def g8_heartbeat_ctx():
+    """G8 心跳问候情境化（P1-2）：记忆加权候选 + 组合模板零重复 + 引用率 ≥60%
+    + ageTag 边界 + 排除键 + 在线注入。铁律验收：连续 5 天心跳无一重复模板；
+    引用率 ≥60%；记忆值零加工直填（不张冠李戴结构保证）。
+    纯前端模块（heartbeat.js + memory.js node 同源加载，决策核心参数化 rnd/now）。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const DAY = 86400000;
+const store = {};
+global.localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+global.window = {};
+// 真加载 memory.js → heartbeat.js（后者消费 window.MemoryStore）
+new Function('window', 'localStorage', fs.readFileSync(ROOT + '/web/js/memory.js', 'utf8'))(global.window, global.localStorage);
+new Function('window', 'localStorage', 'API', 'Reminders', fs.readFileSync(ROOT + '/web/js/heartbeat.js', 'utf8'))(global.window, global.localStorage, { loadCfg: () => ({}) }, {});
+const HB = global.window.Heartbeat;
+const out = [];
+const P = (n, ok, info) => out.push({ n, ok, info: String(info || '').slice(0, 60) });
+// xorshift32（3 次预热），比 LCG 小种子分布好
+function xs(seed) { let s = (seed >>> 0) || 1; for (let i = 0; i < 3; i++) { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; } return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 4294967296; }; }
+
+// ── G8-1 ageTag 边界（确定性分档，零虚构的时间口语） ──
+const T0 = new Date('2026-10-11T10:00:00').getTime();
+const tagCases = [[0,'今天'],[1,'昨天'],[2,'前两天'],[3,'前两天'],[4,'前几天'],[7,'前几天'],[8,'上周'],[13,'上周'],[14,'前阵子'],[30,'前阵子'],[31,'之前']];
+const bad = tagCases.filter(([d, tag]) => HB.ageTagOf(T0 - d * DAY, T0) !== tag);
+P('G8-1① ageTag分档边界全表', bad.length === 0, JSON.stringify(bad));
+
+// ── G8-2 候选权重与排除键 ──
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id:'m1', text:'大事：交报告', tags:['大事'], kind:'fact', ts: T0 - 40 * DAY, hits: 0},
+  {id:'m2', text:'话题：项目叫青梧', tags:['话题'], kind:'fact', ts: T0 - DAY, hits: 0},
+]);
+let c = HB.candidates(T0);
+P('G8-2① 时间衰减权重(新话题1.0>旧大事0.3=下限0.2×pin1.5)',
+  c.length === 2 && Math.abs(c.find(x => x.m.id === 'm2').w - 1.0) < 1e-9 && Math.abs(c.find(x => x.m.id === 'm1').w - 0.3) < 1e-9,
+  c.map(x => x.key + ':' + x.w.toFixed(2)).join(','));
+store['xiaoman_heartbeat_state'] = JSON.stringify({ lastAsked: { m2: T0 - 24 * 3600000 } });
+c = HB.candidates(T0);
+P('G8-2② 48h内问过降权(×0.3)', Math.abs(c.find(x => x.m.id === 'm2').w - 0.3) < 1e-9, c.find(x => x.m.id === 'm2').w.toFixed(2));
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id:'m3', text:'昵称：阿秋', tags:['昵称'], kind:'pin', ts: T0, hits: 0},
+  {id:'m4', text:'生日：8月12日', tags:['生日'], kind:'pin', ts: T0, hits: 0},
+  {id:'m5', text:'重要日：国庆', tags:['重要日'], kind:'pin', ts: T0, hits: 0},
+  {id:'m6', text:'大事：交报告', tags:['大事'], kind:'fact', ts: T0, hits: 0},
+]);
+c = HB.candidates(T0);
+P('G8-2③ 排除键(昵称/生日/重要日不引用)', c.length === 1 && c[0].key === '大事', c.map(x => x.key).join(','));
+
+// ── G8-3 无记忆 20 连发零重复（单时段最坏场景：兜底池容量验证） ──
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = '[]';
+const wedEve = new Date('2026-10-07T19:00:00');
+const r3 = [];
+for (let i = 0; i < 20; i++) r3.push(HB.offlineGenerate(xs(101 + i), wedEve));
+P('G8-3① 无记忆20连发零重复(单时段最坏)', new Set(r3.map(r => r.id)).size === 20 && new Set(r3.map(r => r.reply)).size === 20, '');
+
+// ── G8-4 有记忆 20 连发：零重复 + 引用率 + 值零加工 ──
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id:'m7', text:'大事：周五要交报告', tags:['大事'], kind:'fact', ts: wedEve.getTime() - 3 * DAY, hits: 0},
+  {id:'m8', text:'宠物：橘猫', tags:['宠物'], kind:'fact', ts: wedEve.getTime() - 3 * DAY, hits: 0},
+]);
+const r4 = [];
+for (let i = 0; i < 20; i++) r4.push(HB.offlineGenerate(xs(201 + i), wedEve));
+const ref4 = r4.filter(r => r.memoryId).length;
+P('G8-4① 有记忆20连发零重复', new Set(r4.map(r => r.id)).size === 20, '');
+P('G8-4② 引用率≥60%(验收线12/20)', ref4 >= 12, ref4 + '/20');
+P('G8-4③ 值零加工直填(原文verbatim)', r4.filter(r => r.memoryId).every(r => r.reply.includes('周五要交报告') || r.reply.includes('橘猫')), '');
+
+// ── G8-5 5天×4时段模拟（记忆回拨3天，时间分布真实） ──
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+const d1 = new Date('2026-10-06T09:00:00').getTime();
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id:'m9', text:'大事：周五要交报告', tags:['大事'], kind:'fact', ts: d1 - 3 * DAY, hits: 0},
+  {id:'m10', text:'宠物：橘猫', tags:['宠物'], kind:'fact', ts: d1 - 3 * DAY, hits: 0},
+  {id:'m11', text:'老板：王总', tags:['老板'], kind:'fact', ts: d1 - 3 * DAY, hits: 0},
+]);
+const r5 = [];
+for (const day of ['2026-10-06','2026-10-07','2026-10-08','2026-10-09','2026-10-10'])
+  for (const h of [9, 12, 18, 22]) r5.push(HB.offlineGenerate(xs(r5.length * 31 + 7), new Date(day + 'T' + String(h).padStart(2, '0') + ':00:00')));
+P('G8-5① 5天模拟零重复(模板+文案)', new Set(r5.map(r => r.id)).size === 20 && new Set(r5.map(r => r.reply)).size === 20, '');
+P('G8-5② 5天模拟引用率≥60%', r5.filter(r => r.memoryId).length >= 12, r5.filter(r => r.memoryId).length + '/20');
+
+// ── G8-6 在线路径注入（heartbeatContext：记忆带年龄 + 今天星期） ──
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id:'m12', text:'大事：周五要交报告', tags:['大事'], kind:'fact', ts: Date.now() - 3 * DAY, hits: 0},
+]);
+const ctx = HB.heartbeatContext(new Date());
+P('G8-6① 在线注入含记忆+年龄+星期', ctx.includes('大事：周五要交报告') && ctx.includes('【今天】'), ctx.slice(0, 60));
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G8 心跳模块可加载", False, (p.stderr or p.stdout)[-300:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G8 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -531,7 +636,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx):
         try:
             fn()
         except Exception as e:

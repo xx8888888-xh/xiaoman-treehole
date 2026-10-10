@@ -7,6 +7,16 @@
  *     静默时段(23-8点) / 距上次主动>2h / 每日≤4条 /
  *     用户正在聊天时不插嘴 / 25%概率抖动（不卡点，不机器）
  *  3. 有真API时用 HEARTBEAT_PROMPT+记忆生成；离线走模板池
+ *
+ * P1-2 心跳情境化（2026-10-11）：
+ *  - 离线决策核心 offlineGenerate(rnd, now)：随机/时间参数化，
+ *    默认 Math.random/new Date()，测试可注入确定性序列
+ *  - 记忆引用：钉子户键（大事/宠物/老板/在忙）+ 非pin fact，
+ *    时间衰减权重（与 MemoryStore.recall 同曲线）；昵称/生日/
+ *    重要日排除（昵称称呼里天然高频；生日无日期解析引用=瞎编）
+ *  - 模板值零加工直填（P0-2 不张冠李戴结构保证）
+ *  - 模板级去重：state.used 7 天窗口，id 稳定（pool:xx / mem:xx）
+ *  - 频控闸门全部不变
  * ============================================================ */
 
 const Heartbeat = (() => {
@@ -33,55 +43,264 @@ const Heartbeat = (() => {
     return h >= QUIET[0] || h < QUIET[1];
   }
 
-  /* ── 离线模板池：像随手发的微信 ── */
+  /* ── 时间语境（确定性，零虚构） ── */
+  const WD = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  function weekdayOf(d) { return WD[d.getDay()]; }
+
+  /** 记忆年龄口语化：按距今天数分档（"上周"≤13 天=一个日历周内） */
+  function ageTagOf(ts, now) {
+    const days = Math.floor(((now || Date.now()) - ts) / 86400000);
+    if (days <= 0) return "今天";
+    if (days === 1) return "昨天";
+    if (days <= 3) return "前两天";
+    if (days <= 7) return "前几天";
+    if (days <= 13) return "上周";
+    if (days <= 30) return "前阵子";
+    return "之前";
+  }
+
+  /* ── 可引用记忆候选（钉子户 + 时间衰减权重） ── */
+  const HB_KEYS = ["大事", "宠物", "老板", "在忙"];       // 可直接模板化的键
+  const EXCLUDE_KEYS = ["昵称", "生日", "重要日"];         // 排除：见文件头注释
+  const ASK_COOLDOWN = 48 * 3600e3;                       // 刚问过的记忆降权窗口
+  const USED_WINDOW = 7 * 86400000;                       // 模板去重窗口
+
+  function decayOf(ts, now) {                              // 与 MemoryStore.recall 同曲线
+    const ageDays = ((now || Date.now()) - ts) / 86400000;
+    return Math.max(0.2, 1 - Math.max(0, ageDays - 7) * 0.03);
+  }
+
+  function memValue(text) {
+    const i = text.indexOf("：");
+    return i >= 0 ? text.slice(i + 1) : text;
+  }
+
+  function candidates(now) {
+    now = now || Date.now();
+    const list = (window.MemoryStore ? window.MemoryStore.all() : []);
+    const s = state();
+    const lastAsked = s.lastAsked || {};
+    const out = [];
+    for (const m of list) {
+      const key = (m.tags && m.tags[0]) || String(m.text).split("：")[0];
+      const isPinKey = HB_KEYS.includes(key);
+      const excluded = EXCLUDE_KEYS.includes(key) ||
+        (m.kind === "pin" && !isPinKey) ||
+        String(m.text).startsWith("昵称：") || String(m.text).startsWith("生日：") || String(m.text).startsWith("重要日：");
+      if (excluded) continue;
+      const value = memValue(String(m.text)).trim();
+      if (!value) continue;
+      let w = decayOf(m.ts, now);
+      if (isPinKey) w *= 1.5;                              // 钉子户加成
+      const last = lastAsked[m.id];
+      if (last && now - last < ASK_COOLDOWN) w *= 0.3;     // 刚问过降权
+      out.push({ m, key: isPinKey ? key : "fact", value, w, fresh: (now - m.ts) < 7 * 86400000 });
+    }
+    return out;
+  }
+
+  /* ── 记忆模板：开场白 × 引用句 组合式（值零加工直填，P0-2 结构保证） ──
+   * 组合爆炸：一条记忆 = opener × ref 数个绑定（如大事 8×3=24），
+   * 结构上同时满足「5 天零重复」与「引用率 ≥60%」两个验收目标 */
+  const MEM_OPENERS = [
+    (t) => `今天${t.weekday}了`,
+    () => "刚才做事想起你来",
+    () => "摸鱼中，随手发一条",
+    () => "刚开完会，出来透气",
+    () => "刚撸完团子，它打呼噜了",
+    () => "地铁上，人挤人",
+    () => "刚吃饱，犯困",
+    () => "刚忙完一阵，歇口气",
+  ];
+
+  const MEM_REFS = {
+    "大事": [
+      (v, t) => `你上次说${v}——准备得怎么样啦，我不催，就是惦记`,
+      (v, t) => `${t.ageTag}你说的${v}，现在到哪一步了`,
+      (v, t) => `一直记着${t.ageTag}你说的${v}——后来怎么样了`,
+    ],
+    "宠物": [
+      (v, t) => `你家的${v}今天乖不乖，拆家了没`,
+      (v, t) => `你家${v}最近有没有闹腾`,
+    ],
+    "老板": [
+      (v, t) => `${v}这周没又折腾你吧`,
+      (v, t) => `${v}最近心情怎么样，你别撞枪口上`,
+    ],
+    "在忙": [
+      (v, t) => `${t.ageTag}你说在${v}，现在缓过来点了没`,
+      (v, t) => `${v}那边还顺利吗，有事随时说`,
+    ],
+    "fact": [
+      (v, t) => `${t.ageTag}你说的"${v}"——这事后来怎么样了`,
+      (v, t) => `你${t.ageTag}提过的：${v}——还在弄吗`,
+    ],
+  };
+
+  /* ── 通用模板池（时段分类；rain 池已删——无天气API下"下雨了"=虚构） ── */
   const POOL = {
     morning: [
       "刚到公司，电梯里全是困脸||你起了没，早饭吃了没",
       "团子早上五点踩我脸叫饭……我起是起来了，魂没起||你今天几点起",
+      "早上买了杯豆浆，烫嘴||你出门了没，路上不堵吧",
+      "今天闹钟响的时候我在做梦，梦里都在迟到||你今天状态怎么样",
+      "阳台的光刚好照进来，今天的太阳不错||你那边天好吗",
     ],
     noon: [
       "到饭点了||今天吃啥，别又是外卖凑合",
       "我刚干完饭，摸鱼中||你中午歇会儿，别一直怼电脑",
+      "食堂今天有个菜咸得离谱||你午饭吃了没",
+      "下午的会我先替你困为敬||你下午忙不忙",
     ],
     evening: [
       "下班啦||你那边呢，今天累不累",
       "团子蹲在门口等我，跟个门神似的||你到家了说一声",
+      "晚风还行，溜达了一圈||你今天过得怎么样",
+      "刚热了剩饭，凑合一顿||你晚饭吃了没，别糊弄",
+      "今天总算熬到晚上了||你也在瘫着吧，瘫得舒服吗",
     ],
     late: [
       "还没睡？||少刷会儿手机，明天还要当牛马呢",
       "我刚撸完团子，它打呼噜了||你要也睡不着就早点躺，我陪你聊两句",
-    ],
-    rain: [
-      "外面下雨了，哗哗的||你那边下没下，出门带伞没",
+      "睡前瞄了一眼手机||你睡了没，别熬大夜",
+      "这个点还亮着灯的，都是狠人||你也早点睡，明天的事明天说",
     ],
     weekend: [
       "周五了！||今晚打算干嘛，别又宅一晚上……算了宅着也挺好",
+      "周末了，团子都睡懒觉||你这两天怎么安排",
+      "周五晚上最快乐||你放松了没，吃点好的犒劳自己",
     ],
     generic: [
       "刚看到个特好笑的视频，想起你了||回头发你，先笑为敬",
       "团子今天把水碗打翻了，一脸无辜||你今天怎么样",
       "路过奶茶店，想起你说想喝||点了没，别光想着",
+      "今天瞎忙了一天，才想起来看看手机||你最近怎么样，还活着吧（贬义的那种活着）",
+      "刚洗完碗，手上还是泡沫味||你干嘛呢，说两句",
+      "充电器又找不到了，翻了半天在兜里||你今天有什么新鲜事没",
     ],
   };
+  const POOL_FALLBACK_CATS = ["morning", "noon", "evening", "late", "generic"]; // 时段兜底（weekend 限周五晚）
 
-  function pickOffline() {
-    const h = new Date().getHours();
-    const day = new Date().getDay();
-    let pool = POOL.generic;
-    if (h >= 6 && h < 11) pool = POOL.morning;
-    else if (h >= 11 && h < 14) pool = POOL.noon;
-    else if (h >= 17 && h < 23) pool = day === 5 ? POOL.weekend : POOL.evening;
-    else if (h >= 23 || h < 6) pool = POOL.late;
-    return pool[Math.floor(Math.random() * pool.length)];
+  /* ── 模板去重（7 天窗口） ── */
+  function usedIds(now) {
+    now = now || Date.now();
+    const s = state();
+    return new Set((s.used || []).filter(u => now - u.t < USED_WINDOW).map(u => u.id));
+  }
+  function markUsed(id, now) {
+    now = now || Date.now();
+    const s = state();
+    const used = (s.used || []).filter(u => now - u.t < USED_WINDOW);
+    used.push({ id, t: now });
+    setState({ used: used.slice(-60) });
+  }
+  function markAsked(memId, now) {
+    now = now || Date.now();
+    const s = state();
+    const lastAsked = { ...(s.lastAsked || {}), [memId]: now };
+    setState({ lastAsked });
   }
 
-  /* ── 生成主动消息（真API用模型生成，否则离线模板池） ── */
+  /* ── 加权随机选择 ── */
+  function weightedPick(arr, getW, rnd) {
+    if (!arr.length) return null;
+    const total = arr.reduce((s, x) => s + Math.max(0, getW(x)), 0);
+    if (total <= 0) return arr[Math.floor(rnd() * arr.length)];
+    let r = rnd() * total;
+    for (const x of arr) {
+      r -= Math.max(0, getW(x));
+      if (r <= 0) return x;
+    }
+    return arr[arr.length - 1];
+  }
+
+  /* ── 时段池（含兜底加权） ── */
+  function poolEntries(now) {
+    const h = now.getHours();
+    const day = now.getDay();
+    let cat = "generic";
+    if (h >= 6 && h < 11) cat = "morning";
+    else if (h >= 11 && h < 14) cat = "noon";
+    else if (h >= 17 && h < 23) cat = (day === 5) ? "weekend" : "evening";
+    else if (h >= 23 || h < 6) cat = "late";
+    const entries = [];
+    POOL[cat].forEach((tpl, i) => entries.push({ id: `pool:${cat}:${i}`, tpl, w: 3 }));
+    POOL.generic.forEach((tpl, i) => { if (cat !== "generic") entries.push({ id: `pool:generic:${i}`, tpl, w: 2 }); });
+    for (const c of POOL_FALLBACK_CATS) {
+      if (c === cat || c === "generic") continue;
+      POOL[c].forEach((tpl, i) => entries.push({ id: `pool:${c}:${i}`, tpl, w: 1 }));
+    }
+    return entries;
+  }
+
+  /* ============================================================
+   * 离线决策核心：rnd/now 参数化（默认真随机/当前时间）
+   * 返回 {reply, emotion, motion, memory_updates, offline, id, memoryId?}
+   * ============================================================ */
+  function offlineGenerate(rnd, now) {
+    rnd = rnd || Math.random;
+    now = now || new Date();
+    const used = usedIds(now);
+    const t = { weekday: weekdayOf(now), ageTag: "" };
+
+    // 1) 记忆路径：有可引用记忆时按新鲜度决定概率（≥60% 引用率的结构保证）
+    const cands = candidates(now.getTime());
+    if (cands.length) {
+      const fresh = cands.some(c => c.fresh);
+      const p = fresh ? 0.8 : 0.6;
+      if (rnd() < p) {
+        const pick = weightedPick(cands, c => c.w, rnd);
+        const refs = MEM_REFS[pick.key] || MEM_REFS.fact;
+        const v = pick.key === "fact" ? pick.value.slice(0, 30) : pick.value;
+        // 组合绑定：ref × opener 全枚举，过滤 7 天内已用
+        const combos = [];
+        refs.forEach((rf, ri) => MEM_OPENERS.forEach((op, oi) => {
+          const id = `mem:${pick.key}:${ri}:${oi}:${pick.m.id}`;
+          if (!used.has(id)) combos.push({ rf, op, id });
+        }));
+        if (combos.length) {
+          const c = combos[Math.floor(rnd() * combos.length)];
+          const ctx = { ...t, ageTag: ageTagOf(pick.m.ts, now.getTime()) };
+          const reply = `${c.op(ctx)}||${c.rf(v, ctx)}`;
+          markUsed(c.id, now.getTime());
+          markAsked(pick.m.id, now.getTime());
+          return { reply, emotion: "gentle", motion: null, memory_updates: {}, offline: true, id: c.id, memoryId: pick.m.id };
+        }
+        // 该记忆所有绑定用尽 → 自然降级走通用池（不重置，保零重复）
+      }
+    }
+
+    // 2) 通用池路径：时段池优先 + 全池兜底，过滤已用；全用尽则重置
+    let entries = poolEntries(now).filter(e => !used.has(e.id));
+    if (!entries.length) entries = poolEntries(now);
+    const e = weightedPick(entries, x => x.w, rnd);
+    markUsed(e.id, now.getTime());
+    return { reply: e.tpl, emotion: "gentle", motion: null, memory_updates: {}, offline: true, id: e.id };
+  }
+
+  /* ── 在线路径的记忆+时间注入（替代原 renderContext("")） ── */
+  function heartbeatContext(now) {
+    now = now || new Date();
+    const cands = candidates(now.getTime());
+    if (!cands.length) return "";
+    const s = state();
+    const lastAsked = s.lastAsked || {};
+    const lines = cands.slice(0, 8).map(c => {
+      const age = ageTagOf(c.m.ts, now.getTime());
+      const asked = lastAsked[c.m.id] && (now.getTime() - lastAsked[c.m.id] < ASK_COOLDOWN);
+      return `- ${c.m.text}${asked ? "（刚问过进展，别追问）" : `（${age}说的）`}`;
+    });
+    lines.push(`【今天】${weekdayOf(now)}`);
+    return lines.join("\n");
+  }
+
+  /* ── 生成主动消息（真API用模型生成，否则离线决策核心） ── */
   async function generate() {
     const cfg = API.loadCfg();
     // auto 模式（默认无 mode）只要配了 key 也走模型；只有显式 local 才跳过
     if (cfg.apiKey && cfg.mode !== "local") {
       const hist = (historyFn && historyFn(4)) || [];
-      const mem = window.MemoryStore ? MemoryStore.renderContext("") : "";
+      const mem = window.MemoryStore ? heartbeatContext(new Date()) : "";
       try {
         const r = await API.chat(
           [...hist, { role: "user", content: "（时间过去了一会儿，你随手给ta发条微信）" }],
@@ -90,17 +309,7 @@ const Heartbeat = (() => {
         if (r && r.reply) return r;
       } catch (e) { console.warn("heartbeat api 降级:", e.message); }
     }
-    // 离线模板池 + 记忆追访（有记忆时 40% 概率接上上次的话题）
-    if (window.MemoryStore && Math.random() < 0.4) {
-      const mems = MemoryStore.all().filter(m => m.kind !== "pin");
-      if (mems.length) {
-        const m = mems[Math.floor(Math.random() * mems.length)];
-        const kw = m.text.replace(/^[^：]+：/, "");
-        return { reply: `对了，${kw.slice(0, 14)}——后来怎么样了||突然想起来问问`, emotion: "gentle", motion: null, memory_updates: {}, offline: true };
-      }
-    }
-    const reply = pickOffline();
-    return { reply, emotion: "gentle", motion: null, memory_updates: {}, offline: true };
+    return offlineGenerate(Math.random, new Date());
   }
 
   /* ── tick：每分钟检查 ── */
@@ -127,7 +336,7 @@ const Heartbeat = (() => {
       }
       if (fired.length) return;   // 送完提醒这个 tick 不再闲聊
 
-      // 2) 朋友式主动闲聊（多重闸门）
+      // 2) 朋友式主动闲聊（多重闸门——P1-2 频控不变）
       const cfg = API.loadCfg();
       if (cfg.heartbeatOn === false) return;
       if (inQuietHours(new Date())) return;
@@ -167,6 +376,10 @@ const Heartbeat = (() => {
     return generate();
   }
 
-  return { start, tick, debugPing, inQuietHours };
+  return {
+    start, tick, debugPing, inQuietHours,
+    /* P1-2 决策核心（只读无副作用，测试/复用可直调） */
+    offlineGenerate, heartbeatContext, candidates, ageTagOf, weekdayOf,
+  };
 })();
 window.Heartbeat = Heartbeat;   // const 不挂 window，跨模块守卫需显式挂载

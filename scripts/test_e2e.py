@@ -298,6 +298,36 @@ async def main():
             check("⑦e-4 月度回放(真实记忆索引)", ok7e4)
             await pg.screenshot(path=os.path.join(SHOTS, "15_p11_month_replay.png"))
 
+            # —— ⑦f 心跳问候情境化（P1-2：预置记忆 → 20 连发零重复 + 引用率≥60% + 值零加工） ——
+            hb = await pg.evaluate(
+                """() => {
+                  // 沿 G8 同款 xorshift32（3 次预热），保证确定性
+                  function xs(seed) { let s = (seed >>> 0) || 1; for (let i = 0; i < 3; i++) { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; }
+                    return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 4294967296; }; }
+                  localStorage.removeItem('xiaoman_heartbeat_state');
+                  const now = Date.now();
+                  localStorage.setItem('xiaoman_memories_v1', JSON.stringify([
+                    {id:'f1', text:'大事：周五要交报告', tags:['大事'], kind:'fact', ts: now - 3*86400000, hits:0},
+                    {id:'f2', text:'宠物：橘猫', tags:['宠物'], kind:'fact', ts: now - 3*86400000, hits:0}]));
+                  const out = [];
+                  const t = new Date();
+                  for (let i = 0; i < 20; i++) out.push(Heartbeat.offlineGenerate(xs(201 + i), t));
+                  return {
+                    uniqId: new Set(out.map(r => r.id)).size,
+                    uniqReply: new Set(out.map(r => r.reply)).size,
+                    refs: out.filter(r => r.memoryId).length,
+                    verbatim: out.filter(r => r.memoryId).every(r => r.reply.includes('周五要交报告') || r.reply.includes('橘猫')),
+                    sample: out.find(r => r.memoryId).reply,
+                  };
+                }""")
+            ok7f1 = hb["uniqId"] == 20 and hb["uniqReply"] == 20
+            ok7f2 = hb["refs"] >= 12 and hb["verbatim"]
+            print("⑦f-1 心跳20连发零重复:", "PASS" if ok7f1 else f"FAIL {hb['uniqId']}/{hb['uniqReply']}")
+            check("⑦f-1 心跳20连发零重复", ok7f1)
+            print("⑦f-2 心跳引用率≥60%+值零加工:", f"PASS {hb['refs']}/20 | {hb['sample']}" if ok7f2 else f"FAIL {hb['refs']}/20")
+            check("⑦f-2 心跳引用率≥60%+值零加工", ok7f2)
+            await pg.screenshot(path=os.path.join(SHOTS, "16_p12_heartbeat_ctx.png"))
+
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")
         finally:
