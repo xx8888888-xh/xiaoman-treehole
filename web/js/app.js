@@ -16,6 +16,14 @@ const App = (() => {
   const CRISIS_RE = /(不想活|想死|活不下去|自杀|自残|了结|伤害自己|撑不下去|活着.*没意思|没有意思.*活|没有意义.*活|跳楼|结束自己|煤气|遗书|不想醒来|去死|寻短见|解脱|不想活着|活着没劲|死了算了)/;
   const CARE_SCRIPT = "……这个我当真了，也想让你当真。你现在的感觉，值得被认真对待，不丢人。先陪我聊一会儿，好吗？我也想让你和更专业的人聊聊——";
 
+  // ---------- P0-3 关系连续性（与 mock_api.py / mock_engine.js 三端同源） ----------
+  // 版本/告知文案随人格层变更同步递增登记（流程见 docs/PERSONA_CHANGE_PROCESS.md）。
+  // xiaoman_told_v：本机已告知到的版本；greet 首次再访主动说（仅老用户，一次）
+  const XIAOMAN_VERSION = 2;
+  const TOLD_KEY = "xiaoman_told_v";
+  const UPDATE_TELL = "对了跟你说个事||我这两天悄悄升级了一下脑子，学的东西有点多，说不准哪句话的味儿会变。你要是觉得我哪不对劲、不像以前了，直接告诉我，我听";
+  window.__xiaomanVersion = XIAOMAN_VERSION;   // 暴露供 E2E 单测（沿 __genericPet 先例）
+
   let history = [];          // [{role, content, at}]
   let busy = false;
   let sending = false;       // 发送互斥锁：防止 greet/心跳/poke/hook 与用户发送并发
@@ -417,6 +425,13 @@ const App = (() => {
       晚上: `${name}晚上好呀。一天过去了，有想说的吗`
     };
     let reply = G[band] || G.深夜;
+    // P0-3 升级告知：人格层变更后首次再访主动说（插时段问候与开场引用之间）。
+    // 只对有记忆的老用户说——新用户没有"以前"可对比；说完/跳过即登记版本，幂等
+    const told = parseInt(localStorage.getItem(TOLD_KEY) || "0", 10) || 0;
+    if (told < XIAOMAN_VERSION) {
+      if (Object.values(mem).some(v => v)) reply += `||${UPDATE_TELL}`;
+      localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
+    }
     // P0-1 再见面开场引用：钉子户里的大事（近事件）优先，其次宠物
     // 不需要严格判定"隔天"——首日铺设完成前（无大事无宠物）自然不会引用
     const event = mem["大事"];

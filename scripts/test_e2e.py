@@ -228,6 +228,32 @@ async def main():
             print("⑨ 清空记忆后剩余:", left, "->", "PASS" if ok9 else "FAIL")
             check("⑨ 清空记忆", ok9)
 
+            # —— ⑦d 关系连续性承诺（P0-3：前端版本常量 + 老用户 greet 告知 + 幂等） ——
+            ver = await pg.evaluate("window.__xiaomanVersion")
+            ok7d1 = ver == 2
+            print("⑦d-1 前端版本常量:", "PASS v2" if ok7d1 else f"FAIL {ver!r}")
+            check("⑦d-1 前端版本常量", ok7d1)
+
+            # ⑦d-2 老用户（预置记忆 + 未告知）reload → greet 追加升级告知
+            await pg.evaluate(
+                "() => { localStorage.setItem('xiaoman_memory', "
+                "JSON.stringify({'昵称':'阿秋','宠物':'橘猫'})); "
+                "localStorage.removeItem('xiaoman_told_v'); location.reload(); }")
+            told = await wait_contains(pg, "#messages", "升级了一下脑子", timeout=10)
+            ok7d2 = told
+            print("⑦d-2 老用户greet升级告知:", "PASS" if ok7d2 else "FAIL（未见告知文案）")
+            check("⑦d-2 老用户greet升级告知", ok7d2)
+            await pg.screenshot(path=os.path.join(SHOTS, "13_p03_update_tell.png"))
+
+            # ⑦d-3 幂等：再 reload → 登记过版本不再说
+            await pg.evaluate("() => location.reload()")
+            await asyncio.sleep(4)   # 等 greet 渲染稳定（分条+打字动画）
+            msgs3 = await pg.inner_text("#messages")
+            n_rows = await pg.evaluate("document.querySelectorAll('#messages .msg-row').length")
+            ok7d3 = n_rows >= 1 and "升级了一下脑子" not in msgs3
+            print("⑦d-3 告知幂等不重复:", "PASS" if ok7d3 else f"FAIL (rows={n_rows})")
+            check("⑦d-3 告知幂等不重复", ok7d3)
+
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")
         finally:

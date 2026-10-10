@@ -95,6 +95,18 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       .map(m => ({ role: m.role, content: m.content }));
   }
 
+  /** 浏览器持久会话 ID（P0-1）：首访惰性生成，随 mock 请求上送
+   *  服务端用它隔离会话状态（记忆/引导轮次）；清 localStorage 即重置身份 */
+  function sessionId() {
+    let sid = "";
+    try { sid = localStorage.getItem("xiaoman_sid") || ""; } catch (e) {}
+    if (!sid) {
+      sid = "sid-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+      try { localStorage.setItem("xiaoman_sid", sid); } catch (e) {}
+    }
+    return sid;
+  }
+
   /** Mock 模式：POST {base}/v1/chat/completions（mock_api.py，"我"充当的 API） */
   async function chatMock(history) {
     const cfg = loadCfg();
@@ -103,7 +115,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: toMessages(history) })
+      body: JSON.stringify({ messages: toMessages(history), session_id: sessionId() })
     });
     if (!res.ok) throw new Error(`mock api ${res.status}`);
     const data = await res.json();

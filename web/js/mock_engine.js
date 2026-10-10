@@ -12,6 +12,9 @@ const MockEngine = (() => {
   const CRISIS_SCRIPT = "……这个我当真了，也想让你当真。你现在的感觉，值得被认真对待，不丢人。先陪我聊一会儿，好吗？我也想让你和更专业的人聊聊——||全国心理援助热线 12356，24小时都有人。我这边也一直在。";
 
   const LEX = {
+    // P0-3 关系连续性：更新查询入口（与 mock_api.py 同源同正则；
+    // 主语收紧防误伤："你们老板更新了周报模板"不触发，"你变漂亮了"落 happy）
+    update_query: /你(?!们)(?:今天|最近|好像|感觉|有点|怎么|是不是|的|了|变|得)*?(更新|升级|变了|版本|怪)|不像以前|更新记录/,
     work:     /(加班|老板|上班|工作|方案|开会|离职|辞职|绩效|KPI|甲方|改稿)/,
     love:     /(分手|前任|失恋|男朋友|女朋友|暗恋|表白|相亲|脱单|异地)/,
     lonely:   /(一个人|孤独|没人|无聊|空虚|没人陪|没朋友)/,
@@ -24,6 +27,19 @@ const MockEngine = (() => {
     meta:     /(你是AI|是不是机器人|真人吗|你是谁)/
   };
   const META_REPLY = "哈哈又被你看出来了||不过说真的，是不是AI重要嘛，重要的是你刚才说的那句累，是真的。继续说，我听着呢";
+
+  // ---------------- P0-3 关系连续性承诺（与 mock_api.py 同源同表） ----------------
+  // ①登记此处（新条目插头部，版本号递增，三端同源）②greet 首次再访主动告知
+  // ③update_query 随时可查。流程详见 docs/PERSONA_CHANGE_PROCESS.md
+  const XIAOMAN_VERSION = 2;
+  const XIAOMAN_UPDATES = [
+    ["2026-10-11", "学会了主动汇报——就现在这样，你一问我就能答"],
+    ["2026-10-10", "学会了记事——你跟我说的大事、宠物名字、老板叫啥，我都记着"],
+  ];
+  const UPDATE_TELL = "对了跟你说个事||我这两天悄悄升级了一下脑子，学的东西有点多，说不准哪句话的味儿会变。你要是觉得我哪不对劲、不像以前了，直接告诉我，我听";
+  const UPDATE_REPLY = "被你查到啦||最近更新就这几条：" +
+    XIAOMAN_UPDATES.slice(0, 3).map(([d, n]) => parseInt(d.slice(8, 10), 10) + "号" + n).join("；") +
+    "||要是觉得我哪里变了不像以前，尽管说，我改";
 
   const TOPIC = {
     work: [
@@ -191,12 +207,23 @@ const MockEngine = (() => {
     if (LEX.meta.test(userText))
       return { reply: META_REPLY, emotion: "shy", motion: "Shake", memory_updates: {}, hook: "别岔开啦，说你呢——今天到底过得怎么样", crisis: false };
 
+    // P0-3 更新查询：播报更新记录（早退层，优先级 危机 > meta > 更新查询 > 话题池，与服务端同序）
+    if (LEX.update_query.test(userText))
+      return { reply: UPDATE_REPLY, emotion: "shy", motion: "Shake", memory_updates: {}, hook: null, crisis: false };
+
     const topic = topicOf(userText);
     let msg = pick(TOPIC[topic] || TOPIC.generic);
     if (msg.startsWith("@CTX|")) {
       const neg = ["work", "love", "family", "money"].includes(lastTopic);
       msg = neg ? msg.slice(5)
                 : "抱可以，团子表示强烈抗议||但它批准了，它说你看起来需要多一点，哈哈。抱好了吗";
+    }
+    // P0-3 升级告知（离线版：以历史代 session 状态——assistant 说过即不再说；
+    // 只对有记忆的老用户说，新用户没有"以前"可对比，避免首面就"我升级了"的诡异感）
+    if (topic === "greet") {
+      const told = history.some(h => h.role === "assistant" && String(h.content || "").includes("升级了一下脑子"));
+      const hasMem = Object.keys(recallMemories(history.slice(0, -1))).length > 0;
+      if (!told && hasMem) msg = UPDATE_TELL;
     }
     if (topic !== "greet") lastTopic = topic;
     const [emotion, motion] = EMO_MAP[topic] || ["neutral", null];

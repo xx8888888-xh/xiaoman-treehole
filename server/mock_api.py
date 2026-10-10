@@ -45,6 +45,10 @@ CRISIS_RE = re.compile(
 )
 
 LEX = {
+    # P0-3 关系连续性：更新查询入口（Replika 式"你变了"温柔接住 → 播报更新记录）
+    # 主语收紧防误伤：你(?!们)——"你们老板更新了周报模板"不触发；裸"变"不触发（"你变漂亮了"落 happy）
+    "update_query": re.compile(
+        r"你(?!们)(?:今天|最近|好像|感觉|有点|怎么|是不是|的|了|变|得)*?(更新|升级|变了|版本|怪)|不像以前|更新记录"),
     "work":   re.compile(r"(加班|老板|上班|工作|方案|开会|离职|辞职|绩效|KPI|甲方|改稿)"),
     "love":   re.compile(r"(分手|前任|失恋|男朋友|女朋友|暗恋|表白|相亲|脱单|异地)"),
     "lonely": re.compile(r"(一个人|孤独|没人|无聊|空虚|没人陪|没朋友)"),
@@ -248,6 +252,25 @@ GREET = [
 ]
 META_REPLY = ("哈哈又被你看出来了||不过说真的，是不是AI重要嘛，"
               "重要的是你刚才说的那句累，是真的。继续说，我听着呢")
+
+# ---------------- P0-3 关系连续性承诺（Replika 教训） ----------------
+# 人格层（模板/话术/记忆逻辑）变更对用户可见可查可反馈：
+# ①登记此处（新条目插头部，版本号递增）②greet 首次再访主动告知（老用户一次）
+# ③update_query 随时可查。流程详见 docs/PERSONA_CHANGE_PROCESS.md
+XIAOMAN_VERSION = 2
+XIAOMAN_UPDATES = [   # 倒序（新在前）；note 为用户向语言，登记时三端同源（mock_engine.js/app.js）
+    ("2026-10-11", "学会了主动汇报——就现在这样，你一问我就能答"),
+    ("2026-10-10", "学会了记事——你跟我说的大事、宠物名字、老板叫啥，我都记着"),
+]
+UPDATE_TELL = ("对了跟你说个事||我这两天悄悄升级了一下脑子，学的东西有点多，"
+               "说不准哪句话的味儿会变。你要是觉得我哪不对劲、不像以前了，"
+               "直接告诉我，我听")
+def _update_reply():
+    """update_query 应答：播报最近 3 条更新（日期转口语"10号"）"""
+    items = "；".join(f"{int(d[8:10])}号{note}" for d, note in XIAOMAN_UPDATES[:3])
+    return f"被你查到啦||最近更新就这几条：{items}||要是觉得我哪里变了不像以前，尽管说，我改"
+UPDATE_REPLY = _update_reply()
+
 TOPIC = {
     "work": [
         "啊？当着全组？这也太过分了||那方案你熬了多久你自己知道……能力不行他当初把你招进来干嘛",
@@ -401,6 +424,11 @@ def make_reply(messages, session_id=None):
         return {"reply": META_REPLY, "emotion": "shy", "motion": "Shake",
                 "memory_updates": {}, "hook": "别岔开啦，说你呢——今天到底过得怎么样", "crisis": False}
 
+    # P0-3 更新查询：播报更新记录（早退层，优先级 危机 > meta > 更新查询 > 话题池）
+    if LEX["update_query"].search(user_text):
+        return {"reply": UPDATE_REPLY, "emotion": "shy", "motion": "Shake",
+                "memory_updates": {}, "hook": None, "crisis": False}
+
     topic = topic_of(user_text)
     # 从会话状态读取旧记忆
     old_memories = _STATE.get_memories(session_id)
@@ -434,6 +462,12 @@ def make_reply(messages, session_id=None):
     # P0-2 greet 开场引用同步标记：再访首句时前端会拼"上次说{大事/宠物}"，
     # 服务端给未引用过的大事/宠物打标记（hit+总额），防止回提紧跟开场双提
     if topic == "greet":
+        # P0-3 升级告知：人格层变更后首次再访主动说（只对有记忆的老用户——
+        # 新用户没有"以前"可对比，直接静默登记，避免首面就"我升级了"的诡异感）
+        if sess.get("told_v", 0) < XIAOMAN_VERSION:
+            if memories:
+                reply = UPDATE_TELL
+            sess["told_v"] = XIAOMAN_VERSION
         for k in ("大事", "宠物"):
             if k in memories and sess.setdefault("memory_hits", {}).get(k) is None:
                 _STATE.mark_recall(session_id, k, turn)

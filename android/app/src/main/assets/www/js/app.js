@@ -16,6 +16,14 @@ const App = (() => {
   const CRISIS_RE = /(不想活|想死|活不下去|自杀|自残|了结|伤害自己|撑不下去|活着.*没意思|没有意思.*活|没有意义.*活|跳楼|结束自己|煤气|遗书|不想醒来|去死|寻短见|解脱|不想活着|活着没劲|死了算了)/;
   const CARE_SCRIPT = "……这个我当真了，也想让你当真。你现在的感觉，值得被认真对待，不丢人。先陪我聊一会儿，好吗？我也想让你和更专业的人聊聊——";
 
+  // ---------- P0-3 关系连续性（与 mock_api.py / mock_engine.js 三端同源） ----------
+  // 版本/告知文案随人格层变更同步递增登记（流程见 docs/PERSONA_CHANGE_PROCESS.md）。
+  // xiaoman_told_v：本机已告知到的版本；greet 首次再访主动说（仅老用户，一次）
+  const XIAOMAN_VERSION = 2;
+  const TOLD_KEY = "xiaoman_told_v";
+  const UPDATE_TELL = "对了跟你说个事||我这两天悄悄升级了一下脑子，学的东西有点多，说不准哪句话的味儿会变。你要是觉得我哪不对劲、不像以前了，直接告诉我，我听";
+  window.__xiaomanVersion = XIAOMAN_VERSION;   // 暴露供 E2E 单测（沿 __genericPet 先例）
+
   let history = [];          // [{role, content, at}]
   let busy = false;
   let sending = false;       // 发送互斥锁：防止 greet/心跳/poke/hook 与用户发送并发
@@ -30,6 +38,27 @@ const App = (() => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   function loadMem() { try { return JSON.parse(localStorage.getItem(MEM_KEY)) || {}; } catch (e) { return {}; } }
   function saveMem(m) { localStorage.setItem(MEM_KEY, JSON.stringify(m)); renderMem(); }
+  /** 泛指宠物值判定（与 mock_api.py/_pet_generic、mock_engine.js/petGeneric 三端同源）：
+   *  "那只猫/我家猫/一只狗"→true（零信息泛指）；"橘猫/英短猫"→false（具体值）。
+   *  P0-2 遗留守卫：防止泛指覆盖具体导致记忆退化。暴露 window 供 E2E 单测 */
+  function genericPet(v) {
+    const core = String(v).replace(/[一这那每某该个小条只家我有]/g, "");
+    return /^(?:猫|狗|兔子?)$/.test(core);
+  }
+  window.__genericPet = genericPet;
+  /** 老板姓名可信度（与 mock_api.py/_boss_name_ok、mock_engine.js/bossNameOk 三端同源同表）：
+   *  "张三/老王/王总/周(单姓)/Jack"→true；"又骂我/今天心情/老折腾我/老板"→false。
+   *  P0-2 遗留守卫 II：基词/垃圾值不覆盖已有可信姓名，防回提模板产乱语。暴露 window 供 E2E 单测 */
+  const BOSS_SURNAMES = new Set("王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤".split(""));
+  const BOSS_CUT = new Set("今昨前早上午晚夜凌晨周月年天时分秒就才又再被让叫说问要骂催找发给改加请带忙活完没不太很太点对跟和像是心情脾气折作搞整烦惹凶".split(""));
+  function bossNameOk(v) {
+    v = String(v);
+    if (!v || v.length > 4) return false;
+    if (/^[A-Z][a-zA-Z]{1,11}$/.test(v)) return true;
+    if (v.length >= 2 && (v[0] === "老" || v[0] === "小") && BOSS_SURNAMES.has(v[1])) return true;
+    return BOSS_SURNAMES.has(v[0]) && (v.length === 1 || /^[一-龥]{1,2}$/.test(v.slice(1)));
+  }
+  window.__bossNameOk = bossNameOk;
   function timeBand() {
     const h = new Date().getHours();
     if (h < 5) return "凌晨";
@@ -282,8 +311,22 @@ const App = (() => {
 
       // 记忆：双写（旧抽屉 + 新索引库）
       if (data.memory_updates && Object.keys(data.memory_updates).length) {
-        saveMem({ ...loadMem(), ...data.memory_updates });
-        if (window.MemoryStore) MemoryStore.addUpdates(data.memory_updates);
+        // 泛指不覆盖具体（P0-2 遗留守卫·前端兜底，三端同源判定）：
+        // 服务端已挡在线路径；这里收敛其余来源（离线引擎/未来协议漂移）
+        const upd = { ...data.memory_updates };
+        const cur = loadMem();
+        if (upd["宠物"] && cur["宠物"] && genericPet(upd["宠物"]) && !genericPet(cur["宠物"])) {
+          delete upd["宠物"];
+        }
+        // 基词/垃圾不覆盖姓名（P0-2 遗留守卫 II·前端兜底，三端同源判定）：
+        // 服务端与离线引擎已挡在线/离线路径；此处收敛协议漂移（如未来直连真模型）
+        if (upd["老板"] && cur["老板"] && !bossNameOk(upd["老板"]) && bossNameOk(cur["老板"])) {
+          delete upd["老板"];
+        }
+        if (Object.keys(upd).length) {
+          saveMem({ ...cur, ...upd });
+          if (window.MemoryStore) MemoryStore.addUpdates(upd);
+        }
       }
 
       // 模型路径的提醒协议（补充：客户端没截获但模型识别到了）
@@ -381,8 +424,24 @@ const App = (() => {
       下午: `${name}下午好。忙里偷闲来找我啦`,
       晚上: `${name}晚上好呀。一天过去了，有想说的吗`
     };
+    let reply = G[band] || G.深夜;
+    // P0-3 升级告知：人格层变更后首次再访主动说（插时段问候与开场引用之间）。
+    // 只对有记忆的老用户说——新用户没有"以前"可对比；说完/跳过即登记版本，幂等
+    const told = parseInt(localStorage.getItem(TOLD_KEY) || "0", 10) || 0;
+    if (told < XIAOMAN_VERSION) {
+      if (Object.values(mem).some(v => v)) reply += `||${UPDATE_TELL}`;
+      localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
+    }
+    // P0-1 再见面开场引用：钉子户里的大事（近事件）优先，其次宠物
+    // 不需要严格判定"隔天"——首日铺设完成前（无大事无宠物）自然不会引用
+    const event = mem["大事"];
+    if (event) {
+      reply += `||对了，你上次说${event}——怎么样啦？我一直记着呢`;
+    } else if (mem["宠物"]) {
+      reply += `||还有，你家${mem["宠物"]}最近乖不乖？`;
+    }
     setTimeout(() => {
-      sendSplit({ reply: G[band] || G.深夜, emotion: "gentle", motion: "Greeting" });
+      sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
     }, 900);
   }
 

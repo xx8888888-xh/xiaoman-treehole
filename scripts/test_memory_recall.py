@@ -345,6 +345,84 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G5 node可用", False, "node 不在 PATH")
 
 
+def g6_continuity():
+    """G6 关系连续性承诺（P0-3，Replika 教训）：升级登记 → greet 主动告知（老用户一次）
+    → update_query 播报 → "你变了"温柔接住 → 误伤防护 → 危机优先级不受影响"""
+    # ---------- 服务端 ----------
+    # ① 新用户 greet 不误触发（没有"以前"可对比，静默登记版本）
+    sid_new = "p03-g6new-" + uuid.uuid4().hex
+    r0 = chat("你好", sid_new)
+    check("G6-1① 新用户greet不误触发告知", "升级了一下脑子" not in r0["reply"], r0["reply"][:40])
+    # ② 老用户（铺记忆）greet → 主动告知
+    sid = "p03-g6a-" + uuid.uuid4().hex
+    chat("叫我阿秋就行", sid)
+    chat("我养了一只橘猫", sid)
+    r1 = chat("晚上好", sid)
+    check("G6-1② 老用户greet主动告知升级", "升级了一下脑子" in r1["reply"], r1["reply"][:60])
+    # ③ 幂等：同 session 再 greet 不重复说
+    r2 = chat("你好", sid)
+    check("G6-1③ 告知幂等不重复", "升级了一下脑子" not in r2["reply"], r2["reply"][:40])
+    # ④ 查询播报：含两条更新的用户向描述（记事=10号 汇报=11号）
+    r3 = chat("你最近更新了什么", sid)
+    check("G6-2① 查询播报含记事+汇报", "记事" in r3["reply"] and "汇报" in r3["reply"], r3["reply"][:60])
+    # ⑤ "你变了"温柔接住（Replika 式用户话术 → 播报更新邀请反馈，不落 generic）
+    r4 = chat("你变了", sid)
+    check("G6-2② 你变了温柔接住", "被你查到啦" in r4["reply"], r4["reply"][:40])
+    # ⑥ 误伤防护："你们老板更新了周报模板"（你(?!们) 主语收紧）
+    r5 = chat("你们老板更新了周报模板，好烦", sid)
+    check("G6-2③ 误伤防护(不触发播报)", "被你查到啦" not in r5["reply"], r5["reply"][:40])
+    # ⑦ 危机优先级不受影响：危机句+更新词 → 仍走危机线（不播报）
+    r6 = chat("活着没意思你更新了什么", "p03-g6c-" + uuid.uuid4().hex)
+    check("G6-3① 危机优先级高于更新查询", r6.get("crisis") is True, str(r6.get("crisis")))
+
+    # ---------- 离线兜底（node 直调，与服务端同源同剧本） ----------
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const src = fs.readFileSync(ROOT + '/web/js/mock_engine.js', 'utf8');
+const MockEngine = new Function('window', src + '; return MockEngine;')(undefined);
+const out = [];
+const say = (history, t) => {
+  history.push({role: 'user', content: t});
+  const r = MockEngine.reply(history);
+  history.push({role: 'assistant', content: r.reply + (r.hook ? '||' + r.hook : '')});
+  return r;
+};
+// 新用户 greet 不误触发
+const HN = [];
+const n0 = say(HN, '你好');
+out.push({n: 'G6-4① 离线新用户greet不误触发', ok: !n0.reply.includes('升级了一下脑子'), info: n0.reply.slice(0,20)});
+// 老用户铺记忆 → greet 告知一次 → 幂等（历史扫描代 session 状态）
+const H = [];
+say(H, '叫我阿秋就行');
+say(H, '我养了一只橘猫');
+const n1 = say(H, '晚上好');
+out.push({n: 'G6-4② 离线老用户greet主动告知', ok: n1.reply.includes('升级了一下脑子'), info: n1.reply.slice(0,40)});
+const n2 = say(H, '你好');
+out.push({n: 'G6-4③ 离线告知幂等不重复', ok: !n2.reply.includes('升级了一下脑子'), info: n2.reply.slice(0,20)});
+// 查询播报
+const n3 = say(H, '你最近更新了什么');
+out.push({n: 'G6-4④ 离线查询播报含记事+汇报', ok: n3.reply.includes('记事') && n3.reply.includes('汇报'), info: ''});
+// 你变了接住 + 误伤
+const n4 = say(H, '你变了');
+out.push({n: 'G6-4⑤ 离线你变了温柔接住', ok: n4.reply.includes('被你查到啦'), info: ''});
+const H2 = [];
+const n5 = say(H2, '你们老板更新了周报模板，好烦');
+out.push({n: 'G6-4⑥ 离线误伤防护(不触发播报)', ok: !n5.reply.includes('被你查到啦'), info: n5.reply.slice(0,20)});
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G6 离线引擎可加载", False, (p.stderr or p.stdout)[-200:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G6 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -354,7 +432,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity):
         try:
             fn()
         except Exception as e:
