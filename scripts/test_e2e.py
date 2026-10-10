@@ -184,6 +184,34 @@ async def main():
             print("⑦b-2 端到端记忆不劣化:", "PASS 宠物=橘猫" if ok7b2 else f"FAIL 宠物={m.get('宠物')!r}")
             check("⑦b-2 端到端记忆不劣化", ok7b2)
 
+            # —— ⑦c 老板姓名守卫（P0-2 遗留守卫 II：前端判定单测 + 端到端垃圾句不劣化） ——
+            bo = await pg.evaluate(
+                "() => [__bossNameOk('张三'), __bossNameOk('又骂我'), "
+                "__bossNameOk('老王'), __bossNameOk('老折腾我'), "
+                "__bossNameOk('王总'), __bossNameOk('今天心情')]")
+            ok7c1 = bo == [True, False, True, False, True, False]
+            print("⑦c-1 前端姓名判定:", "PASS " + str(bo) if ok7c1 else "FAIL " + str(bo))
+            check("⑦c-1 前端姓名判定", ok7c1)
+
+            await pg.fill("#textInput", "我们老板张三")
+            await pg.click("#sendBtn")
+            await wait_mem_contains(pg, "张三", timeout=15)
+            await pg.fill("#textInput", "我们老板又骂我")
+            await pg.click("#sendBtn")
+            stable, last_n2, n_base = 0, 0, await pg.evaluate(
+                "document.querySelectorAll('#messages .msg-row').length")
+            for _ in range(30):
+                await asyncio.sleep(0.5)
+                n_now = await pg.evaluate("document.querySelectorAll('#messages .msg-row').length")
+                stable = stable + 1 if n_now == last_n2 else 0
+                last_n2 = n_now
+                if n_now > n_base + 1 and stable >= 3:
+                    break
+            m = await pg.evaluate("() => JSON.parse(localStorage.getItem('xiaoman_memory') || '{}')")
+            ok7c2 = m.get("老板") == "张三"
+            print("⑦c-2 端到端姓名不劣化:", "PASS 老板=张三" if ok7c2 else f"FAIL 老板={m.get('老板')!r}")
+            check("⑦c-2 端到端姓名不劣化", ok7c2)
+
             await pg.click("#memoryBtn")
             await asyncio.sleep(1)
             drawer = await pg.inner_text("#memoryDrawer")

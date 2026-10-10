@@ -251,6 +251,100 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G4 node可用", False, "node 不在 PATH")
 
 
+def g5_boss_guard():
+    """G5 老板姓名可信度（P0-2 遗留守卫 II）：谓语垃圾不进老板键，三端防线"""
+    # ---------- 服务端 ----------
+    sid = "p02-g5a-" + uuid.uuid4().hex
+    chat("我们老板张三", sid)                 # 轮1 存姓名"张三"（NAME hook 期）
+    d = chat("我们老板又骂我", sid)           # 轮2 谓语垃圾 → 守卫拦截（基词不覆盖姓名）
+    upd = d.get("memory_updates") or {}
+    check("G5-1① 服务端垃圾谓语不产出老板更新(又骂我)", "老板" not in upd,
+          json.dumps(upd, ensure_ascii=False))
+    d = chat("我们老板今天心情不好", sid)     # 轮3 时间谓语 → 同上
+    upd = d.get("memory_updates") or {}
+    check("G5-1② 服务端时间谓语不产出老板更新", "老板" not in upd,
+          json.dumps(upd, ensure_ascii=False))
+    chat("叫我小夏", sid)                     # 轮4 补昵称（过 NAME 引导期）
+    chat("下周要期中考试", sid)               # 轮5 补大事（过 EVENT 引导期）
+    chat("今天随便聊聊", sid)                 # 轮6 填充（过提取间隔≥3轮）
+    d = chat("今天上班好烦", sid)             # 轮7 work 回提 → 应引用"张三"非垃圾值
+    hook = d.get("hook") or ""
+    check("G5-1③ 服务端记忆未劣化(回提张三非乱语)",
+          "张三" in hook and "又骂我" not in hook and "心情" not in hook, f"hook={hook!r}")
+    sid2 = "p02-g5b-" + uuid.uuid4().hex
+    d = chat("我们老板王总今天又作妖", sid2)  # 姓名+谓语连排 → 截断"王总"
+    upd = d.get("memory_updates") or {}
+    check("G5-2① 服务端混合句截断(→王总)", upd.get("老板") == "王总",
+          json.dumps(upd, ensure_ascii=False))
+    d = chat("我们老板又骂我", sid2)          # 垃圾不覆盖姓名
+    upd = d.get("memory_updates") or {}
+    check("G5-2② 服务端垃圾不覆盖姓名", "老板" not in upd,
+          json.dumps(upd, ensure_ascii=False))
+    sid3 = "p02-g5c-" + uuid.uuid4().hex
+    d = chat("我们老板又骂我", sid3)          # 首次即垃圾 → 基词占位（回提模板可用）
+    upd = d.get("memory_updates") or {}
+    check("G5-3① 服务端首次垃圾占基词(老板)", upd.get("老板") == "老板",
+          json.dumps(upd, ensure_ascii=False))
+    d = chat("我们老板王总", sid3)            # 可信姓名升级覆盖基词
+    upd = d.get("memory_updates") or {}
+    check("G5-3② 服务端姓名可升级覆盖基词", upd.get("老板") == "王总",
+          json.dumps(upd, ensure_ascii=False))
+
+    # ---------- 离线兜底（node 直调，与服务端同源同剧本） ----------
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const src = fs.readFileSync(ROOT + '/web/js/mock_engine.js', 'utf8');
+const MockEngine = new Function('window', src + '; return MockEngine;')(undefined);
+const out = [];
+const say = (history, t) => {
+  history.push({role: 'user', content: t});
+  const r = MockEngine.reply(history);
+  history.push({role: 'assistant', content: r.reply + (r.hook ? '||' + r.hook : '')});
+  return r;
+};
+const H = [];
+say(H, '我们老板张三');                 // 轮1 存姓名
+const r2 = say(H, '我们老板又骂我');     // 轮2 谓语垃圾 → 返回值守卫应拦截
+out.push({n: 'G5-4① 离线垃圾谓语不产出老板更新', ok: !r2.memory_updates['老板'],
+          info: JSON.stringify(r2.memory_updates)});
+const r3 = say(H, '我们老板今天心情不好'); // 轮3 时间谓语
+out.push({n: 'G5-4② 离线时间谓语不产出老板更新', ok: !r3.memory_updates['老板'],
+          info: JSON.stringify(r3.memory_updates)});
+say(H, '叫我小夏');
+say(H, '下周要期中考试');
+say(H, '今天随便聊聊');
+const r7 = say(H, '今天上班好烦');       // 轮7 work 回提 → 引用"张三"
+out.push({n: 'G5-4③ 离线记忆未劣化(回提张三)', ok: (r7.hook||'').includes('张三'),
+          info: r7.hook});
+const H2 = [];
+const s1 = say(H2, '我们老板王总今天又作妖'); // 截断
+out.push({n: 'G5-5① 离线混合句截断(→王总)', ok: s1.memory_updates['老板'] === '王总',
+          info: JSON.stringify(s1.memory_updates)});
+const s2 = say(H2, '我们老板又骂我');       // 垃圾不覆盖姓名
+out.push({n: 'G5-5② 离线垃圾不覆盖姓名', ok: !s2.memory_updates['老板'],
+          info: JSON.stringify(s2.memory_updates)});
+const H3 = [];
+const s3 = say(H3, '我们老板又骂我');       // 首次垃圾占基词
+out.push({n: 'G5-6① 离线首次垃圾占基词', ok: s3.memory_updates['老板'] === '老板',
+          info: JSON.stringify(s3.memory_updates)});
+const s4 = say(H3, '我们老板王总');         // 姓名升级
+out.push({n: 'G5-6② 离线姓名可升级覆盖基词', ok: s4.memory_updates['老板'] === '王总',
+          info: JSON.stringify(s4.memory_updates)});
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G5 离线引擎可加载", False, (p.stderr or p.stdout)[-200:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G5 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -260,7 +354,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard):
         try:
             fn()
         except Exception as e:

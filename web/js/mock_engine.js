@@ -110,6 +110,22 @@ const MockEngine = (() => {
     const core = String(v).replace(/[一这那每某该个小条只家我有]/g, "");
     return /^(?:猫|狗|兔子?)$/.test(core);
   }
+  /** 老板姓名可信度（与 mock_api.py/_boss_name_ok、app.js/bossNameOk 三端同源同表）：
+   *  "张三/老王/小王/王总/周(单姓)/Jack"→true；"又骂我/今天心情/老折腾我/老板"→false。
+   *  P0-2 遗留守卫 II：谓语垃圾不进老板键（转基词占位），回提模板不产乱语 */
+  const BOSS_SURNAMES = new Set("王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤".split(""));
+  const BOSS_CUT = new Set("今昨前早上午晚夜凌晨周月年天时分秒就才又再被让叫说问要骂催找发给改加请带忙活完没不太很太点对跟和像是心情脾气折作搞整烦惹凶".split(""));
+  function bossCut(v) {
+    for (let i = 1; i < v.length; i++) if (BOSS_CUT.has(v[i])) return v.slice(0, i);
+    return v;
+  }
+  function bossNameOk(v) {
+    v = String(v);
+    if (!v || v.length > 4) return false;
+    if (/^[A-Z][a-zA-Z]{1,11}$/.test(v)) return true;
+    if (v.length >= 2 && (v[0] === "老" || v[0] === "小") && BOSS_SURNAMES.has(v[1])) return true;
+    return BOSS_SURNAMES.has(v[0]) && (v.length === 1 || /^[一-龥]{1,2}$/.test(v.slice(1)));
+  }
   /** 离线版会话记忆：扫全量历史 user 消息提取（最后出现覆盖先前的，
    *  与服务端 update 语义一致；localStorage 老记忆归 app.js MemoryStore 管） */
   function recallMemories(history) {
@@ -119,6 +135,8 @@ const MockEngine = (() => {
       for (const k of Object.keys(u)) {
         // 泛指不覆盖具体（P0-2 遗留守卫，与服务端 extract_memory 同源）
         if (k === "宠物" && mem["宠物"] && petGeneric(u["宠物"]) && !petGeneric(mem["宠物"])) continue;
+        // 基词不覆盖姓名（P0-2 遗留守卫 II，与服务端同源）
+        if (k === "老板" && mem["老板"] && !bossNameOk(u["老板"]) && bossNameOk(mem["老板"])) continue;
         mem[k] = u[k];
       }
     }
@@ -139,8 +157,15 @@ const MockEngine = (() => {
       const m = text.match(re);
       if (m) {
         // 老板取 m[3]（姓名组，与服务端 group3 同口径）；大事 m[1]；其余 m[2]
-        const v = key === "老板" ? (m[3] || m[2] || "") : (m[2] || m[1] || "");
-        out[key] = cleanName(v.trim());
+        let v = key === "老板" ? (m[3] || m[2] || "") : (m[2] || m[1] || "");
+        v = cleanName(v.trim());
+        if (key === "老板") {
+          // P0-2 遗留守卫 II：谓语截断+可信度（与服务端同源）。垃圾（"又骂我"）→
+          // 转基词占位（m[2] 恒为 老板/领导/上司）；可信姓名（"王总"）保持
+          v = bossCut(v);
+          if (!bossNameOk(v)) v = m[2] || "老板";
+        }
+        out[key] = v;
       }
     }
     return out;
@@ -185,6 +210,11 @@ const MockEngine = (() => {
     const prior = recallMemories(history.slice(0, -1));
     if (memUpdates["宠物"] && prior["宠物"] && petGeneric(memUpdates["宠物"]) && !petGeneric(prior["宠物"])) {
       delete memUpdates["宠物"];
+    }
+    // 基词不覆盖姓名（P0-2 遗留守卫 II·返回值防线，与服务端 continue 同语义）：
+    // 已有可信姓名（"张三"）时，基词值不发给 app.js，防覆盖 localStorage 好值
+    if (memUpdates["老板"] && prior["老板"] && !bossNameOk(memUpdates["老板"]) && bossNameOk(prior["老板"])) {
+      delete memUpdates["老板"];
     }
     for (const k of Object.keys(memUpdates)) memExtracted[k] = onbTurns; // 闸门0数据
     let hook = null;

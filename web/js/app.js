@@ -38,6 +38,19 @@ const App = (() => {
     return /^(?:猫|狗|兔子?)$/.test(core);
   }
   window.__genericPet = genericPet;
+  /** 老板姓名可信度（与 mock_api.py/_boss_name_ok、mock_engine.js/bossNameOk 三端同源同表）：
+   *  "张三/老王/王总/周(单姓)/Jack"→true；"又骂我/今天心情/老折腾我/老板"→false。
+   *  P0-2 遗留守卫 II：基词/垃圾值不覆盖已有可信姓名，防回提模板产乱语。暴露 window 供 E2E 单测 */
+  const BOSS_SURNAMES = new Set("王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤".split(""));
+  const BOSS_CUT = new Set("今昨前早上午晚夜凌晨周月年天时分秒就才又再被让叫说问要骂催找发给改加请带忙活完没不太很太点对跟和像是心情脾气折作搞整烦惹凶".split(""));
+  function bossNameOk(v) {
+    v = String(v);
+    if (!v || v.length > 4) return false;
+    if (/^[A-Z][a-zA-Z]{1,11}$/.test(v)) return true;
+    if (v.length >= 2 && (v[0] === "老" || v[0] === "小") && BOSS_SURNAMES.has(v[1])) return true;
+    return BOSS_SURNAMES.has(v[0]) && (v.length === 1 || /^[一-龥]{1,2}$/.test(v.slice(1)));
+  }
+  window.__bossNameOk = bossNameOk;
   function timeBand() {
     const h = new Date().getHours();
     if (h < 5) return "凌晨";
@@ -296,6 +309,11 @@ const App = (() => {
         const cur = loadMem();
         if (upd["宠物"] && cur["宠物"] && genericPet(upd["宠物"]) && !genericPet(cur["宠物"])) {
           delete upd["宠物"];
+        }
+        // 基词/垃圾不覆盖姓名（P0-2 遗留守卫 II·前端兜底，三端同源判定）：
+        // 服务端与离线引擎已挡在线/离线路径；此处收敛协议漂移（如未来直连真模型）
+        if (upd["老板"] && cur["老板"] && !bossNameOk(upd["老板"]) && bossNameOk(cur["老板"])) {
+          delete upd["老板"];
         }
         if (Object.keys(upd).length) {
           saveMem({ ...cur, ...upd });

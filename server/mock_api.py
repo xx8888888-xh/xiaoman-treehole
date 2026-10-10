@@ -113,6 +113,43 @@ def _pet_generic(v):
     core = "".join(c for c in v if c not in PET_GENERIC_STRIP)
     return bool(PET_BASE_RE.match(core))
 
+# ---------------- P0-2 遗留守卫 II：老板姓名可信度（提取层垃圾捕获防护） ----------------
+# 现象（23:15 轮探针实测）：老板正则 group3 会把后续谓语当姓名——
+#   "我们老板又骂我"→老板="又骂我"、"我们老板今天心情不好"→老板="今天心情"、
+#   "我们老板王总今天又作妖"→老板="王总今天"（姓名+谓语连排全吞），
+#   回提模板将产出"又骂我今天没又折腾你吧"式乱语。
+# 判定（与 mock_engine.js/app.js 三端同源同表）：
+#   谓语字截断（时间/副词/动词字起断）→ 姓表/老小+姓/单姓/英文名模式 → 可信姓名。
+# 规则：可信姓名永远可落库（用户换老板=信息升级）；不可信（谓语垃圾）→ 转基词
+#   （"老板/领导/上司"）占位——仅旧值缺失时生效；基词不覆盖已有可信姓名（防劣化）。
+BOSS_SURNAMES = set(
+    "王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘"
+    "于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江"
+    "尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤")
+# 截断集=时间/副词/动词高频字（避开姓表与称谓字"总哥姐工董师傅"；"周"在姓表但
+# 姓名中位置≥1 的"周"多为周报/周会，保留）；"老/小"不进截断集（老王/小王模式）
+BOSS_CUT = set(
+    "今昨前早上午晚夜凌晨周月年天时分秒就才又再被让叫说问要骂催找发给改加请带"
+    "忙活完没不太很太点对跟和像是心情脾气折作搞整烦惹凶")
+BOSS_EN_RE = re.compile(r"^[A-Z][a-zA-Z]{1,11}$")
+
+def _boss_cut(v):
+    """姓名后谓语截断：'王总今天骂我'→'王总'（第2字起遇谓语字即断，姓首字不动）"""
+    for i in range(1, len(v)):
+        if v[i] in BOSS_CUT:
+            return v[:i]
+    return v
+
+def _boss_name_ok(v):
+    """'张三/老王/小王/王总/周(单姓)/Jack'→True；'又骂我/今天心情/老折腾我/老板'→False"""
+    if not v or len(v) > 4:
+        return False
+    if BOSS_EN_RE.match(v):
+        return True
+    if len(v) >= 2 and v[0] in "老小" and v[1] in BOSS_SURNAMES:
+        return True
+    return bool(v[0] in BOSS_SURNAMES and (len(v) == 1 or re.match(r"^[一-龥]{1,2}$", v[1:])))
+
 def extract_memory(text, old):
     out = {}
     for key, pat in MEM_PATTERNS:
@@ -128,10 +165,20 @@ def extract_memory(text, old):
             # P0-2 对齐：所有键统一尾缀清洗（与前端 cleanName 同源同表）——
             # 语气尾缀词不进记忆值（"我们老板张三吧"→"张三"，前后端口径一致）
             val = _clean_name(val)
+            if key == "老板":
+                # P0-2 遗留守卫 II：谓语截断 + 姓名可信度。垃圾（"又骂我"）→
+                # 转基词占位（g2 恒为 老板/领导/上司）；可信姓名（"王总"）保持
+                val = _boss_cut(val)
+                if not _boss_name_ok(val):
+                    val = m.group(2) or "老板"
             if val and old.get(key) != val:
                 # 泛指不覆盖具体：旧值具体（"橘猫"）时，泛指新值（"那只猫"）不落库
                 if (key == "宠物" and old.get(key)
                         and _pet_generic(val) and not _pet_generic(old[key])):
+                    continue
+                # 基词不覆盖姓名（老板）：旧值可信姓名（"张三"）时，基词新值跳过
+                if (key == "老板" and old.get("老板")
+                        and not _boss_name_ok(val) and _boss_name_ok(old["老板"])):
                     continue
                 out[key] = val
     return out
