@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-10-10 · 21:00 迭代引擎首轮：P0-1 首日引导钉子户铺设（挂账收口→实现→验收→提交）
+
+> 20:47 每小时迭代引擎触发。续跑检查发现**未闭环挂账**：工作区躺着 P0-1 完整实现（mock_api/api/app/memory/mock_engine 五文件 + test_onboarding.py + 截图 12）但无 DEVLOG、未提交、未验证——上个会话被切断的进行中工作。按铁律「没完成就继续」直接续跑到闭环。
+
+### 挂账收口前置：git 状态澄清
+- origin/main 已是 `a46c290`（含此前全部 43 个 docs/修复提交，上个会话已合并推送）；本地 main 同步无落后
+- **origin/zhiqiu/dev 落后本地 43 个提交**（远端分支自 10-06 后从未跟上）→ 本轮一并快进推送
+
+### P0-1 实现（路线图第一项：留存生死线）
+1. **服务端**（mock_api.py）：`MEM_PATTERNS` 新增「大事」正则（下周要考试/月底交稿/明天面试等近事件，整段短语作值）+ `_clean_name` 尾部废话词清洗（"阿秋就行"→"阿秋"，与昵称共用）+ 会话 `turns` 计数（危机/元问题不计轮）+ 确定性引导 hook：无昵称且 ≤4 轮问称呼 → 无大事且 ≤8 轮问大事 → 已有记忆/超轮退回常规随机 hook
+2. **前端**（api.js）：浏览器持久会话 ID `xiaoman_sid`（localStorage 惰性生成，清 localStorage 即重置身份）随 mock 请求上送——服务端借此隔离记忆与引导轮次
+3. **再访引用**（app.js）：greet 开场追加"对了，你上次说{大事}——怎么样啦？我一直记着呢"（大事优先，宠物次之）——**"记忆被使用的感觉"**，路线图自查薄弱环节第 1 条的正解
+4. **钉子户扩充**（memory.js）：PIN_KEYS + 大事 + 宠物（开场引用源，永远注入）
+5. **离线兜底**（mock_engine.js）：同源实现（模块级 flags 递进，刷新重置可接受）
+
+### 验收（本机实跑全绿）
+- **test_onboarding.py 9/9**：首访无引用 ✓ 称呼引导 hook ✓ 昵称落库(清洗) ✓ 大事引导 hook ✓ 大事落库(清洗) ✓ 宠物落库 ✓ **钉子户 3 条仅用 4 轮（≤10 轮口径）** ✓ 再访 greet 引用（"阿秋，晚上好呀…对了，你上次说下周要考试——怎么样啦？我一直记着呢"）✓ 零 JS 错误/无 HTTP≥400 ✓ → 截图 `docs/shots/12_p01_onboarding_greet.png`
+- 全套回归：mock 契约 **8/8** · 生命线 UI **5/5** · E2E **5/5**（TTS 实打 :8903、12356、记忆清空）· verify_tts **3/3**（mp3 21168B→ASR 全对→PASS）· dev_down 端口全清
+
+### 插曲（记录待观察）
+- 测试中段三服务突然全灭（lifeline 跑完→e2e 起跑时 curl 000，进程消失）——重启 dev_up 后全绿复现通过。疑似沙箱空闲进程回收（非代码问题：重启即恢复、全套再验绿）。**后续每小时续跑若再遇"服务未就绪"，先 curl 三 health 再判断，别急着改代码**
+- 顺手清理：`server/__pycache__/*.pyc` 误跟踪 2 文件去跟踪（.gitignore 已覆盖，历史残留）
+
+### 遗留（下一步）
+- [ ] zhiqiu/dev 推送后 **CI 验证**（build-apk/web-tests/emulator-smoke），绿了才合 main（main 只收已验证内容）
+- [ ] 路线图下一项：**P0-2 主动引用记忆**（对话中自然回提用户既有事实——“你上次说的那个 XX”，验收口径：注入测试集召回引用率 ≥80% 不张冠李戴）
+
+触及：server/mock_api.py · web/js/api.js · web/js/app.js · web/js/memory.js · web/js/mock_engine.js · scripts/test_onboarding.py（新增）· docs/shots/12（新增）+ 07–11（再生成）· __pycache__（去跟踪）· docs/DEVLOG.md（本条）
+
+---
+
 ## 2026-10-10 · 晚间环境升级：DSH 解锁 shell 执行 + 迭代引擎上线（用户指示）
 
 - **DSH 升级** `0.2.0-rc.2 → 0.2.1-alpha.2`（npm latest 为 rc.2，alpha 更新；沙箱网络慢，安装 ~20min）
