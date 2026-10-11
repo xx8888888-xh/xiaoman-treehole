@@ -29,7 +29,7 @@
 - 备份：pre_p21_selfnarr（P2-1 前）
 - 贡献记录：docs/CONTRIBUTIONS.md（新建，用户指令①；P2-1/P2-4 条目已入账，此后每步追加）
 
-→ 下一步：全套回归绿后提交推送 zhiqiu/dev → CI → main 合并 → Android 原生悬浮窗（Service+overlay）列为后续项
+→ **闭环补记（10:3x）**：f09b424 CI 四绿（build-apk/web-tests/emulator-smoke success，本轮 emulator 仅 6 分钟）→ main 快进合并并推送 → **三方 ref 一致 f09b424，P2-1 + P2-4 完整闭环**。Android 原生悬浮窗（Service+overlay 权限）留作后续项（路线图 §P2-4 已标注）。
 
 ---
 
