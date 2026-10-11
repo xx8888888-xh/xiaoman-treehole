@@ -199,8 +199,11 @@ async def main():
                 if n_now > n_before + 1 and stable >= 3:
                     break
             m = await pg.evaluate("() => JSON.parse(localStorage.getItem('xiaoman_memory') || '{}')")
-            ok7b2 = m.get("宠物") == "橘猫"
-            print("⑦b-2 端到端记忆不劣化:", "PASS 宠物=橘猫" if ok7b2 else f"FAIL 宠物={m.get('宠物')!r}")
+            # P3-1 期望值更新：输入"橘猫叫团子"→ group3 宠物名提取（名字比品种更该记，
+            # greet 引用"你家团子"比"你家橘猫"自然）。⑦b-2 本意=泛指"那只猫"不劣化
+            # 具体值——具体值现为名字"团子"，守卫语义不变
+            ok7b2 = m.get("宠物") == "团子"
+            print("⑦b-2 端到端记忆不劣化:", "PASS 宠物=团子" if ok7b2 else f"FAIL 宠物={m.get('宠物')!r}")
             check("⑦b-2 端到端记忆不劣化", ok7b2)
 
             # —— ⑦c 老板姓名守卫（P0-2 遗留守卫 II：前端判定单测 + 端到端垃圾句不劣化） ——

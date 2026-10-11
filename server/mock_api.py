@@ -47,8 +47,9 @@ CRISIS_RE = re.compile(
 LEX = {
     # P0-3 关系连续性：更新查询入口（Replika 式"你变了"温柔接住 → 播报更新记录）
     # 主语收紧防误伤：你(?!们)——"你们老板更新了周报模板"不触发；裸"变"不触发（"你变漂亮了"落 happy）
+    # P3-1 补"有什么|有啥"：体检证据 L59-61"你最近有什么更新吗"未触发（可选前缀组缺该词）
     "update_query": re.compile(
-        r"你(?!们)(?:今天|最近|好像|感觉|有点|怎么|是不是|的|了|变|得)*?(更新|升级|变了|版本|怪)|不像以前|更新记录"),
+        r"你(?!们)(?:今天|最近|好像|感觉|有点|怎么|是不是|有什么|有啥|的|了|变|得)*?(更新|升级|变了|版本|怪)|不像以前|更新记录"),
     "work":   re.compile(r"(加班|老板|上班|工作|方案|开会|离职|辞职|绩效|KPI|甲方|改稿)"),
     "love":   re.compile(r"(分手|前任|失恋|男朋友|女朋友|暗恋|表白|相亲|脱单|异地)"),
     "lonely": re.compile(r"(一个人|孤独|没人|无聊|空虚|没人陪|没朋友)"),
@@ -105,7 +106,14 @@ DEPRESS_ESC = [
 MEM_PATTERNS = [
     ("昵称", re.compile(r"(我叫|叫我|你可以叫我)\s*([一-龥A-Za-z]{1,4})(?=\b|[，。！？,.!?\s]|$)")),
     ("老板", re.compile(r"(我们?|我的)\s*(老板|领导|上司)\s*([一-龥a-zA-Z]{1,6})")),
-    ("宠物", re.compile(r"((?:我家|我)?养?的?(?:了)?[一两]?[只条个]?\s*)([一-龥]{0,3}(?:猫|狗|兔)子?)")),
+    # P3-1 group3 宠物名（"我家猫叫年糕，三岁"→"年糕"）：名字信息此前被丢弃，
+    # 导致"你猜我家年糕在干嘛"无记忆可接。优先名字，无名字回退基词泛指；
+    # 边界=[标点/空格/数字/句尾]防贪婪（"叫年糕今年三岁"连写噪声可容忍）
+    ("宠物", re.compile(
+        r"((?:我家|我)?养?的?(?:了)?[一两]?[只条个]?\s*)"
+        r"([一-龥]{0,3}(?:猫|狗|兔)子?)"
+        r"(?:\s*(?:叫|名字?叫|取名叫|取名)\s*([一-龥A-Za-z]{1,4})(?=[，。！？,.!?\s\d]|$))?"),
+    ),
     ("在忙", re.compile(r"(我在|正在)\s*(加班|赶稿|开会|搬家|复习|写论文)")),
     ("大事", re.compile(
         r"((?:下周|下个月|下学期|明天|后天|这?周五|这?周六|这?周日|月底|年底|马上|快)\s*"
@@ -127,6 +135,25 @@ def _clean_name(v):
         if v.endswith(suf) and len(v) > len(suf):
             return v[:-len(suf)]
     return v
+
+# ---------------- P3-1 宠物值前缀动词清洗（三端同源表） ----------------
+# 体检证据（ux_audit_transcript L45）："你喜欢猫还是狗呀"被宠物正则提取为
+# "你喜欢猫"（[一-龥]{0,3} 把"你喜欢"当品种修饰词误捕；问句主语是"你"=小满，
+# 本不该入库），且覆盖了先存的"猫"，最终 greet 拼出病句"你家你喜欢猫"。
+# 修法：前缀 token 循环剥离（"你"与动词都可剥）→"猫"→ 泛指守卫天然阻止覆盖。
+PET_PREFIX_VERBS = ("喜欢", "讨厌", "不想", "打算", "爱", "想", "要", "你", "您")
+
+def _clean_pet(val):
+    # 循环剥离："你喜欢猫"→"喜欢猫"→"猫"；len>len(verb) 保证至少留 1 字（基词）
+    # 无 token 可剥时 for-else 跳出 while（值含品种修饰词如"橘猫"则原样保留）
+    while len(val) > 1:
+        for verb in PET_PREFIX_VERBS:
+            if val.startswith(verb) and len(val) > len(verb):
+                val = val[len(verb):]
+                break
+        else:
+            break
+    return val
 
 # ---------------- P0-2 遗留守卫：泛指不覆盖具体（提取层信息劣化防护） ----------------
 # 现象：已存"橘猫"后用户说"我家那只猫拆家了"，宠物正则的 group2 会把
@@ -189,11 +216,17 @@ def extract_memory(text, old):
                 val = (m.group(3) or m.group(2) or "").strip()
             elif key == "大事":
                 val = (m.group(1) or "").strip()
+            elif key == "宠物":
+                # P3-1：优先宠物名（group3"年糕"），无名字回退基词泛指（"猫"）
+                val = (m.group(3) or m.group(2) or "").strip()
             else:
                 val = (m.group(2) or m.group(1) or "").strip()
             # P0-2 对齐：所有键统一尾缀清洗（与前端 cleanName 同源同表）——
             # 语气尾缀词不进记忆值（"我们老板张三吧"→"张三"，前后端口径一致）
             val = _clean_name(val)
+            # P3-1 宠物值前缀动词清洗（三端同源）："喜欢猫"→"猫"，防 greet 病句
+            if key == "宠物":
+                val = _clean_pet(val)
             if key == "老板":
                 # P0-2 遗留守卫 II：谓语截断 + 姓名可信度。垃圾（"又骂我"）→
                 # 转基词占位（g2 恒为 老板/领导/上司）；可信姓名（"王总"）保持
@@ -238,6 +271,49 @@ RECALL_TEMPLATES = {
 RECALL_EXTRACT_GAP = 3  # 闸门0：提取后至少隔 3 轮才可回提（"你上次说"须指向足够久之前，防复读感）
 RECALL_COOLDOWN = 6    # 闸门1：同记忆两次回提间隔 ≥6 轮（"从未被引用"视为通过）
 RECALL_MAX = 4         # 闸门2：每会话回提总次数上限（含 greet 开场引用；频控哲学与心跳一致）
+
+# ---------------- P3-1 记忆感知回复：用户主动提已存具体记忆值 ----------------
+# 体检证据（ux_audit_transcript L53-57）："你猜我家年糕现在在干嘛"（年糕=已存
+# 记忆）回复走通用追问池完全无感知。用户主动给记忆回访机会时，小满应自然接住。
+# 模板 {v}=记忆值原文嵌入（零虚构铁律延伸）；频控=同键 3 轮冷却（防句句带记忆的刻意感）
+MEM_AWARE_POOL = {
+    "宠物": [
+        "{v}这会儿肯定又赖在你腿上打呼噜了吧||它最近还这么粘人？",
+        "{v}又干嘛呢||它今天乖不乖？",
+        "哈哈{v}||它是不是又干了什么让你想吐槽的事",
+    ],
+    "大事": [
+        "{v}这事你刚提，又有新进展了？||快说，我一直记着呢",
+        "{v}……怎么样了？我可是惦记着的",
+    ],
+    "老板": [
+        "{v}又怎么了？||该不会又作妖了吧",
+        "说吧，{v}这次又整什么幺蛾子",
+    ],
+    "在忙": [
+        "{v}还没忙完呀？||悠着点，别把自己耗干了",
+    ],
+}
+MEM_AWARE_COOLDOWN = 3  # 同键记忆感知间隔轮数
+
+def _match_memory_value(memories, user_text, sess):
+    """用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ (键, 值) 或 None。
+    同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。"""
+    if not memories or not user_text:
+        return None
+    turn = sess.get("turns", 0)
+    hits = sess.setdefault("mem_aware_ts", {})
+    for k, v in memories.items():
+        if not v or len(v) < 2 or k == "昵称":
+            continue
+        if k == "宠物" and _pet_generic(v):
+            continue
+        if v in user_text:
+            if turn - hits.get(k, -99) < MEM_AWARE_COOLDOWN:
+                return None
+            hits[k] = turn
+            return k, v
+    return None
 
 def _pick_recall(memories, mem_updates, topic, user_text, sess, turn):
     """P0-2 回提决策：返回 (hook 文本, 命中键) 或 (None, None)。确定性触发，不掷骰子。
@@ -330,6 +406,10 @@ TOPIC = {
         "嗯嗯，我在听||然后呢，说说细节",
         "啊这……有点意思||接着说，我好奇后续",
         "好耶||不对，先问一句：这是好事还是破事，我好决定跟你一起高兴还是一起骂",
+        # P3-1 池扩容（体检：3 条池连续两轮一字不差复读）：
+        "等等，这个我得想一下||……好了，你接着说，我在听",
+        "哈哈行，你这个说法很你||然后呢？我想听下文",
+        "嗯……让我猜猜，这事儿对你还挺重要||说说看，我猜得准不准",
     ],
 }
 HOOKS = {
@@ -489,7 +569,32 @@ def make_reply(messages, session_id=None):
         _STATE.update_memories(session_id, mem_updates)
 
     pool = TOPIC.get(topic, TOPIC["generic"])
-    reply = random.choice(pool)
+    # P3-1 记忆感知：用户主动提已存具体记忆值（"你猜我家年糕在干嘛"）→
+    # 该键偏置记忆感知池（值原文嵌入，零虚构）；频控=同键 3 轮冷却防刻意感
+    sess = _STATE.get_session(session_id)
+    memories_now = _STATE.get_memories(session_id)
+    # P3-1 体检复跑发现：greet 开场引用文本含记忆值（"你家年糕最近乖不乖"）会
+    # 误烧记忆感知冷却（引用≠用户主动提，不该计入）→ greet 轮跳过记忆感知，
+    # greet 池+开场引用自身已保证不冷场
+    mem_aware = None if topic == "greet" else _match_memory_value(memories_now, user_text, sess)
+    if mem_aware:
+        k_aware, v_aware = mem_aware
+        aware_pool = [t.replace("{v}", v_aware) for t in MEM_AWARE_POOL.get(k_aware, [])]
+        if aware_pool:
+            pool = aware_pool  # topic 保持原值（last_topic/@CTX/EMO_MAP 不受影响）
+    # P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行
+    recent = sess.setdefault("recent_replies", [])
+    reply = None
+    for _ in range(len(pool)):
+        cand = random.choice(pool)
+        if cand not in recent[-2:]:
+            reply = cand
+            break
+    if reply is None:
+        reply = random.choice(pool)
+    recent.append(reply)
+    if len(recent) > 4:
+        del recent[0]
     # @CTX：上下文感知——上一轮若刚聊过负面话题，把回复模板绑到该语境
     if reply.startswith("@CTX|"):
         ctx = _STATE.get_last_topic(session_id)

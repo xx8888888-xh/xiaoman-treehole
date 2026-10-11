@@ -36,7 +36,8 @@ const MockEngine = (() => {
   const LEX = {
     // P0-3 关系连续性：更新查询入口（与 mock_api.py 同源同正则；
     // 主语收紧防误伤："你们老板更新了周报模板"不触发，"你变漂亮了"落 happy）
-    update_query: /你(?!们)(?:今天|最近|好像|感觉|有点|怎么|是不是|的|了|变|得)*?(更新|升级|变了|版本|怪)|不像以前|更新记录/,
+    // P3-1 补"有什么|有啥"（与服务端同步）：体检"你最近有什么更新吗"未触发
+    update_query: /你(?!们)(?:今天|最近|好像|感觉|有点|怎么|是不是|有什么|有啥|的|了|变|得)*?(更新|升级|变了|版本|怪)|不像以前|更新记录/,
     work:     /(加班|老板|上班|工作|方案|开会|离职|辞职|绩效|KPI|甲方|改稿)/,
     love:     /(分手|前任|失恋|男朋友|女朋友|暗恋|表白|相亲|脱单|异地)/,
     lonely:   /(一个人|孤独|没人|无聊|空虚|没人陪|没朋友)/,
@@ -193,7 +194,11 @@ const MockEngine = (() => {
     generic: [
       "嗯嗯，我在听||然后呢，说说细节",
       "啊这……有点意思||接着说，我好奇后续",
-      "好耶||不对，先问一句：这是好事还是破事，我好决定跟你一起高兴还是一起骂"
+      "好耶||不对，先问一句：这是好事还是破事，我好决定跟你一起高兴还是一起骂",
+      // P3-1 池扩容（体检：3 条池连续两轮一字不差复读；与服务端同步）：
+      "等等，这个我得想一下||……好了，你接着说，我在听",
+      "哈哈行，你这个说法很你||然后呢？我想听下文",
+      "嗯……让我猜猜，这事儿对你还挺重要||说说看，我猜得准不准",
     ]
   };
   const HOOKS = {
@@ -213,7 +218,10 @@ const MockEngine = (() => {
   const MEM_PATTERNS = [
     ["昵称", /(我叫|叫我|你可以叫我)\s*([一-龥A-Za-z]{1,4})(?=\b|[，。！？,.!?\s]|$)/],
     ["老板", /(我们?|我的)\s*(老板|领导|上司)\s*([一-龥a-zA-Z]{0,6})/],
-    ["宠物", /((?:我家|我)?养?的?(?:了)?[一两]?[只条个]?\s*)([一-龥]{0,3}(?:猫|狗|兔)子?)/],
+    // P3-1 group3 宠物名（"我家猫叫年糕，三岁"→"年糕"；与服务端同步）：
+    // 名字信息此前被丢弃，导致"你猜我家年糕在干嘛"无记忆可接。
+    // 优先名字，无名字回退基词泛指；边界=[标点/空格/数字/句尾]防贪婪
+    ["宠物", /((?:我家|我)?养?的?(?:了)?[一两]?[只条个]?\s*)([一-龥]{0,3}(?:猫|狗|兔)子?)(?:\s*(?:叫|名字?叫|取名叫|取名)\s*([一-龥A-Za-z]{1,4})(?=[，。！？,.!?\s\d]|$))?/],
     ["在忙", /(我在|正在)\s*(加班|赶稿|开会|搬家|复习|写论文)/],
     // P0-1 大事：整段匹配作值（m[1]；正则仅一个捕获组，m[2] undefined → 取 m[1]）
     ["大事", /((?:下周|下个月|下学期|明天|后天|这?周五|这?周六|这?周日|月底|年底|马上|快)?\s*(?:要|得|准备|打算)?\s*(?:考试|月考|期中考试|期末考试|期中|期末|中考|高考|考研|复试|答辩|面试|搬家|入职|报到|交稿|交报告|交方案|比赛|演出|体检|领证)(?:啦|了)?)/]
@@ -236,6 +244,58 @@ const MockEngine = (() => {
   };
   const RECALL_EXTRACT_GAP = 3, RECALL_COOLDOWN = 6, RECALL_MAX = 4;
   let memHits = {}, memExtracted = {}, recallCount = 0;
+
+  // ---------------- P3-1 记忆感知回复：用户主动提已存具体记忆值（与 mock_api.py/MEM_AWARE_POOL 同源同表） ----------------
+  // 体检证据（ux_audit_transcript L53-57）："你猜我家年糕在干嘛"（年糕=已存记忆）
+  // 回复走通用追问池完全无感知。用户主动给记忆回访机会时，小满应自然接住。
+  // 模板 {v}=记忆值原文嵌入（零虚构铁律延伸）；频控=同键 3 轮冷却（防句句带记忆的刻意感）
+  const MEM_AWARE_POOL = {
+    "宠物": [
+      "{v}这会儿肯定又赖在你腿上打呼噜了吧||它最近还这么粘人？",
+      "{v}又干嘛呢||它今天乖不乖？",
+      "哈哈{v}||它是不是又干了什么让你想吐槽的事"
+    ],
+    "大事": [
+      "{v}这事你刚提，又有新进展了？||快说，我一直记着呢",
+      "{v}……怎么样了？我可是惦记着的"
+    ],
+    "老板": [
+      "{v}又怎么了？||该不会又作妖了吧",
+      "说吧，{v}这次又整什么幺蛾子"
+    ],
+    "在忙": [
+      "{v}还没忙完呀？||悠着点，别把自己耗干了"
+    ]
+  };
+  const MEM_AWARE_COOLDOWN = 3;
+  let memAwareTs = {};
+  let recentReplies = [];  // P3-1 近轮去重：近 2 轮已用回复（模块级，刷新重置与 onb 同限制）
+  /** 用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ [键, 值] 或 null。
+   *  同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
+   *  prior=当前轮之前的记忆（reply 约定：history 末尾即当前轮）。
+   *  P3-1 体检复跑修正：内存 history reload 即失忆，而 greet 引用用的是
+   *  xiaoman_memory（localStorage 持久）——两源合并（stored 先、prior 后，
+   *  同 session 内最新扫描值优先；reload 后 stored 兜底），记忆感知跨 reload 生效，
+   *  与服务端 session 持久记忆天然对齐。node 直调无 localStorage 时 try 降级。 */
+  function matchMemoryValue(prior, userText) {
+    const merged = {};
+    try {
+      const stored = JSON.parse(localStorage.getItem("xiaoman_memory") || "{}") || {};
+      Object.assign(merged, stored);
+    } catch (e) { /* 无 localStorage（node 测试）→ 退化为 history 扫描 */ }
+    Object.assign(merged, prior || {});
+    for (const [k, raw] of Object.entries(merged)) {
+      const v = String(raw);
+      if (!v || v.length < 2 || k === "昵称") continue;
+      if (k === "宠物" && petGeneric(v)) continue;
+      if (userText.includes(v)) {
+        if (onbTurns - (memAwareTs[k] ?? -99) < MEM_AWARE_COOLDOWN) return null;
+        memAwareTs[k] = onbTurns;
+        return [k, v];
+      }
+    }
+    return null;
+  }
   /** 泛指宠物值判定（与 mock_api.py/_pet_generic 同源）："那只猫/我家猫/一只狗"→true；
    *  "橘猫/英短猫/金毛狗"→false。泛指=零信息量，覆盖旧具体值属于信息劣化 */
   function petGeneric(v) {
@@ -288,9 +348,11 @@ const MockEngine = (() => {
     for (const [key, re] of MEM_PATTERNS) {
       const m = text.match(re);
       if (m) {
-        // 老板取 m[3]（姓名组，与服务端 group3 同口径）；大事 m[1]；其余 m[2]
-        let v = key === "老板" ? (m[3] || m[2] || "") : (m[2] || m[1] || "");
+        // 老板/宠物取 m[3]（姓名/宠物名组，与服务端 group3 同口径）；大事 m[1]；其余 m[2]
+        let v = (key === "老板" || key === "宠物") ? (m[3] || m[2] || "") : (m[2] || m[1] || "");
         v = cleanName(v.trim());
+        // P3-1 宠物值前缀动词清洗（三端同源）："喜欢猫"→"猫"，防 greet 病句
+        if (key === "宠物") v = cleanPet(v);
         if (key === "老板") {
           // P0-2 遗留守卫 II：谓语截断+可信度（与服务端同源）。垃圾（"又骂我"）→
           // 转基词占位（m[2] 恒为 老板/领导/上司）；可信姓名（"王总"）保持
@@ -307,6 +369,27 @@ const MockEngine = (() => {
   function cleanName(v) {
     const SUFS = ["就行", "就好", "好了", "可以", "吧", "呀", "啦", "哈", "呢", "哦", "啊", "呗"];
     for (const suf of SUFS) if (v.endsWith(suf) && v.length > suf.length) return v.slice(0, -suf.length);
+    return v;
+  }
+
+  // ---------------- P3-1 宠物值前缀动词清洗（与 mock_api.py/PET_PREFIX_VERBS 三端同源表） ----------------
+  // 体检证据（ux_audit_transcript L45）："你喜欢猫还是狗呀"被宠物正则提取为
+  // "你喜欢猫"（[一-龥]{0,3} 把"你喜欢"当品种修饰词误捕），且覆盖了先存的"猫"，
+  // 最终 greet 拼出病句"你家你喜欢猫"。循环剥离（"你"与动词都可剥）→"猫"后
+  // 泛指守卫天然阻止覆盖（猫==猫 跳过）。
+  const PET_PREFIX_VERBS = ["喜欢", "讨厌", "不想", "打算", "爱", "想", "要", "你", "您"];
+  function cleanPet(v) {
+    while (v.length > 1) {
+      let peeled = false;
+      for (const verb of PET_PREFIX_VERBS) {
+        if (v.startsWith(verb) && v.length > verb.length) {
+          v = v.slice(verb.length);
+          peeled = true;
+          break;
+        }
+      }
+      if (!peeled) break;
+    }
     return v;
   }
 
@@ -337,7 +420,40 @@ const MockEngine = (() => {
       return { reply: relationReply(userText), emotion: "happy", motion: null, memory_updates: {}, hook: null, crisis: false };
 
     const topic = topicOf(userText);
-    let msg = pick(TOPIC[topic] || TOPIC.generic);
+    // P3-1：记忆提取/守卫提前（记忆感知需"本轮更新后"记忆，与服务端 memories_now 同口径）
+    onbTurns++;
+    const memUpdates = extractMemory(userText);
+    // 泛指不覆盖具体（P0-2 遗留守卫·返回值防线）：用当前轮之前的会话状态判定，
+    // 阻止"那只猫"式泛指值发给 app.js 覆盖 localStorage 里的具体值（"橘猫"）。
+    // prior=去掉当前 user 消息后的历史（reply 约定：history 末尾即当前轮）
+    const prior = recallMemories(history.slice(0, -1));
+    if (memUpdates["宠物"] && prior["宠物"] && petGeneric(memUpdates["宠物"]) && !petGeneric(prior["宠物"])) {
+      delete memUpdates["宠物"];
+    }
+    // 基词不覆盖姓名（P0-2 遗留守卫 II·返回值防线，与服务端 continue 同语义）：
+    // 已有可信姓名（"张三"）时，基词值不发给 app.js，防覆盖 localStorage 好值
+    if (memUpdates["老板"] && prior["老板"] && !bossNameOk(memUpdates["老板"]) && bossNameOk(prior["老板"])) {
+      delete memUpdates["老板"];
+    }
+    for (const k of Object.keys(memUpdates)) memExtracted[k] = onbTurns; // 闸门0数据
+    // P3-1 记忆感知：用户主动提已存具体记忆值（"你猜我家年糕在干嘛"）→
+    // 该键偏置记忆感知池（值原文嵌入，零虚构）；频控=同键 3 轮冷却防刻意感；
+    // greet 轮跳过（开场引用文本含记忆值会误烧冷却——引用≠用户主动提，与服务端同修）
+    const aware = topic === "greet" ? null : matchMemoryValue(Object.assign({}, prior, memUpdates), userText);
+    let pool = TOPIC[topic] || TOPIC.generic;
+    if (aware) {
+      const awarePool = (MEM_AWARE_POOL[aware[0]] || []).map(t => t.split("{v}").join(aware[1]));
+      if (awarePool.length) pool = awarePool;  // topic 保持原值（lastTopic/EMO_MAP 不受影响）
+    }
+    // P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行
+    let msg = null;
+    for (let i = 0; i < pool.length; i++) {
+      const cand = pick(pool);
+      if (!recentReplies.slice(-2).includes(cand)) { msg = cand; break; }
+    }
+    if (msg === null) msg = pick(pool);
+    recentReplies.push(msg);
+    if (recentReplies.length > 4) recentReplies.shift();
     if (msg.startsWith("@CTX|")) {
       const neg = ["work", "love", "family", "money"].includes(lastTopic);
       msg = neg ? msg.slice(5)
@@ -356,21 +472,7 @@ const MockEngine = (() => {
     const [emotion, motion] = EMO_MAP[topic] || ["neutral", null];
     // P0-1 首日引导：前几轮确定性引导（称呼→大事）
     // P0-2 主动回提：引导完成后接管（优先级：引导 > 回提 > 常规随机，与服务端同序）
-    onbTurns++;
-    const memUpdates = extractMemory(userText);
-    // 泛指不覆盖具体（P0-2 遗留守卫·返回值防线）：用当前轮之前的会话状态判定，
-    // 阻止"那只猫"式泛指值发给 app.js 覆盖 localStorage 里的具体值（"橘猫"）。
-    // prior=去掉当前 user 消息后的历史（reply 约定：history 末尾即当前轮）
-    const prior = recallMemories(history.slice(0, -1));
-    if (memUpdates["宠物"] && prior["宠物"] && petGeneric(memUpdates["宠物"]) && !petGeneric(prior["宠物"])) {
-      delete memUpdates["宠物"];
-    }
-    // 基词不覆盖姓名（P0-2 遗留守卫 II·返回值防线，与服务端 continue 同语义）：
-    // 已有可信姓名（"张三"）时，基词值不发给 app.js，防覆盖 localStorage 好值
-    if (memUpdates["老板"] && prior["老板"] && !bossNameOk(memUpdates["老板"]) && bossNameOk(prior["老板"])) {
-      delete memUpdates["老板"];
-    }
-    for (const k of Object.keys(memUpdates)) memExtracted[k] = onbTurns; // 闸门0数据
+    // （memUpdates/prior/守卫已 P3-1 前移至池选定前——记忆感知需要）
     let hook = null;
     if (!askedName && onbTurns <= 4) {
       hook = ONBOARD_NAME_HOOK;

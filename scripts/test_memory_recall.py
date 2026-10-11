@@ -874,6 +874,122 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
               f"js={norm(m_js.group(1))[:30] if m_js else '未匹配'} py={norm(m_py.group(1))[:30] if m_py else '未匹配'}")
 
 
+def g11_mem_aware_dedup():
+    """G11 P3-1 mock 链路活人感四组（用户体检修复包）：近轮去重/记忆感知/提取清洗/更新查询
+    证据与设计：docs/PRODUCT_ROADMAP.md §P3-1；体检 transcript docs/shots/ux_audit_transcript.txt
+    （L13-23 一字不差复读 / L45 "你喜欢猫"病句 / L53-57 年糕不被接住 / L59-61 更新查询未触发）"""
+    # ── G11-1 近轮去重（服务端）：连续 4 轮 generic 消息无相邻复读 ──
+    sid = "p31-g1-" + uuid.uuid4().hex
+    replies = [chat(t, sid)["reply"] for t in
+               ["今天路过一家新开的面馆", "中午吃了个蛮好吃的牛肉面",
+                "下午去公园溜达了一圈", "晚上刷了会儿视频"]]
+    dup = [i for i in range(3) if replies[i] == replies[i + 1]]
+    check("G11-1 连续4轮无相邻复读(服务端)", not dup,
+          " | ".join(r[:16] for r in replies))
+
+    # ── G11-2 记忆感知（服务端）：介绍轮即时接住 + 冷却频控 + 回访接住 ──
+    sid = "p31-g2-" + uuid.uuid4().hex
+    r1 = chat("我家猫叫年糕，三岁了，特别粘人", sid)
+    check("G11-2① 介绍轮即时接住宠物名", "年糕" in r1.get("reply", ""), r1.get("reply", "")[:40])
+    r2 = chat("年糕真可爱呀", sid)
+    check("G11-2② 冷却窗口内不刻意复读", "年糕" not in r2.get("reply", ""), r2.get("reply", "")[:40])
+    for t in ("今天天气还行", "中午随便吃了点", "下午刷了会儿手机"):
+        chat(t, sid)
+    r5 = chat("你猜我家年糕现在在干嘛", sid)
+    check("G11-2③ 冷却后回访被接住", "年糕" in r5.get("reply", ""), r5.get("reply", "")[:40])
+    # G11-2④ greet 开场引用不烧冷却（体检复跑发现：greet 文本含"年糕"曾误计冷却，
+    # 致紧邻回访走 generic——修法= greet 轮跳过记忆感知，两端同修）
+    sid2 = "p31-g2b-" + uuid.uuid4().hex
+    chat("我家猫叫年糕，三岁了", sid2)                 # 轮1 触发 hits=1
+    for t in ("今天天气还行", "中午随便吃了点", "下午刷了会儿手机"):
+        chat(t, sid2)                                  # 轮2-4 填充
+    chat("晚上好，年糕睡了吗", sid2)                   # 轮5 greet（文本含年糕，跳过记录）
+    r6 = chat("你猜我家年糕现在在干嘛", sid2)          # 轮6：不烧则 5-1=4≥3 触发；烧则 1<3 冷却
+    check("G11-2④ greet引用不烧冷却(紧邻回访接住)", "年糕" in r6.get("reply", ""), r6.get("reply", "")[:40])
+
+    # ── G11-3 提取清洗（服务端）：宠物名提取 + 前缀动词清洗 + 不覆盖 + 回提干净值 ──
+    # 编排注意：onboard hook（问称呼/问大事，轮1-2）优先于回提 hook，需先铺垫消耗掉
+    sid = "p31-g3-" + uuid.uuid4().hex
+    chat("叫我小林", sid)                      # 轮1 hook=问称呼
+    ra = chat("我家猫叫年糕，三岁了", sid)      # 轮2 hook=问大事；宠物=年糕入库
+    check("G11-3① 宠物名提取(group3)", ra.get("memory_updates", {}).get("宠物") == "年糕",
+          json.dumps(ra.get("memory_updates", {}), ensure_ascii=False))
+    chat("下周要期中考试", sid)                # 轮3 大事入库（答 onboard）
+    rb = chat("你喜欢猫还是狗呀", sid)         # 轮4 清洗断言
+    check("G11-3② 前缀清洗+泛指不覆盖(喜欢猫→猫不覆盖年糕)",
+          "宠物" not in rb.get("memory_updates", {}),
+          json.dumps(rb.get("memory_updates", {}), ensure_ascii=False))
+    for t in ("今天出门走了走", "中午吃了碗粉"):
+        chat(t, sid)                           # 轮5-6 填充（闸门0：提取隔≥3轮）
+    rc = chat("路过宠物店看了一眼", sid)       # 轮7 宠物话题→回提 hook 应含干净值"年糕"
+    blob = (rc.get("hook") or "") + (rc.get("reply") or "")
+    check("G11-3③ 回提用干净值(年糕)", "年糕" in blob and "喜欢猫" not in blob,
+          (rc.get("hook") or "")[:36])
+
+    # ── G11-4 更新查询自然问法（服务端）：前缀组补"有什么|有啥"后触发播报 ──
+    sid = "p31-g4-" + uuid.uuid4().hex
+    d1 = chat("你最近有什么更新吗", sid)
+    check("G11-4① 有什么变体触发更新播报", "最近更新就这几条" in d1.get("reply", ""),
+          d1.get("reply", "")[:40])
+    d2 = chat("你有啥更新", "p31-g4b-" + uuid.uuid4().hex)
+    check("G11-4② 有啥变体同触发", "最近更新就这几条" in d2.get("reply", ""),
+          d2.get("reply", "")[:40])
+
+    # ── G11-5 离线引擎同款（node 直调，仿 G3 加载方式） ──
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const src = fs.readFileSync(ROOT + '/web/js/mock_engine.js', 'utf8');
+const MockEngine = new Function('window', src + '; return MockEngine;')(undefined);
+const out = [];
+const say = (history, t) => {
+  history.push({role: 'user', content: t});
+  const r = MockEngine.reply(history);
+  history.push({role: 'assistant', content: r.reply + (r.hook ? '||' + r.hook : '')});
+  return r;
+};
+// G11-5①②③ 记忆感知（与 G11-2 服务端三态同款）
+const H = [];
+const r1 = say(H, '我家猫叫年糕，三岁了，特别粘人');
+out.push({n: 'G11-5① 介绍轮即时接住(离线)', ok: r1.reply.includes('年糕'), info: r1.reply.slice(0, 40)});
+const r2 = say(H, '年糕真可爱呀');
+out.push({n: 'G11-5② 冷却内不刻意(离线)', ok: !r2.reply.includes('年糕'), info: r2.reply.slice(0, 40)});
+say(H, '今天天气还行'); say(H, '中午随便吃了点'); say(H, '下午刷了会儿手机');
+const r5 = say(H, '你猜我家年糕现在在干嘛');
+out.push({n: 'G11-5③ 冷却后回访接住(离线)', ok: r5.reply.includes('年糕'), info: r5.reply.slice(0, 40)});
+// G11-5④ 近轮去重（与 G11-1 同款 4 句）
+const H2 = [];
+const rs = ['今天路过一家新开的面馆', '中午吃了个蛮好吃的牛肉面',
+            '下午去公园溜达了一圈', '晚上刷了会儿视频'].map(t => say(H2, t).reply);
+out.push({n: 'G11-5④ 连续4轮无相邻复读(离线)',
+          ok: rs[0] !== rs[1] && rs[1] !== rs[2] && rs[2] !== rs[3],
+          info: rs.map(s => s.slice(0, 12)).join(' | ')});
+// G11-5⑤⑥ 提取清洗（与 G11-3 服务端同款）
+const H3 = [];
+const ra = say(H3, '我家猫叫年糕，三岁了');
+out.push({n: 'G11-5⑤ 宠物名提取(离线)', ok: (ra.memory_updates || {})['宠物'] === '年糕',
+          info: JSON.stringify(ra.memory_updates)});
+const rb = say(H3, '你喜欢猫还是狗呀');
+out.push({n: 'G11-5⑥ 前缀清洗+不覆盖(离线)', ok: !('宠物' in (rb.memory_updates || {})),
+          info: JSON.stringify(rb.memory_updates)});
+// G11-5⑦ 更新查询自然问法（与 G11-4 服务端同款）
+const rd = say(H3, '你最近有什么更新吗');
+out.push({n: 'G11-5⑦ 更新播报自然问法(离线)', ok: rd.reply.includes('最近更新就这几条'),
+          info: rd.reply.slice(0, 36)});
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G11-5 离线引擎可加载", False, (p.stderr or p.stdout)[-200:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G11-5 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -883,7 +999,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx, g9_self_narrative, g10_depress_signal):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx, g9_self_narrative, g10_depress_signal, g11_mem_aware_dedup):
         try:
             fn()
         except Exception as e:
