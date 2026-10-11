@@ -399,6 +399,7 @@ const App = (() => {
       // 滑动窗口：保留最近 MAX_HISTORY 条
       if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
       bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
+      if (window.Stats) Stats.bump(text);   // P2-1：小本本计数（真实数据，自我叙事素材）
 
       // 危机拦截（客户端先行，服务端还有一道）
       if (CRISIS_RE.test(text)) {
@@ -508,6 +509,14 @@ const App = (() => {
       // 表情 + 动作
       if (data.emotion) Stage.setEmotion(data.emotion);
       if (data.motion && data.motion !== "null") Stage.playMotion(data.motion);
+
+      // P2-4 挂件模式：提醒/消息从挂件气泡播报；提醒伴随摆手（复用 Shake 动作组）
+      if (window.Widget && Widget.active && limitedParts.length) {
+        // 提醒显示第一段（含"该喝水了"内容），普通消息显示末段（口语落点）
+        const bubbleText = data.kind === "reminder" ? limitedParts[0] : limitedParts[limitedParts.length - 1];
+        Widget.notify(bubbleText);
+        if (data.kind === "reminder") Widget.wiggle("Shake");
+      }
 
       // 记忆：双写（旧抽屉 + 新索引库）
       if (data.memory_updates && Object.keys(data.memory_updates).length) {
@@ -750,6 +759,8 @@ const App = (() => {
     $("stage").addEventListener("keydown", e => {
       if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") { e.preventDefault(); onPoke("head"); }
     });
+    // P2-4 悬浮挂件：收起按钮 + 点挂件展开（widget.js 内部绑定 stage 点击）
+    if (window.Widget) Widget.bind();
   }
 
   function init() {

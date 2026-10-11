@@ -462,6 +462,132 @@ async def main():
             check("⑦g-6 跨会话注回+补话清队", ok_g6)
             await ctx2.close()
 
+            # —— ⑦h 小满的自我叙事（P2-1：真实 bump 链路 + 叙事消息数字零虚构 + 零报错） ——
+            ctx3 = await b.new_context(viewport={"width": 390, "height": 844})
+            pg3 = await ctx3.new_page()
+            err_h = []
+            pg3.on("pageerror", lambda e: err_h.append(str(e)))
+            await pg3.goto(BASE, wait_until="domcontentloaded")
+            await pg3.wait_for_selector("#textInput", state="visible", timeout=15000)
+
+            # h-1 真实 bump 链路：发 3 条消息（2 条含哈哈）→ 小本本数字精确
+            for txt in ["哈哈哈今天好累", "你也是哈哈哈", "嗯"]:
+                await pg3.fill("#textInput", txt)
+                await pg3.click("#sendBtn")
+                await asyncio.sleep(1.2)   # 等 send 全链路（API=mock 回复）
+            snap_h = await pg3.evaluate("() => Stats.snapshot()")
+            ok_h1 = snap_h["msgs"] >= 3 and snap_h["haha"] == 2 and snap_h["days"] >= 1
+            print("⑦h-1 真实bump链路(msgs≥3/haha=2):",
+                  "PASS" if ok_h1 else f"FAIL {snap_h}")
+            check("⑦h-1 真实bump链路(msgs≥3/haha=2)", ok_h1)
+
+            # h-2 叙事消息生成：预置高数据 + debugPing 批量 → 数字与 localStorage 一致
+            narr = await pg3.evaluate(
+                """() => {
+                  localStorage.setItem('xiaoman_heartbeat_state', JSON.stringify({}));
+                  localStorage.setItem('xiaoman_memories_v1', '[]');
+                  const days = [];
+                  for (let i = 0; i < 12; i++) days.push(new Date(Date.now() - i*86400000).toDateString());
+                  localStorage.setItem('xiaoman_stats_v1', JSON.stringify(
+                    { msgs: 45, haha: 7, night: 3, days, emoji: {'🤣': 9} }));
+                  function xs(seed) { let s = (seed >>> 0) || 1; for (let i = 0; i < 3; i++) { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; }
+                    return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 4294967296; }; }
+                  const out = [];
+                  for (let i = 0; i < 30; i++) out.push(Heartbeat.offlineGenerate(xs(i * 13 + 7), new Date()));
+                  return {
+                    selfMsgs: out.filter(r => r.self).map(r => r.reply),
+                    uniq: new Set(out.map(r => r.id)).size,
+                  };
+                }""")
+            self_msgs = narr["selfMsgs"]
+            # A 层数字必须与预置一致（零虚构：7/12/3/9 只能来自真实小本本）
+            ok_h2 = any(("7次" in m or "12天" in m or "3次" in m or ("🤣" in m and "9次" in m)) for m in self_msgs)
+            print("⑦h-2 叙事消息数字零虚构:", f"PASS | 叙事{len(self_msgs)}条 | {self_msgs[0][:30]}…" if ok_h2
+                  else f"FAIL self={len(self_msgs)} {self_msgs[:2]}")
+            check("⑦h-2 叙事消息数字零虚构", ok_h2)
+
+            # h-3 30 连发零重复（叙事+记忆+通用池混合路径）
+            ok_h3 = narr["uniq"] == 30
+            print("⑦h-3 30连发零重复:", "PASS" if ok_h3 else f"FAIL uniq={narr['uniq']}/30")
+            check("⑦h-3 30连发零重复", ok_h3)
+
+            # h-4 叙事模板不虚构用户世界（浏览器侧同 G9-6 审计）
+            audit = await pg3.evaluate(
+                """() => {
+                  const texts = [...Heartbeat.ME_POOL,
+                    ...Object.values(Heartbeat.MEMSEE_TPL).map(f => f('测试值'))];
+                  const banned = /(你那边(?!天好吗|呢)|外面|天气|下雨|气温|你电脑|你手机)/;
+                  return texts.filter(t => banned.test(t));
+                }""")
+            ok_h4 = len(audit) == 0 and not err_h
+            print("⑦h-4 模板审计+零控制台错误:", "PASS" if ok_h4 else f"FAIL {audit} err={err_h}")
+            check("⑦h-4 模板审计+零控制台错误", ok_h4)
+            await pg3.screenshot(path=os.path.join(SHOTS, "18_p21_self_narrative.png"))
+            await ctx3.close()
+
+            # —— ⑦i Q 版悬浮挂件（P2-4：收起贴边/提醒播报+摆手/展开还原/零报错） ——
+            ctx4 = await b.new_context(viewport={"width": 390, "height": 844})
+            pg4 = await ctx4.new_page()
+            err_i = []
+            pg4.on("pageerror", lambda e: err_i.append(str(e)))
+            await pg4.goto(BASE, wait_until="domcontentloaded")
+            await pg4.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg4.wait_for_timeout(1500)   # 等模型加载
+
+            # i-1 收起成挂件：主 UI 隐藏，stage 缩成贴边圆形
+            await pg4.click("#widgetBtn")
+            await pg4.wait_for_timeout(600)
+            wi = await pg4.evaluate(
+                """() => ({
+                  active: window.__widgetActive === true,
+                  cls: document.body.classList.contains('widget-mode'),
+                  stagePos: getComputedStyle(document.getElementById('stage')).position,
+                  stageRounded: getComputedStyle(document.getElementById('stage')).borderRadius,
+                  chatHidden: getComputedStyle(document.getElementById('chatArea')).display === 'none',
+                })""")
+            ok_i1 = wi["active"] and wi["cls"] and wi["stagePos"] == "fixed" and wi["chatHidden"]
+            print("⑦i-1 收起成挂件(贴边圆形):", "PASS" if ok_i1 else f"FAIL {wi}")
+            check("⑦i-1 收起成挂件(贴边圆形)", ok_i1)
+            await pg4.screenshot(path=os.path.join(SHOTS, "19_p24_widget.png"))
+
+            # i-2 挂件播报提醒（真实链路：到期提醒 → Heartbeat.tick → pushFn → sendSplit → 气泡）
+            await pg4.evaluate(
+                """() => {
+                  localStorage.setItem('xiaoman_reminders_v1', JSON.stringify(
+                    [{id:'w1', text:'该喝水了', at: Date.now() - 5000, done: false}]));
+                  return Heartbeat.tick();
+                }""")
+            await pg4.wait_for_timeout(3000)
+            bub = await pg4.evaluate(
+                """() => {
+                  const b = document.getElementById('widgetBubble');
+                  return { shown: b.classList.contains('show'), text: (b.textContent || '').slice(0, 40) };
+                }""")
+            ok_i2 = bub["shown"] and "喝水" in bub["text"]
+            print("⑦i-2 挂件播报提醒+气泡:", f"PASS | {bub['text']}" if ok_i2 else f"FAIL {bub}")
+            check("⑦i-2 挂件播报提醒+气泡", ok_i2)
+
+            # i-3 摆手等可爱动作链路（复用 Shake 动作组，不报错即过）
+            await pg4.evaluate("() => Widget.wiggle('Shake')")
+            await pg4.wait_for_timeout(500)
+            ok_i3 = not err_i
+            print("⑦i-3 摆手动作链路:", "PASS" if ok_i3 else f"FAIL err={err_i}")
+            check("⑦i-3 摆手动作链路", ok_i3)
+
+            # i-4 点挂件展开回主界面（视图还原）
+            await pg4.click("#stage")
+            await pg4.wait_for_timeout(700)
+            wi2 = await pg4.evaluate(
+                """() => ({
+                  active: window.__widgetActive === false,
+                  cls: !document.body.classList.contains('widget-mode'),
+                  chatShown: getComputedStyle(document.getElementById('chatArea')).display !== 'none',
+                })""")
+            ok_i4 = wi2["active"] and wi2["cls"] and wi2["chatShown"] and not err_i
+            print("⑦i-4 展开还原主界面:", "PASS" if ok_i4 else f"FAIL {wi2}")
+            check("⑦i-4 展开还原主界面", ok_i4)
+            await ctx4.close()
+
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")
         finally:

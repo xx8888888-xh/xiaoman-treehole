@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-10-11 · 08:55–10:0x P2-1 收口 + P2-4 Q 版悬浮挂件（用户双指令轮）
+
+> 上轮挂账：P2-1 代码+G9 已完成但 E2E ⑦h 未写。用户 08:55 双指令：①从此每步在本地写明贡献（→ 新建 docs/CONTRIBUTIONS.md 价值账本）②新增悬浮窗功能（Q 版挂件/贴边/提醒播报/摆手动作/资源最省）。先收口 P2-1 再做 P2-4（用户确认顺序）。
+
+### P2-1 收口（E2E ⑦h 4 点）
+1. ⑦h-1 真实 bump 链路：发 3 条消息（2 条含哈哈）→ Stats.snapshot msgs≥3/haha=2 精确
+2. ⑦h-2 叙事数字零虚构：预置 stats → 30 连发中叙事消息数字与 localStorage 一致（"45句话"）
+3. ⑦h-3 30 连发零重复（叙事+记忆+通用池三路混合）
+4. ⑦h-4 浏览器侧模板审计（不虚构用户世界）+ 零控制台错误 → **E2E 29/29**
+5. 路线图 P2-1 标记已实现 + assets 同步（stats.js 新文件入 APK 面）
+
+### P2-4 悬浮挂件实现（用户新功能）
+- **设计定稿入路线图**（单 canvas 复用 = 资源最省，不下载新模型，见路线图 §P2-4）
+- `web/js/widget.js`（新）：enter/exit（body.widget-mode + Stage.focusHead/restoreView）、notify（挂件气泡 6s 自动收）、wiggle（复用 Shake/Greeting/Nod/HappyJump 动作组）、低频随机小动作（5-10 分钟，40% 配短气泡）、点挂件展开（capture 拦截不触发摸头）
+- `stage.js`：focusHead（头部特写 ×2.7 聚焦）/restoreView（savedView 精确还原）+ 挂件模式 resize 重聚焦
+- `app.js`：顶栏收起按钮接线 + sendSplit 挂件模式气泡播报（提醒取首段信息、普通消息取末段落点）+ 提醒伴随 Shake 摆手
+- `index.html`：#widgetBtn（收起 icon）+ #widgetBubble + widget.js 加载；`style.css`：挂件模式布局（84px 圆形贴边 + 入场动画）+ 气泡样式
+- **首跑 32/33**：⑦i-2 FAIL=气泡取末段口语而提醒内容在首段（"该喝水了"）→ 修为提醒类取信息段 → 快探针复验 PASS
+- E2E ⑦i 4 点：收起贴边圆形/挂件播报提醒+气泡/摆手链路/展开还原+零报错
+
+### 全套回归（后台串行）+ 收口
+- **全部通过**：契约 8/8 · onboarding 9/9 · 记忆 106/106（含 G9 22 点）· 生命线 5/5 · TTS 3/3 · E2E 33/33（⑦i 修复后全过）
+- 备份：pre_p21_selfnarr（P2-1 前）
+- 贡献记录：docs/CONTRIBUTIONS.md（新建，用户指令①；P2-1/P2-4 条目已入账，此后每步追加）
+
+→ 下一步：全套回归绿后提交推送 zhiqiu/dev → CI → main 合并 → Android 原生悬浮窗（Service+overlay）列为后续项
+
+---
+
 ## 2026-10-11 · 06:47–07:0x P1-3 免费模型限流排队收口（迭代引擎 06:47 轮，挂账续跑到闭环）
 
 > 续跑检查：P1-2（b7fa796）**已被上会话完整闭环**——CI 四绿（check-runs 实测 emulator-smoke/build-apk/web-tests success）+ origin/main 已合并，DEVLOG 顶部"下一步"为陈旧描述，本条目即补记确认。**新挂账**：工作区躺着 P1-3 完整 WIP（api.js +42 / app.js +72 / E2E ⑦g +132 / 截图 17 已产生）——上会话被切断。按铁律「没完成就继续」收口。备份 pre_p13_close（backup.sh 幂等前缀探测产出 pre_pre_p13_close_20261011_064807.tar.gz）。

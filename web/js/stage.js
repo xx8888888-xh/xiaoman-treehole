@@ -38,7 +38,10 @@ const Stage = (() => {
     resizeHandler = () => {
       const w = container.clientWidth, h = container.clientHeight;
       app.renderer.resize(w, h);
-      if (model) fit(w, h);
+      if (!model) return;
+      // P2-4：挂件模式下 resize 保持头部特写（容器缩到 84px 时重聚焦）
+      if (window.Widget && Widget.active) focusHead();
+      else fit(w, h);
     };
     window.addEventListener("resize", resizeHandler);
     loadModel(() => resizeHandler());
@@ -50,6 +53,40 @@ const Stage = (() => {
     model.scale.set(s);
     model.x = w / 2;
     model.y = h * 0.47;
+  }
+
+  /* ── P2-4 悬浮挂件：头部特写（Q 版观感）与视图还原 ── */
+  let savedView = null;   // 展开还原用（主界面视图快照）
+
+  function _viewSize() {
+    // autoDensity 下 renderer.width 是 CSS 像素 × resolution，还原真实 CSS 尺寸
+    const r = app.renderer.resolution || 1;
+    return { w: app.renderer.width / r, h: app.renderer.height / r };
+  }
+
+  /** 挂件模式：放大聚焦头部（Q 版=同一模型的缩小特写，idle 眨眼/呼吸保活） */
+  function focusHead() {
+    if (!model || !app) return;
+    const { w, h } = _viewSize();
+    if (!w || !h) return;
+    if (!savedView) savedView = { x: model.x, y: model.y, sx: model.scale.x, sy: model.scale.y };
+    const s = Math.min(w / model.internalModel.originalWidth, h / model.internalModel.originalHeight) * 2.7;
+    model.scale.set(s);
+    model.x = w / 2;
+    model.y = h * 0.78;   // 放大后把中心下移，让脸部（模型上部）落在圆形框内
+  }
+
+  /** 展开还原主界面视图 */
+  function restoreView() {
+    if (!model || !app) return;
+    if (savedView) {
+      model.x = savedView.x; model.y = savedView.y;
+      model.scale.set(savedView.sx, savedView.sy);
+      savedView = null;
+    } else {
+      const { w, h } = _viewSize();
+      fit(w, h);
+    }
   }
 
   function loadModel(done) {
@@ -147,5 +184,5 @@ const Stage = (() => {
     lipHold = 6;
   }
 
-  return { mount, unmount, setEmotion, playMotion, lipFrame };
+  return { mount, unmount, setEmotion, playMotion, lipFrame, focusHead, restoreView };
 })();

@@ -627,6 +627,136 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G8 node可用", False, "node 不在 PATH")
 
 
+def g9_self_narrative():
+    """G9 小满的自我叙事（P2-1）："说我"而非"问ta"（朋友的朋友圈视角）。
+    三层真实可验：A 层 Stats 数字直填零虚构 / B 层真实动作不虚构用户世界 /
+    C 层翻记录见记忆值零加工。频控零改动；P1-2 引用率结构保证不受影响。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const DAY = 86400000;
+const store = {};
+global.localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
+global.window = {};
+new Function('window', 'localStorage', fs.readFileSync(ROOT + '/web/js/memory.js', 'utf8'))(global.window, global.localStorage);
+new Function('window', 'localStorage', fs.readFileSync(ROOT + '/web/js/stats.js', 'utf8'))(global.window, global.localStorage);
+new Function('window', 'localStorage', 'API', 'Reminders', fs.readFileSync(ROOT + '/web/js/heartbeat.js', 'utf8'))(global.window, global.localStorage, { loadCfg: () => ({}) }, {});
+const HB = global.window.Heartbeat;
+const ST = global.window.Stats;
+const out = [];
+const P = (n, ok, info) => out.push({ n, ok, info: String(info || '').slice(0, 70) });
+function xs(seed) { let s = (seed >>> 0) || 1; for (let i = 0; i < 3; i++) { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; } return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 4294967296; }; }
+
+// ── G9-1 Stats 计数正确性（真实数据，零虚构的地基） ──
+const T0 = new Date('2026-10-11T10:00:00').getTime();
+store['xiaoman_stats_v1'] = JSON.stringify({});
+ST.bump('在吗', T0);                                   // 白天普通
+ST.bump('哈哈哈哈笑死', T0);                             // 哈哈命中
+ST.bump('哈哈哈', T0);                                   // 同一天 → days 去重
+ST.bump('睡不着', new Date('2026-10-11T23:30:00').getTime());  // 深夜
+ST.bump('好耶🎉🎉', new Date('2026-10-10T09:00:00').getTime()); // 前一天+emoji
+ST.bump('嗯嗯', new Date('2026-10-09T09:00:00').getTime());    // 又一天
+let snap = ST.snapshot();
+P('G9-1① 计数精确(msgs6/haha2/night1)', snap.msgs === 6 && snap.haha === 2 && snap.night === 1, JSON.stringify(snap));
+P('G9-1② days去重(3天)', snap.days === 3, snap.days);
+P('G9-1③ emoji计数(top=🎉×2)', snap.emoji === '🎉' && snap.emojiN === 2, snap.emoji + '×' + snap.emojiN);
+
+// ── G9-2 A层门槛过滤 + 数字直填 ──
+const days12 = Array.from({ length: 12 }, (_, i) => new Date(T0 - i * DAY).toDateString());
+store['xiaoman_stats_v1'] = JSON.stringify({ msgs: 45, haha: 7, night: 3, days: days12, emoji: { '🤣': 9 } });
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = '[]';
+let sc = HB.selfCandidates(new Date('2026-10-11T10:00:00'), new Set());
+const statIds = sc.filter(x => x.id.startsWith('stats:')).map(x => x.id);
+P('G9-2① 高数据A层全开(5条)', statIds.length === 5, statIds.join(','));
+P('G9-2② B层真实动作池(6条)', sc.filter(x => x.id.startsWith('me:')).length === 6, '');
+const hahaTpl = sc.find(x => x.id === 'stats:haha');
+P('G9-2③ 数字零加工直填(7次)', hahaTpl && hahaTpl.reply.includes('7次'), hahaTpl ? hahaTpl.reply.slice(0, 50) : 'MISSING');
+const emojiTpl = sc.find(x => x.id === 'stats:emoji');
+P('G9-2④ emoji直填(🤣×9)', emojiTpl && emojiTpl.reply.includes('🤣') && emojiTpl.reply.includes('9次'), '');
+// 门槛：低数据 A 层静默关闭
+store['xiaoman_stats_v1'] = JSON.stringify({ msgs: 5, haha: 2, night: 1, days: 2, emoji: { '🎉': 2 } });
+sc = HB.selfCandidates(new Date('2026-10-11T10:00:00'), new Set());
+P('G9-2⑤ 低数据A层关闭(防尬门槛)', sc.filter(x => x.id.startsWith('stats:')).length === 0, sc.map(x => x.id).join(','));
+// 无 stats.js 快照（localStorage 空）也不崩
+store['xiaoman_stats_v1'] = JSON.stringify(null);
+sc = HB.selfCandidates(new Date('2026-10-11T10:00:00'), new Set());
+P('G9-2⑥ 无数据B层兜底不崩', Array.isArray(sc) && sc.length >= 6, sc.length);
+
+// ── G9-3 C层翻记录见记忆（值零加工 + 48h降权） ──
+store['xiaoman_stats_v1'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id:'m1', text:'大事：周五要交报告', tags:['大事'], kind:'fact', ts: T0 - 3 * DAY, hits: 0},
+  {id:'m2', text:'宠物：橘猫', tags:['宠物'], kind:'fact', ts: T0 - 3 * DAY, hits: 0},
+]);
+sc = HB.selfCandidates(new Date(T0), new Set());
+const memsees = sc.filter(x => x.id.startsWith('memsee:'));
+P('G9-3① C层钉子户键(大事+宠物)', memsees.length === 2, memsees.map(x => x.id).join(','));
+P('G9-3② C层值零加工直填', memsees.every(x => (x.id.includes('大事') ? x.reply.includes('周五要交报告') : x.reply.includes('橘猫'))), memsees[0] ? memsees[0].reply.slice(0, 50) : '');
+store['xiaoman_heartbeat_state'] = JSON.stringify({ lastAsked: { m1: T0 - 24 * 3600000 } });
+sc = HB.selfCandidates(new Date(T0), new Set());
+const m1w = sc.find(x => x.id.includes('memsee:大事') && x.id.endsWith(':m1')).w;
+const m2w = sc.find(x => x.id.includes('memsee:宠物') && x.id.endsWith(':m2')).w;
+P('G9-3③ 48h问过降权(×0.3)', Math.abs(m1w - 0.75) < 1e-9 && Math.abs(m2w - 2.5) < 1e-9, m1w.toFixed(2) + '/' + m2w.toFixed(2));
+// 昵称/生日不进 memsee（同 P1-2 排除键口径）
+store['xiaoman_memories_v1'] = JSON.stringify([{id:'m3', text:'昵称：阿秋', tags:['昵称'], kind:'pin', ts: T0, hits: 0}]);
+sc = HB.selfCandidates(new Date(T0), new Set());
+P('G9-3④ 排除键不进叙事(昵称)', sc.filter(x => x.id.startsWith('memsee:')).length === 0, '');
+
+// ── G9-4 无记忆+高stats 20连发：叙事出现+零重复+数字一致 ──
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = '[]';
+store['xiaoman_stats_v1'] = JSON.stringify({ msgs: 45, haha: 7, night: 3, days: days12, emoji: { '🤣': 9 } });
+const wedEve = new Date('2026-10-07T19:00:00');
+const r4 = [];
+for (let i = 0; i < 20; i++) r4.push(HB.offlineGenerate(xs(401 + i), wedEve));
+const selfN = r4.filter(r => r.self).length;
+const statReplies = r4.filter(r => r.id.startsWith('stats:'));
+P('G9-4① 叙事出现(40%路径:≥3/20)', selfN >= 3 && selfN <= 11, selfN + '/20');
+P('G9-4② 20连发零重复', new Set(r4.map(r => r.id)).size === 20 && new Set(r4.map(r => r.reply)).size === 20, '');
+P('G9-4③ 叙事数字与预置一致(零虚构)', statReplies.every(r => !r.id.startsWith('stats:haha') || r.reply.includes('7次')), statReplies.map(r => r.id).join(','));
+
+// ── G9-5 有记忆 20连发：引用率不退化(P1-2结构保证) + 三类共存 ──
+store['xiaoman_heartbeat_state'] = JSON.stringify({});
+store['xiaoman_memories_v1'] = JSON.stringify([
+  {id:'m7', text:'大事：周五要交报告', tags:['大事'], kind:'fact', ts: wedEve.getTime() - 3 * DAY, hits: 0},
+  {id:'m8', text:'宠物：橘猫', tags:['宠物'], kind:'fact', ts: wedEve.getTime() - 3 * DAY, hits: 0},
+]);
+const r5 = [];
+for (let i = 0; i < 20; i++) r5.push(HB.offlineGenerate(xs(501 + i), wedEve));
+const ref5 = r5.filter(r => r.memoryId).length;
+P('G9-5① 引用率不退化≥60%(12/20)', ref5 >= 12, ref5 + '/20');
+P('G9-5② 叙事类与问候类共存', r5.some(r => r.self) && r5.some(r => r.memoryId) && r5.some(r => !r.self && !r.memoryId),
+   'ref:' + ref5 + ' self:' + r5.filter(r => r.self).length);
+P('G9-5③ 零重复(id+文案)', new Set(r5.map(r => r.id)).size === 20, '');
+
+// ── G9-6 B层模板审计：不虚构用户世界（无天气/外部断言） ──
+const allSelfTexts = [...HB.ME_POOL, ...Object.values(HB.MEMSEE_TPL).map(f => f('测试值')), ...Object.values(HB.STATS_TPL).map(([ok, f]) => f({ haha: 7, days: 12, night: 3, msgs: 45, emoji: '🤣', emojiN: 9 }))];
+const banned = /(你那边(?!天好吗|呢)|外面|天气|下雨|气温|你家的窗|你电脑|你手机)/;
+const violations = allSelfTexts.filter(t => banned.test(t));
+P('G9-6① B层不虚构用户世界(断言词审计)', violations.length === 0, JSON.stringify(violations));
+
+// ── G9-7 在线注入：无记忆有stats也有素材 ──
+store['xiaoman_memories_v1'] = '[]';
+const ctx = HB.heartbeatContext(new Date());
+P('G9-7① 无记忆也有小观察素材', ctx.includes('【你的小观察】') && ctx.includes('7次') && ctx.includes('12天'), ctx.slice(-80));
+store['xiaoman_stats_v1'] = JSON.stringify({});
+const ctx2 = HB.heartbeatContext(new Date());
+P('G9-7② 无数据不硬凑素材', !ctx2.includes('【你的小观察】'), ctx2.slice(0, 30));
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G9 心跳+stats 模块可加载", False, (p.stderr or p.stdout)[-300:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G9 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -636,7 +766,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx, g9_self_narrative):
         try:
             fn()
         except Exception as e:

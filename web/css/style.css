@@ -170,3 +170,59 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- P2-4 Q 版悬浮挂件模式 ---------- */
+body.widget-mode .topbar,
+body.widget-mode #chatArea,
+body.widget-mode .stage-mood,
+body.widget-mode .stage-tip { display: none !important; }
+
+body.widget-mode #app { background: var(--pink-soft, #FFF9F2); }
+
+/* 主舞台缩成贴边圆形挂件（同一 canvas 复用，不加载第二份模型） */
+body.widget-mode #stage {
+  position: fixed;
+  right: 12px;
+  bottom: 18px;
+  width: 84px;
+  height: 84px;
+  min-height: 84px;
+  flex-basis: auto;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2.5px solid #fff;
+  box-shadow: 0 4px 16px rgba(214, 130, 145, .35);
+  background: #FFECEF;
+  z-index: 900;
+  cursor: pointer;
+  animation: widget-in .3s ease-out;
+}
+@keyframes widget-in {
+  from { transform: scale(.4); opacity: 0; }
+  to   { transform: scale(1);  opacity: 1; }
+}
+
+/* 挂件气泡（提醒/问候/随机搭话） */
+#widgetBubble {
+  position: fixed;
+  right: 14px;
+  bottom: 116px;
+  max-width: 230px;
+  background: #fff;
+  color: #5a4a4a;
+  font-size: 13.5px;
+  line-height: 1.5;
+  padding: 9px 13px;
+  border-radius: 14px 14px 4px 14px;
+  border: 1.5px solid #F7D9DE;
+  box-shadow: 0 4px 14px rgba(214, 130, 145, .22);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .25s, transform .25s;
+  pointer-events: none;
+  z-index: 901;
+}
+#widgetBubble.show {
+  opacity: 1;
+  transform: translateY(0);
+}

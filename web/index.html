@@ -27,6 +27,9 @@
   <header class="topbar">
     <h1 class="brand"><span class="brand-dot"></span>小满树洞</h1>
     <div class="top-actions">
+      <button class="icon-btn" id="widgetBtn" title="收起成挂件" aria-label="收起成挂件">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14 L10 14 L10 20"/><path d="M20 10 L14 10 L14 4"/><path d="M14 10 L20 4"/><path d="M4 14 L10 20"/></svg>
+      </button>
       <button class="icon-btn" id="memoryBtn" title="小满记得的事" aria-label="记忆">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3 C7 3 4 6.5 4 10.5 C4 13 5.2 14.6 6.6 15.8 L6 21 L10.5 17.6 C11 17.7 11.5 17.8 12 17.8 C17 17.8 20 14.3 20 10.4 C20 6.5 17 3 12 3 Z"/></svg>
       </button>
@@ -107,6 +110,9 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <!-- ============ P2-4 悬浮挂件气泡 ============ -->
+  <div id="widgetBubble" role="status" aria-live="polite"></div>
 </div>
 
 <script src="js/vendor/pixi.min.js" onerror="console.error('[load-fail] js/vendor/pixi.min.js')"></script>
@@ -116,7 +122,9 @@
 <script src="js/mock_engine.js"></script>
 <script src="js/memory.js"></script>
 <script src="js/reminders.js"></script>
+<script src="js/stats.js"></script>
 <script src="js/heartbeat.js"></script>
+<script src="js/widget.js"></script>
 <script src="js/tts.js"></script>
 <script src="js/stage.js"></script>
 <script src="js/app.js"></script>

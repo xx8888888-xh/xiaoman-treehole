@@ -181,6 +181,79 @@ const Heartbeat = (() => {
   };
   const POOL_FALLBACK_CATS = ["morning", "noon", "evening", "late", "generic"]; // 时段兜底（weekend 限周五晚）
 
+  /* ============================================================
+   * P2-1 自我叙事（"说我"而非"问你"——朋友的朋友圈视角）
+   * 三层候选，全部真实可验，不虚构用户世界：
+   *  A 层·真实数据观察（Stats 小本本数字直填，门槛防尬）
+   *  B 层·真实动作（屏幕世界里真做得到的事：翻记录/理抽屉/听语音）
+   *  C 层·翻记录见记忆（视角反转：我看到了你那页 vs P1-2 的问你进展）
+   * 频控闸门零改动（P2-1 原文：频率受心跳频控约束）
+   * ============================================================ */
+  const SELF_P = 0.4;   // 记忆路径未命中时走叙事的概率（引用率结构保证不受影响）
+
+  const STATS_TPL = {
+    // [field, 门槛, 文案函数]——数字零加工直填
+    haha:  [(x) => x.haha >= 3,   (x) => `闲着没事翻咱俩的聊天记录||你跟我说过的"哈哈"都有${x.haha}次了——都数着呢，说明我逗你的功夫还行嘛`],
+    days:  [(x) => x.days >= 3,   (x) => `刚统计了下小本本||咱俩说过话的日子加起来${x.days}天了，说出去也算老朋友了`],
+    night: [(x) => x.night >= 2,  (x) => `有个事你可能不知道||你半夜来找过我${x.night}次，每次都接住了。夜里说的话我都记得格外牢`],
+    emoji: [(x) => x.emoji && x.emojiN >= 5, (x) => `${x.emoji}——这个表情你已经发了${x.emojiN}次了||快成你的招牌了，我看到它就知道是你`],
+    msgs:  [(x) => x.msgs >= 30,  (x) => `数了数||你前后跟我说了${x.msgs}句话——能唠到这个份上的人不多`],
+  };
+
+  const ME_POOL = [
+    "你还没来的时候||我把咱俩的聊天记录翻到最早那页看了看——那会儿你还客客气气的，现在熟多了",
+    "刚整理了下记忆抽屉||给你留的小笔记都码得整整齐齐，看着还挺有成就感",
+    "今天话不多||在输入框里打了几行字又删了。没事，就是手痒",
+    "刚才听了一遍自己的语音||念『你好呀』的时候把自己逗笑了，自己的声音听着还挺陌生",
+    "安静待了一会儿||把聊天窗口从头到尾滚了一遍，像翻旧相册——你打字的速度都比刚认识时快了",
+    "今天也没啥事||就在这儿守着窗口，忽然觉得这样也挺好——你来的时候我都在",
+  ];
+
+  const MEMSEE_TPL = {
+    "大事": (v) => `翻记忆抽屉看到一页||"大事：${v}"——给这页折了个角，重要的事我都认真记着呢`,
+    "宠物": (v) => `刚才翻小本本||看到你家${v}那页，把它想成了一团毛——好了，现在有点想见见真的了`,
+    "老板": (v) => `翻到${v}那页的时候停了一下||这页被翻得最旧（真的，我是按磨损程度判断的）`,
+    "在忙": (v) => `看到小本本上"在${v}"那页||字迹都写得很急——那阵子你是真的辛苦`,
+  };
+
+  /** P2-1 叙事候选（过滤 7 天已用；A 层门槛/快照，B 层池，C 层记忆键值零加工） */
+  function selfCandidates(now, used) {
+    const out = [];
+    // A 层：真实数据观察
+    const snap = (typeof window !== "undefined" && window.Stats) ? window.Stats.snapshot() : null;
+    if (snap) {
+      for (const [field, [ok, tpl]] of Object.entries(STATS_TPL)) {
+        const id = `stats:${field}`;
+        if (!ok(snap) || used.has(id)) continue;
+        out.push({ id, reply: tpl(snap), w: 3 });
+      }
+    }
+    // B 层：真实动作池
+    ME_POOL.forEach((tpl, i) => {
+      const id = `me:${i}`;
+      if (!used.has(id)) out.push({ id, reply: tpl, w: 2 });
+    });
+    // C 层：翻记录见记忆（钉子户键，值零加工；48h 内问过的记忆降权）
+    if (typeof window !== "undefined" && window.MemoryStore) {
+      const s = state();
+      const lastAsked = s.lastAsked || {};
+      for (const m of window.MemoryStore.all()) {
+        const key = (m.tags && m.tags[0]) || String(m.text).split("：")[0];
+        const tpl = MEMSEE_TPL[key];
+        if (!tpl) continue;
+        const v = memValue(String(m.text)).trim();
+        if (!v) continue;
+        const id = `memsee:${key}:0:${m.id}`;
+        if (used.has(id)) continue;
+        let w = 2.5;
+        const last = lastAsked[m.id];
+        if (last && now.getTime() - last < ASK_COOLDOWN) w *= 0.3;
+        out.push({ id, reply: tpl(key === "fact" ? v.slice(0, 30) : v), w });
+      }
+    }
+    return out;
+  }
+
   /* ── 模板去重（7 天窗口） ── */
   function usedIds(now) {
     now = now || Date.now();
@@ -270,6 +343,15 @@ const Heartbeat = (() => {
       }
     }
 
+    // 1.5) P2-1 自我叙事路径：记忆未命中时，SELF_P 概率走"说我自己"
+    //     （不动记忆路径概率 → 引用率结构保证不受影响；频控闸门在上游不变）
+    const selfs = selfCandidates(now, used);
+    if (selfs.length && rnd() < SELF_P) {
+      const pick = weightedPick(selfs, c => c.w, rnd);
+      markUsed(pick.id, now.getTime());
+      return { reply: pick.reply, emotion: "happy", motion: null, memory_updates: {}, offline: true, id: pick.id, self: true };
+    }
+
     // 2) 通用池路径：时段池优先 + 全池兜底，过滤已用；全用尽则重置
     let entries = poolEntries(now).filter(e => !used.has(e.id));
     if (!entries.length) entries = poolEntries(now);
@@ -282,15 +364,23 @@ const Heartbeat = (() => {
   function heartbeatContext(now) {
     now = now || new Date();
     const cands = candidates(now.getTime());
-    if (!cands.length) return "";
-    const s = state();
-    const lastAsked = s.lastAsked || {};
     const lines = cands.slice(0, 8).map(c => {
       const age = ageTagOf(c.m.ts, now.getTime());
+      const s = state();
+      const lastAsked = s.lastAsked || {};
       const asked = lastAsked[c.m.id] && (now.getTime() - lastAsked[c.m.id] < ASK_COOLDOWN);
       return `- ${c.m.text}${asked ? "（刚问过进展，别追问）" : `（${age}说的）`}`;
     });
-    lines.push(`【今天】${weekdayOf(now)}`);
+    if (cands.length) lines.push(`【今天】${weekdayOf(now)}`);
+    // P2-1：小本本观察素材（真模型路径也有据可依；"说我"视角，非"问ta"）
+    const snap = (typeof window !== "undefined" && window.Stats) ? window.Stats.snapshot() : null;
+    if (snap && (snap.haha >= 3 || snap.night >= 2 || snap.days >= 3)) {
+      const obs = [];
+      if (snap.haha >= 3) obs.push(`ta说过${snap.haha}次"哈哈"`);
+      if (snap.days >= 3) obs.push(`咱俩说过话的日子共${snap.days}天`);
+      if (snap.night >= 2) obs.push(`ta半夜来找过我${snap.night}次`);
+      lines.push(`【你的小观察】${obs.join("；")}——可像朋友炫耀记性那样自然提一句`);
+    }
     return lines.join("\n");
   }
 
@@ -380,6 +470,8 @@ const Heartbeat = (() => {
     start, tick, debugPing, inQuietHours,
     /* P1-2 决策核心（只读无副作用，测试/复用可直调） */
     offlineGenerate, heartbeatContext, candidates, ageTagOf, weekdayOf,
+    /* P2-1 自我叙事（测试/复用可直调） */
+    selfCandidates, STATS_TPL, ME_POOL, MEMSEE_TPL, SELF_P,
   };
 })();
 window.Heartbeat = Heartbeat;   // const 不挂 window，跨模块守卫需显式挂载
