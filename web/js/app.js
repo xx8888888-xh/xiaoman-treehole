@@ -780,6 +780,21 @@ const App = (() => {
     $("memoryClose").onclick = () => closePanel($("memoryDrawer"));
     $("memoryDrawer").querySelector(".drawer-mask").onclick = () => closePanel($("memoryDrawer"));
     $("memoryClear").onclick = () => { localStorage.removeItem(MEM_KEY); if (window.MemoryStore) MemoryStore.clear(); renderMem(); toast("小满失忆了，重新认识一下吧"); };
+    // ---------- P2-3 友谊卡片（口碑裂变：脱敏聚合数据 → 2D canvas PNG → 分享/保存） ----------
+    if (window.FriendCard) {
+      $("cardBtn").onclick = () => {
+        try {
+          FriendCard.render($("cardImg"));
+          openPanel($("cardModal"), $("cardBtn"));
+        } catch (e) { toast("卡片生成失败了，再试一次？"); }
+      };
+      $("cardClose").onclick = () => closePanel($("cardModal"));
+      $("cardModal").querySelector(".drawer-mask").onclick = () => closePanel($("cardModal"));
+      $("cardSave").onclick = async () => {
+        const res = await FriendCard.share();
+        toast(res === "shared" ? "已呼出分享面板" : "卡片已开始下载，也可以长按图片保存");
+      };
+    }
     $("settingsBtn").onclick = () => {
       const cfg = API.loadCfg();
       $("cfgApi").value = cfg.apiBase || "http://127.0.0.1:8902";

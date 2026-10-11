@@ -675,6 +675,119 @@ async def main():
             await pg5.screenshot(path=os.path.join(SHOTS, "21_p22_care_boundary.png"))
             await ctx5.close()
 
+            # —— ⑦k 友谊卡片（P2-3：新用户不报错/账本数字精确/脱敏审计/分享降级链/零错误） ——
+            ctx6 = await b.new_context(viewport={"width": 390, "height": 844}, accept_downloads=True)
+            pg6 = await ctx6.new_page()
+            err_k = []
+            pg6.on("pageerror", lambda e: err_k.append(str(e)))
+            await pg6.goto(BASE, wait_until="domcontentloaded")
+            await pg6.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg6.wait_for_timeout(1200)
+
+            # k-1 新用户（零数据）：抽屉 → 生成 → modal 开、PNG/账本非空、零错误
+            await pg6.click("#memoryBtn")
+            await pg6.click("#cardBtn")
+            await pg6.wait_for_timeout(500)
+            st_k1 = await pg6.evaluate(
+                """() => {
+                  const m = document.querySelector('#cardModal');
+                  const img = document.querySelector('#cardImg');
+                  return { open: m && !m.classList.contains('hidden'),
+                           srcLen: img && img.src ? img.src.length : 0,
+                           texts: (window.__cardTexts || []).length };
+                }""")
+            ok_k1 = st_k1["open"] and st_k1["srcLen"] > 20000 and st_k1["texts"] >= 10 and not err_k
+            print("⑦k-1 新用户零数据生成不报错:", "PASS" if ok_k1 else f"FAIL {st_k1} err={err_k}")
+            check("⑦k-1 新用户零数据生成不报错", ok_k1)
+            await pg6.screenshot(path=os.path.join(SHOTS, "22_p23_card_newuser.png"))
+
+            # k-2 预置数据（30天/999句/42次/358次/365徽章/😄）：账本数字精确直填
+            await pg6.evaluate(
+                """() => {
+                  localStorage.setItem('xiaoman_first_met', String(Date.now() - 30*86400000));
+                  localStorage.setItem('xiaoman_rounds', '358');
+                  localStorage.setItem('xiaoman_ms_done', JSON.stringify([100, 365]));
+                  localStorage.setItem('xiaoman_stats_v1', JSON.stringify({msgs:999, haha:42, days:[], emoji:{'😄':9}}));
+                }""")
+            await pg6.reload(wait_until="domcontentloaded")
+            await pg6.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg6.wait_for_timeout(1200)
+            await pg6.click("#memoryBtn")
+            await pg6.click("#cardBtn")
+            await pg6.wait_for_timeout(500)
+            st_k2 = await pg6.evaluate(
+                """() => {
+                  const t = (window.__cardTexts || []).join('||');
+                  const img = document.querySelector('#cardImg');
+                  return { days: t.includes('我们已经相识') && t.includes('30'),
+                           msgs: t.includes('999句'), haha: t.includes('42次'),
+                           rounds: t.includes('358次'), badge: t.includes('聊满 365 次'),
+                           emoji: t.includes('😄'), srcLen: img ? img.src.length : 0 };
+                }""")
+            ok_k2 = (st_k2["days"] and st_k2["msgs"] and st_k2["haha"] and st_k2["rounds"]
+                     and st_k2["badge"] and st_k2["emoji"] and st_k2["srcLen"] > 20000)
+            print("⑦k-2 预置数据账本精确:", "PASS" if ok_k2 else f"FAIL {st_k2}")
+            check("⑦k-2 预置数据账本精确", ok_k2)
+            await pg6.screenshot(path=os.path.join(SHOTS, "23_p23_card_full.png"))
+
+            # k-3 脱敏审计：预置敏感记忆原值（昵称/老板/宠物/大事）→ 账本零泄漏
+            await pg6.evaluate(
+                """() => {
+                  localStorage.setItem('xiaoman_memories_v1', JSON.stringify([
+                    {text:'昵称：阿秋', tags:['昵称'], ts:Date.now()},
+                    {text:'老板：张三', tags:['老板'], ts:Date.now()},
+                    {text:'宠物：橘猫', tags:['宠物'], ts:Date.now()},
+                    {text:'大事：周五交报告', tags:['大事'], ts:Date.now()}
+                  ]));
+                }""")
+            await pg6.click("#cardClose")
+            await pg6.wait_for_timeout(400)
+            # k-2 结束时 memoryDrawer 仍开着（其 mask 会拦截顶栏 #memoryBtn）——直接点抽屉内的 #cardBtn
+            await pg6.click("#cardBtn")
+            await pg6.wait_for_timeout(500)
+            st_k3 = await pg6.evaluate(
+                """() => {
+                  const t = (window.__cardTexts || []).join('||');
+                  return { leak: ['阿秋','张三','橘猫','周五交报告'].filter(w => t.includes(w)),
+                           ok: t.includes('小满树洞') && t.includes('小满是 AI 朋友') };
+                }""")
+            ok_k3 = not st_k3["leak"] and st_k3["ok"]
+            print("⑦k-3 脱敏审计零泄漏:", "PASS" if ok_k3 else f"FAIL {st_k3}")
+            check("⑦k-3 脱敏审计零泄漏", ok_k3)
+
+            # k-4 分享降级链：(a) 无 share API → 触发下载；(b) 注入 mock share → 被调用且收到 PNG
+            fn_k = ""
+            try:
+                async with pg6.expect_download(timeout=8000) as dl_k:
+                    await pg6.click("#cardSave")
+                dl_v = await dl_k.value
+                fn_k = dl_v.suggested_filename or ""
+            except Exception as ex:
+                fn_k = f"NO_DL({ex.__class__.__name__})"
+            await pg6.evaluate(
+                """() => {
+                  window.__shareCalls = [];
+                  navigator.canShare = () => true;
+                  navigator.share = async (data) => {
+                    window.__shareCalls.push({ n: (data.files||[]).length,
+                      type: data.files && data.files[0] ? data.files[0].type : '',
+                      name: data.files && data.files[0] ? data.files[0].name : '' });
+                  };
+                }""")
+            await pg6.click("#cardSave")
+            await pg6.wait_for_timeout(800)
+            st_k4 = await pg6.evaluate("() => ({ calls: window.__shareCalls, result: window.__cardShareResult })")
+            ok_k4 = (str(fn_k).endswith(".png")
+                     and len(st_k4["calls"]) == 1 and st_k4["calls"][0]["type"] == "image/png"
+                     and st_k4["result"] == "shared")
+            print("⑦k-4 分享降级链(下载+mock share):", "PASS" if ok_k4 else f"FAIL fn={fn_k} {st_k4}")
+            check("⑦k-4 分享降级链(下载+mock share)", ok_k4)
+
+            # k-5 零控制台错误（本组独立 context）
+            print("⑦k-5 零控制台错误:", "PASS" if not err_k else f"FAIL {err_k}")
+            check("⑦k-5 零控制台错误", not err_k)
+            await ctx6.close()
+
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")
         finally:

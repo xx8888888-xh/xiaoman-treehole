@@ -135,6 +135,13 @@ body {
 .chip.empty { border-style: dashed; color: var(--ink-light); }
 .ghost-btn { margin-top: 16px; width: 100%; height: 40px; border: 1.5px dashed var(--pink); border-radius: 14px; background: transparent; color: var(--pink-deep); font-size: 14px; cursor: pointer; }
 .ghost-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(247,168,184,0.5); }
+
+/* ---------- P2-3 友谊卡片 ---------- */
+.solid-btn { margin-top: 14px; width: 100%; height: 44px; border: 0; border-radius: 14px; background: linear-gradient(135deg, var(--pink), var(--pink-deep)); color: var(--white); font-size: 15px; font-weight: 600; letter-spacing: 0.5px; cursor: pointer; box-shadow: var(--shadow-soft); }
+.solid-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(247,168,184,0.5); }
+.solid-btn:active { transform: translateY(1px); }
+#cardImg { display: block; width: 100%; border-radius: 16px; border: 1.5px solid var(--pink-soft); margin: 2px 0 0; }
+.card-mini { font-size: 11px; color: var(--ink-light); text-align: center; margin-top: 10px; line-height: 1.6; }
 .field { display: block; margin-bottom: 14px; }
 .field span { display: block; font-size: 13px; color: var(--ink-light); margin-bottom: 6px; }
 .field input, .field select { width: 100%; height: 42px; border: 1.5px solid var(--pink-soft); border-radius: 14px; padding: 0 12px; font-size: 14px; background: var(--white); color: var(--ink); outline: none; }

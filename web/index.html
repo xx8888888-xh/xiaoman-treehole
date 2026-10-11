@@ -75,7 +75,19 @@
       <p class="drawer-sub">聊天中提到的称呼、人物、事件会自动记在这里，只保存在你手机上</p>
       <div id="reminderList"></div>
       <div class="chips" id="memoryChips"></div>
+      <button class="solid-btn" id="cardBtn">生成我们的友谊卡片</button>
       <button class="ghost-btn" id="memoryClear">清空记忆</button>
+    </div>
+  </div>
+
+  <!-- ============ P2-3 友谊卡片预览 ============ -->
+  <div class="modal hidden" id="cardModal" role="dialog" aria-modal="true" aria-labelledby="cardTitle">
+    <div class="drawer-mask overlay"></div>
+    <div class="modal-panel">
+      <div class="drawer-head"><h2 id="cardTitle">我们的友谊卡片</h2><button class="icon-btn" id="cardClose" aria-label="关闭">✕</button></div>
+      <img id="cardImg" alt="友谊卡片预览（由你手机上的真实聊天数据生成）" />
+      <button class="solid-btn" id="cardSave">保存 / 分享</button>
+      <p class="card-mini">卡片由本机真实数据生成，不含任何聊天内容</p>
     </div>
   </div>
 
@@ -123,6 +135,7 @@
 <script src="js/memory.js"></script>
 <script src="js/reminders.js"></script>
 <script src="js/stats.js"></script>
+<script src="js/friend_card.js"></script>
 <script src="js/heartbeat.js"></script>
 <script src="js/widget.js"></script>
 <script src="js/tts.js"></script>
