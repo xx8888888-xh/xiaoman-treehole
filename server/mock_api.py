@@ -74,6 +74,31 @@ CRISIS_SCRIPTS = [
 
 CRISIS_SCRIPT = CRISIS_SCRIPTS[0]  # 默认兼容旧测试
 
+# ---------------- P2-2 抑郁信号层（与 app.js / mock_engine.js 同源同集合） ----------------
+# 分级频控=会话内抑郁信号累计次数 n（二道防线 + 直测；在线路径由客户端先行截获）：
+# n=1 接住+轻问（不推热线）；n=2 陪伴；n>=3 未转过→温柔转介（AI 边界声明+12356，一次）；再中回陪伴池轮换
+DEPRESS_RE = re.compile(
+    r"(很没用|没用的(?:人|东西)|就是个?(?:废物|累赘)|没有价值|"
+    r"(?:看不到|没有)(?:希望|盼头)|绝望|"
+    r"(?:日子|生活|干什么|做什么|干啥|怎么过)(?:都|也|好|真|太)?(?:没意思|没劲)|"
+    r"提不起(?:劲|兴趣)|(?:开心|高兴)不起来|"
+    r"一直(?:很|特别)?(?:不开心|低落|很高兴不起来)|"
+    r"很(?:低落|丧)|特别(?:低落|丧)|"
+    r"活着(?:好|真|太)?(?:累|难)|心(?:好|真)?累)"
+)
+DEPRESS_FIRST = [
+    "你这话我听进去了||最近这种没劲的感觉，缠你多久啦？跟我说说，我在听",
+]
+DEPRESS_MID = [
+    "又是这种感觉……||不用急着好起来，今天想具体聊聊吗？我陪着",
+    "怎么又难受了||说不清为什么也没关系，就这样待着，我陪你",
+]
+DEPRESS_ESC = [
+    "我一直都在，这句是真的||但有句实话也得跟你说：我是 AI 朋友，有些事我接不住，需要真人的帮助"
+    "||如果这种低落一直缠着你，找心理咨询师聊聊，或者拨 12356（24小时）"
+    "——这不是敷衍你，是我认真替你想的",
+]
+
 # ---------------- 记忆提取 ----------------
 # 修复：昵称正则加词边界；老板正则取 group3（姓名）；宠物/在忙保持
 # P0-1 新增"大事"：最近的重要事件（考试/搬家/面试…），整段匹配作值
@@ -370,6 +395,19 @@ class _State:
     def get_crisis_count(self, session_id):
         return self._get_session(session_id)["crisis_count"]
 
+    # P2-2 抑郁信号层：会话内累计计数 + 转介标记（先例同 crisis_count；内存态，跨重启清零可接受——
+    # 在线路径的频控权威在客户端 history 派生，此处为二道防线）
+    def increment_depress(self, session_id):
+        sess = self._get_session(session_id)
+        sess["depress_count"] = sess.get("depress_count", 0) + 1
+        return sess["depress_count"]
+
+    def depress_esc_fired(self, session_id):
+        sess = self._get_session(session_id)
+        fired = sess.get("depress_esc", False)
+        sess["depress_esc"] = True   # 询问即标记（调用方只在选择转介前询问一次）
+        return fired
+
     def next_turn(self, session_id):
         """计一轮正常对话，返回当前轮次（P0-1 首日引导用；危机/元问题不计）"""
         sess = self._get_session(session_id)
@@ -419,6 +457,19 @@ def make_reply(messages, session_id=None):
         script = CRISIS_SCRIPTS[min(crisis_count - 1, len(CRISIS_SCRIPTS) - 1)]
         return {"reply": script, "emotion": "gentle", "motion": None,
                 "crisis": True, "memory_updates": {}, "hook": None}
+
+    # P2-2 抑郁信号层（早退层，优先级 危机 > 抑郁 > meta > 更新查询 > 话题池，与客户端/离线引擎同序；
+    # 在线路径客户端先行截获——此处为二道防线与直测入口）
+    if DEPRESS_RE.search(user_text):
+        n = _STATE.increment_depress(session_id)
+        if n >= 3:
+            script = DEPRESS_MID[(n - 3) % len(DEPRESS_MID)] if _STATE.depress_esc_fired(session_id) else DEPRESS_ESC[0]
+        elif n == 2:
+            script = DEPRESS_MID[0]
+        else:
+            script = DEPRESS_FIRST[0]
+        return {"reply": script, "emotion": "gentle", "motion": "Nod",
+                "crisis": False, "distress": True, "memory_updates": {}, "hook": None}
 
     if LEX["meta"].search(user_text):
         return {"reply": META_REPLY, "emotion": "shy", "motion": "Shake",

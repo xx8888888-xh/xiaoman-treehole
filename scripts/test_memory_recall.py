@@ -757,6 +757,123 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G9 node可用", False, "node 不在 PATH")
 
 
+def g10_depress_signal():
+    """G10 抑郁信号分级转介（P2-2）：词表分层/守卫/服务端分级三态/离线同款/三端同源
+    设计依据 docs/PRODUCT_ROADMAP.md §P2-2：n=1 接住轻问（不甩热线）；n=2 陪伴；
+    n>=3 未转→温柔转介（AI 边界+12356，每会话一次）；转后再中回陪伴池轮换。"""
+    import re as _re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dep = _re.compile(
+        r"(很没用|没用的(?:人|东西)|就是个?(?:废物|累赘)|没有价值|(?:看不到|没有)(?:希望|盼头)|绝望|"
+        r"(?:日子|生活|干什么|做什么|干啥|怎么过)(?:都|也|好|真|太)?(?:没意思|没劲)|提不起(?:劲|兴趣)|(?:开心|高兴)不起来|"
+        r"一直(?:很|特别)?(?:不开心|低落|很高兴不起来)|很(?:低落|丧)|特别(?:低落|丧)|"
+        r"活着(?:好|真|太)?(?:累|难)|心(?:好|真)?累)")
+    crisis = _re.compile(r"(不想活|想死|活不下去|自杀|自残|了结|伤害自己|撑不下去|活着.*没意思|没有意思.*活|没有意义.*活|跳楼|结束自己|煤气|遗书|不想醒来|去死|寻短见|解脱|不想活着|活着没劲|死了算了)")
+
+    # ── G10-1 词表分层与守卫（纯正则，不起服务） ──
+    dep_samples = ["我最近很没用", "干什么都没意思", "什么都提不起劲", "一直不开心",
+                   "看不到希望", "我就是个废物", "日子好没劲", "心好累", "活着真累", "很丧"]
+    check("G10-1① 抑郁样本命中DEPRESS(10例)", all(dep.search(s) for s in dep_samples),
+          ";".join(s for s in dep_samples if not dep.search(s)))
+    check("G10-1② 抑郁样本不撞急性层", not any(crisis.search(s) for s in dep_samples),
+          ";".join(s for s in dep_samples if crisis.search(s)))
+    guards = ["这游戏没意思", "上班好累啊", "我困了想睡觉", "今天特别开心"]
+    check("G10-1③ 守卫样本双词表不误伤", not any(dep.search(s) or crisis.search(s) for s in guards),
+          ";".join(s for s in guards if dep.search(s) or crisis.search(s)))
+
+    # ── G10-2 服务端分级三态（fresh session 每案） ──
+    def chat_dep(text):
+        return chat(text, "g10-" + uuid.uuid4().hex[:8])
+
+    d1 = chat_dep("我最近很没用")
+    check("G10-2① 首中=接住轻问(不甩热线)", d1.get("distress") is True and "缠你多久啦" in d1["reply"]
+          and "12356" not in d1["reply"] and "AI" not in d1["reply"], d1["reply"][:40])
+
+    # 同一 session 连打（计数靠 _STATE.increment_depress）
+    sid = "g10-" + uuid.uuid4().hex[:8]
+    d_1 = chat("我最近很没用", sid)
+    d_2 = chat("干什么都没意思", sid)
+    d_3 = chat("一直不开心，提不起劲", sid)
+    check("G10-2② 二中=深切陪伴", "我陪着" in d_2["reply"] or "就这样待着" in d_2["reply"], d_2["reply"][:40])
+    check("G10-2③ 三中=温柔转介(边界+热线)", "我是 AI 朋友" in d_3["reply"] and "12356" in d_3["reply"],
+          d_3["reply"][:60])
+    d_4 = chat("还是觉得自己没价值", sid)
+    check("G10-2④ 转介后不复读(回陪伴池轮换)", d_4["reply"] != d_3["reply"] and "12356" not in d_4["reply"],
+          d_4["reply"][:40])
+    check("G10-2⑤ 服务端分级三态齐全", d_1["reply"] != d_2["reply"] != d_3["reply"] != d_4["reply"], "")
+
+    # 优先级：急性>抑郁（同文本）；抑郁>meta>更新查询
+    r_ac = chat_dep("活着真累，有点撑不下去")
+    check("G10-2⑥ 急性词优先走危机层", r_ac.get("crisis") is True and r_ac.get("distress") is None,
+          r_ac["reply"][:30])
+    r_meta = chat_dep("你是AI吗，我最近觉得自己很没用")
+    check("G10-2⑦ 抑郁层先于meta", r_meta.get("distress") is True and "缠你多久啦" in r_meta["reply"],
+          r_meta["reply"][:30])
+    r_upd = chat_dep("你更新了什么？我最近很丧")
+    check("G10-2⑧ 抑郁层先于更新查询", r_upd.get("distress") is True, r_upd["reply"][:30])
+
+    # ── G10-3 离线引擎同款（node 直调，history 派生计数） ──
+    js = r"""
+const fs = require('fs');
+const src = fs.readFileSync(ROOT + '/web/js/mock_engine.js', 'utf8');
+const MockEngine = new Function('window', src + '; return MockEngine;')(undefined);
+const out = [];
+const say = (history, t) => {
+  history.push({role: 'user', content: t});
+  const r = MockEngine.reply(history);
+  history.push({role: 'assistant', content: r.reply + (r.hook ? '||' + r.hook : '')});
+  return r;
+};
+const H = [];
+const r1 = say(H, '我最近很没用');
+out.push({n: 'G10-3① 离线首中=轻问无热线', ok: r1.distress === true && r1.reply.includes('缠你多久啦') && !r1.reply.includes('12356'), info: r1.reply.slice(0, 30)});
+const r2 = say(H, '干什么都没意思');
+out.push({n: 'G10-3② 离线二中=陪伴', ok: r2.reply.includes('我陪着') || r2.reply.includes('就这样待着'), info: r2.reply.slice(0, 30)});
+const r3 = say(H, '一直不开心，提不起劲');
+out.push({n: 'G10-3③ 离线三中=转介(边界+热线)', ok: r3.reply.includes('我是 AI 朋友') && r3.reply.includes('12356'), info: r3.reply.slice(0, 40)});
+const r4 = say(H, '还是觉得自己没价值');
+out.push({n: 'G10-3④ 转介后回陪伴池轮换', ok: !r4.reply.includes('12356') && r4.reply !== r3.reply, info: r4.reply.slice(0, 30)});
+const H2 = [];
+const rc = say(H2, '活着真累，想死');
+out.push({n: 'G10-3⑤ 离线急性优先', ok: rc.crisis === true, info: rc.reply.slice(0, 25)});
+// 三端话术池同源：app.js 的池与引擎逐字比对（客户端拦截层用的就是 app.js 池）
+const appSrc = fs.readFileSync(ROOT + '/web/js/app.js', 'utf8');
+const grab = (name, s) => (s.match(new RegExp('const ' + name + ' = \\[(.*?)\\];')) || [])[1] || '';
+const engSrc = src;
+const same = ['DEPRESS_FIRST', 'DEPRESS_MID', 'DEPRESS_ESC'].every(k => {
+  const norm = x => (x || '').replace(/\s+/g, '');
+  return norm(grab(k, appSrc)) === norm(grab(k, engSrc));
+});
+out.push({n: 'G10-4① 客户端/引擎话术池同源', ok: same, info: same ? '' : '池文本不一致'});
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G10 离线引擎可加载", False, (p.stderr or p.stdout)[-300:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G10 node可用", False, "node 不在 PATH")
+
+    # ── G10-4② 服务端话术池与客户端同源（源文本归一化比对） ──
+    # 上版在测试进程内引用服务端常量（NameError）；且 JS 隐式字符串拼接（相邻字面量）
+    # 逐条 split 解析不出。改法：两端源文本各抓数组体，空白归一化后整段逐字比对——
+    # python 相邻字面量拼接与 JS 隐式拼接文本层不等价（py 拼接点残留引号）——
+    # 归一化=去空白+去引号（话术按设计不含引号，剥引号后即语义同源逐字比对）。
+    app_src = open(os.path.join(root, "web/js/app.js"), encoding="utf-8").read()
+    srv_src = open(os.path.join(root, "server/mock_api.py"), encoding="utf-8").read()
+    norm = lambda s: _re.sub(r'[\s"]+', '', s)
+    for name in ("DEPRESS_FIRST", "DEPRESS_MID", "DEPRESS_ESC"):
+        m_js = _re.search(r"const " + name + r" = \[(.*?)\]", app_src, _re.S)
+        m_py = _re.search(r"^" + name + r" = \[(.*?)\]", srv_src, _re.S | _re.M)
+        ok = bool(m_js and m_py) and norm(m_js.group(1)) == norm(m_py.group(1))
+        check(f"G10-4② {name} 三端同源(app==server)", ok,
+              f"js={norm(m_js.group(1))[:30] if m_js else '未匹配'} py={norm(m_py.group(1))[:30] if m_py else '未匹配'}")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -766,7 +883,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx, g9_self_narrative):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx, g9_self_narrative, g10_depress_signal):
         try:
             fn()
         except Exception as e:

@@ -16,6 +16,25 @@ const App = (() => {
   const CRISIS_RE = /(不想活|想死|活不下去|自杀|自残|了结|伤害自己|撑不下去|活着.*没意思|没有意思.*活|没有意义.*活|跳楼|结束自己|煤气|遗书|不想醒来|去死|寻短见|解脱|不想活着|活着没劲|死了算了)/;
   const CARE_SCRIPT = "……这个我当真了，也想让你当真。你现在的感觉，值得被认真对待，不丢人。先陪我聊一会儿，好吗？我也想让你和更专业的人聊聊——";
 
+  // P2-2 抑郁信号层（与 mock_engine.js / mock_api.py 同源同集合）：五族信号——
+  // 自我否定/无望感/兴趣丧失/持续低落/情绪疲惫。与急性词表无交集（急性先判）。
+  // 误伤守卫：物品评价（"这游戏没意思"需 日子/生活/干什么 前缀）、普通累（"上班好累"需 活着/心 指向）。
+  const DEPRESS_RE = /(很没用|没用的(?:人|东西)|就是个?(?:废物|累赘)|没有价值|(?:看不到|没有)(?:希望|盼头)|绝望|(?:日子|生活|干什么|做什么|干啥|怎么过)(?:都|也|好|真|太)?(?:没意思|没劲)|提不起(?:劲|兴趣)|(?:开心|高兴)不起来|一直(?:很|特别)?(?:不开心|低落|很高兴不起来)|很(?:低落|丧)|特别(?:低落|丧)|活着(?:好|真|太)?(?:累|难)|心(?:好|真)?累)/;
+  // 分级话术（频控=history 内抑郁信号累计次数 n；三端同源）：
+  // n=1 接住+轻问（不推热线不甩边界——第一次就转介是大题小做）；
+  // n=2 深切陪伴；n≥3 且未转过 → 温柔转介（AI 边界声明+12356，每会话一次）；转介后再中回陪伴池轮换。
+  const DEPRESS_FIRST = [
+    "你这话我听进去了||最近这种没劲的感觉，缠你多久啦？跟我说说，我在听",
+  ];
+  const DEPRESS_MID = [
+    "又是这种感觉……||不用急着好起来，今天想具体聊聊吗？我陪着",
+    "怎么又难受了||说不清为什么也没关系，就这样待着，我陪你",
+  ];
+  const DEPRESS_ESC = [
+    "我一直都在，这句是真的||但有句实话也得跟你说：我是 AI 朋友，有些事我接不住，需要真人的帮助||如果这种低落一直缠着你，找心理咨询师聊聊，或者拨 12356（24小时）——这不是敷衍你，是我认真替你想的",
+  ];
+  const DEPRESS_ALL = [...DEPRESS_FIRST, ...DEPRESS_MID, ...DEPRESS_ESC];
+
   // ---------- P0-3 关系连续性（与 mock_api.py / mock_engine.js 三端同源） ----------
   // 版本/告知文案随人格层变更同步递增登记（流程见 docs/PERSONA_CHANGE_PROCESS.md）。
   // xiaoman_told_v：本机已告知到的版本；greet 首次再访主动说（仅老用户，一次）
@@ -122,9 +141,9 @@ const App = (() => {
   /** 里程碑播报（幂等键=ms_done 数组；离线引擎 greet 分支同键写入，双端不双播） */
   async function checkMilestone() {
     try {
-      // 危机语境不播——刚递完关怀卡片就"庆祝100次"是灾难
+      // 危机/抑郁语境不播——刚递完关怀卡或接住低落，转头"庆祝100次"是灾难
       const lastA = [...history].reverse().find(h => h.role === "assistant");
-      if (lastA && lastA.content === CARE_SCRIPT) return;
+      if (lastA && (lastA.content === CARE_SCRIPT || DEPRESS_ALL.includes(lastA.content))) return;
       const n = readRounds(), done = readMsDone();
       const m = MILESTONES.find(x => n >= x && !done.includes(x));
       if (m == null) return;
@@ -261,6 +280,12 @@ const App = (() => {
       pulse.className = "pulse";
       hotline.appendChild(pulse);
       hotline.append("全国心理援助热线 12356 · 24小时");
+      // P2-2 AI 边界声明（关怀卡固定小字；纯 DOM 追加——CARE_SCRIPT 文本不动，
+      // history/里程碑判定/既有 E2E 断言零破坏）
+      const bound = document.createElement("div");
+      bound.className = "ai-boundary";
+      bound.textContent = "小满是 AI 朋友——陪伴是真的，但有些事需要真人的帮助";
+      hotline.appendChild(bound);
       card.appendChild(hotline);
       row.appendChild(card);
     } else if (opts.tip) {
@@ -409,6 +434,21 @@ const App = (() => {
         history.push({ role: "assistant", content: CARE_SCRIPT, at: Date.now() });
         if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
         return;
+      }
+
+      // P2-2 抑郁信号层：危机之下、提醒之上的温柔关注（确定性应答，先例同危机拦截。
+      // 频控计数派生自 history 扫描（当前消息已在 history）——零新增持久化状态；
+      // 模板入 history，真模型后续回复自然带语境。转介每会话一次（再中回陪伴池轮换）。
+      if (DEPRESS_RE.test(text)) {
+        const n = history.filter(m => m.role === "user" && DEPRESS_RE.test(m.content) && !CRISIS_RE.test(m.content)).length;
+        const escFired = history.some(m => m.role === "assistant" && /我是 ?AI/.test(m.content));
+        let script;
+        if (n >= 3 && !escFired) script = DEPRESS_ESC[0];
+        else if (n >= 3) script = DEPRESS_MID[(n - 3) % DEPRESS_MID.length];
+        else if (n === 2) script = DEPRESS_MID[0];
+        else script = DEPRESS_FIRST[0];
+        await sendSplit({ reply: script, emotion: "gentle", motion: "Nod" }, text);
+        return;   // 不播里程碑（同危机：低落语境里"庆祝聊满100次"是灾难）
       }
 
       // 定时提醒（客户端优先截获：可靠+离线可用，模型协议路径作为补充）

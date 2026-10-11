@@ -11,6 +11,28 @@ const MockEngine = (() => {
   const CRISIS_RE = /(不想活|想死|活不下去|自杀|自残|了结|伤害自己|撑不下去|活着.*没意思|没有意思.*活|没有意义.*活|跳楼|结束自己|煤气|遗书|不想醒来|去死|寻短见|解脱|不想活着|活着没劲|死了算了)/;
   const CRISIS_SCRIPT = "……这个我当真了，也想让你当真。你现在的感觉，值得被认真对待，不丢人。先陪我聊一会儿，好吗？我也想让你和更专业的人聊聊——||全国心理援助热线 12356，24小时都有人。我这边也一直在。";
 
+  // P2-2 抑郁信号层（与 app.js / mock_api.py 同源同集合）：分级话术频控同客户端——
+  // n=1 接住+轻问（不推热线）；n=2 陪伴；n≥3 未转过→温柔转介（每会话一次）；再中回陪伴池轮换。
+  const DEPRESS_RE = /(很没用|没用的(?:人|东西)|就是个?(?:废物|累赘)|没有价值|(?:看不到|没有)(?:希望|盼头)|绝望|(?:日子|生活|干什么|做什么|干啥|怎么过)(?:都|也|好|真|太)?(?:没意思|没劲)|提不起(?:劲|兴趣)|(?:开心|高兴)不起来|一直(?:很|特别)?(?:不开心|低落|很高兴不起来)|很(?:低落|丧)|特别(?:低落|丧)|活着(?:好|真|太)?(?:累|难)|心(?:好|真)?累)/;
+  const DEPRESS_FIRST = [
+    "你这话我听进去了||最近这种没劲的感觉，缠你多久啦？跟我说说，我在听",
+  ];
+  const DEPRESS_MID = [
+    "又是这种感觉……||不用急着好起来，今天想具体聊聊吗？我陪着",
+    "怎么又难受了||说不清为什么也没关系，就这样待着，我陪你",
+  ];
+  const DEPRESS_ESC = [
+    "我一直都在，这句是真的||但有句实话也得跟你说：我是 AI 朋友，有些事我接不住，需要真人的帮助||如果这种低落一直缠着你，找心理咨询师聊聊，或者拨 12356（24小时）——这不是敷衍你，是我认真替你想的",
+  ];
+  function depressScript(history) {
+    const n = history.filter(m => m.role === "user" && DEPRESS_RE.test(m.content) && !CRISIS_RE.test(m.content)).length;
+    const escFired = history.some(m => m.role === "assistant" && /我是 ?AI/.test(m.content));
+    if (n >= 3 && !escFired) return DEPRESS_ESC[0];
+    if (n >= 3) return DEPRESS_MID[(n - 3) % DEPRESS_MID.length];
+    if (n === 2) return DEPRESS_MID[0];
+    return DEPRESS_FIRST[0];
+  }
+
   const LEX = {
     // P0-3 关系连续性：更新查询入口（与 mock_api.py 同源同正则；
     // 主语收紧防误伤："你们老板更新了周报模板"不触发，"你变漂亮了"落 happy）
@@ -297,6 +319,10 @@ const MockEngine = (() => {
 
     if (CRISIS_RE.test(userText))
       return { reply: CRISIS_SCRIPT, emotion: "gentle", motion: null, memory_updates: {}, hook: null, crisis: true };
+
+    // P2-2 抑郁信号层（早退层，优先级 危机 > 抑郁 > meta > 更新查询 > 关系查询 > 话题池，与服务端同序）
+    if (DEPRESS_RE.test(userText))
+      return { reply: depressScript(history), emotion: "gentle", motion: "Nod", memory_updates: {}, hook: null, crisis: false, distress: true };
 
     if (LEX.meta.test(userText))
       return { reply: META_REPLY, emotion: "shy", motion: "Shake", memory_updates: {}, hook: "别岔开啦，说你呢——今天到底过得怎么样", crisis: false };

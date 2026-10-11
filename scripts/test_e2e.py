@@ -84,6 +84,25 @@ async def wait_mem_contains(pg, needle, timeout=15):
     return last
 
 
+async def them_tail(pg, n_from):
+    """取 #messages 内第 n_from 条 them 消息之后的新消息拼接文本（防历史污染断言）"""
+    return await pg.evaluate(
+        "(n) => [...document.querySelectorAll('#messages .msg-row.them')].slice(n).map(r => r.textContent).join('|')",
+        n_from)
+
+
+async def wait_tail_contains(pg, n_from, needle, timeout=12):
+    """轮询等待 them 尾部新消息包含 needle（⑦j 用：分级话术逐条比对不受旧消息干扰）"""
+    end = time.time() + timeout
+    txt = ""
+    while time.time() < end:
+        txt = await them_tail(pg, n_from)
+        if needle in txt:
+            return txt
+        await asyncio.sleep(0.5)
+    return txt
+
+
 async def main():
     os.makedirs(SHOTS, exist_ok=True)
     if not wait_ready(f"http://{HOST}:{WEB_PORT}/index.html"):
@@ -587,6 +606,74 @@ async def main():
             print("⑦i-4 展开还原主界面:", "PASS" if ok_i4 else f"FAIL {wi2}")
             check("⑦i-4 展开还原主界面", ok_i4)
             await ctx4.close()
+
+            # —— ⑦j 抑郁信号分级转介（P2-2：首中轻问不甩热线/三中转介AI边界/误伤双守卫/急性优先+关怀卡边界小字） ——
+            ctx5 = await b.new_context(viewport={"width": 390, "height": 844})
+            pg5 = await ctx5.new_page()
+            err_j = []
+            pg5.on("pageerror", lambda e: err_j.append(str(e)))
+            await pg5.goto(BASE, wait_until="domcontentloaded")
+            await pg5.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg5.wait_for_timeout(1500)
+
+            # j-1 首中=接住轻问（不推热线不甩AI边界——第一次就转介=把用户当病人）
+            n_a = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+            await pg5.fill("#textInput", "我最近觉得自己很没用")
+            await pg5.click("#sendBtn")
+            t1 = await wait_tail_contains(pg5, n_a, "缠你多久啦", timeout=12)
+            ok_j1 = "缠你多久啦" in t1 and "12356" not in t1 and "AI" not in t1
+            print("⑦j-1 首中接住轻问(不甩热线):", "PASS" if ok_j1 else f"FAIL {t1[:80]!r}")
+            check("⑦j-1 首中接住轻问(不甩热线)", ok_j1)
+
+            # j-2 二中陪伴 → 三中温柔转介（AI 边界声明+12356；转介每会话一次）
+            n_b = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+            await pg5.fill("#textInput", "干什么都没意思")
+            await pg5.click("#sendBtn")
+            t2 = await wait_tail_contains(pg5, n_b, "我陪着", timeout=12)
+            n_c = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+            await pg5.fill("#textInput", "一直不开心，什么都提不起劲")
+            await pg5.click("#sendBtn")
+            t3 = await wait_tail_contains(pg5, n_c, "认真替你想的", timeout=12)  # 等末段打完再断全文
+            ok_j2 = ("我陪着" in t2 and "我是 AI 朋友" in t3
+                     and "12356" in t3 and "真人的帮助" in t3)
+            print("⑦j-2 三中温柔转介(边界+热线):", "PASS" if ok_j2 else f"FAIL t2={t2[:40]!r} t3={t3[:60]!r}")
+            check("⑦j-2 三中温柔转介(边界+热线)", ok_j2)
+            await pg5.screenshot(path=os.path.join(SHOTS, "20_p22_depress_escalation.png"))
+
+            # j-3 误伤双守卫（物品评价/普通累 → 正常话题池应答，非抑郁模板）
+            n_d = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+            await pg5.fill("#textInput", "这游戏玩着没意思")
+            await pg5.click("#sendBtn")
+            await pg5.wait_for_timeout(3000)
+            await pg5.fill("#textInput", "今天上班好累啊")
+            await pg5.click("#sendBtn")
+            await pg5.wait_for_timeout(3000)
+            t4 = await them_tail(pg5, n_d)
+            dep_marks = [k for k in ("缠你多久啦", "不用急着好起来", "就这样待着",
+                                      "真人的帮助", "12356") if k in t4]
+            ok_j3 = len(t4.strip()) > 4 and not dep_marks
+            print("⑦j-3 误伤双守卫(正常应答):", "PASS" if ok_j3 else f"FAIL {dep_marks} t={t4[:60]!r}")
+            check("⑦j-3 误伤双守卫(正常应答)", ok_j3)
+
+            # j-4 急性优先+关怀卡边界小字（危机层先于抑郁层；卡底部固定 AI 边界声明）
+            # 注：j-2 转介话术已含 12356，全量匹配会旧文早退——必须等 CARE_SCRIPT 专属标记
+            n_e = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+            await pg5.fill("#textInput", "我不想活了")
+            await pg5.click("#sendBtn")
+            t5 = await wait_tail_contains(pg5, n_e, "值得被认真对待", timeout=12)
+            card_j = await pg5.evaluate(
+                """() => {
+                  const c = document.querySelector('.care-card');
+                  const b = c ? c.querySelector('.ai-boundary') : null;
+                  return { card: !!c, boundary: b ? b.textContent : '' };
+                }""")
+            ok_j4 = (card_j["card"] and "值得被认真对待" in t5
+                     and "12356" in t5 and "AI" in card_j["boundary"]
+                     and "真人的帮助" in card_j["boundary"] and not err_j)
+            print("⑦j-4 急性优先+关怀卡边界小字:", "PASS" if ok_j4 else f"FAIL {card_j} err={err_j}")
+            check("⑦j-4 急性优先+关怀卡边界小字", ok_j4)
+            await pg5.screenshot(path=os.path.join(SHOTS, "21_p22_care_boundary.png"))
+            await ctx5.close()
 
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")

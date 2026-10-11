@@ -146,6 +146,8 @@ body {
 .care-card { max-width: 86%; background: linear-gradient(155deg, #FFF4E8, #FFEBDD); border: 1.5px solid #F5C89A; border-radius: 20px 20px 20px 6px; padding: 14px; font-size: 14px; line-height: 1.7; }
 .care-card .hotline { display: flex; align-items: center; gap: 8px; margin-top: 10px; background: #fff; border-radius: 12px; padding: 8px 12px; font-weight: 600; color: #B4531B; }
 .care-card .hotline .pulse { width: 8px; height: 8px; border-radius: 50%; background: #F5A15E; animation: breathe 1.8s infinite; }
+/* P2-2 AI 边界声明：热线下方弱化小字（诚实但不喧宾） */
+.care-card .ai-boundary { margin-top: 6px; font-size: 11px; font-weight: 400; color: #C08A5E; line-height: 1.5; }
 
 /* ---------- Toast ---------- */
 .toast { position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%); z-index: 80; background: rgba(90,74,79,0.88); color: #fff; font-size: 13px; padding: 8px 18px; border-radius: 99px; animation: rise 0.3s; }
