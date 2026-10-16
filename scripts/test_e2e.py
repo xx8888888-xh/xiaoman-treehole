@@ -791,6 +791,80 @@ async def main():
             check("⑦k-5 零控制台错误", not err_k)
             await ctx6.close()
 
+            # —— ⑦l 悬浮窗迷你模式（P2-4 native 配套：?float=1 布局+舞台跳过+聊天可用+入口守卫） ——
+            ctx7 = await b.new_context(viewport={"width": 340, "height": 460})   # FloatWindowService 迷你窗物理尺寸
+            pg7 = await ctx7.new_page()
+            err_l = []
+            pg7.on("pageerror", lambda e: err_l.append(str(e)))
+            await pg7.goto(BASE + "?float=1", wait_until="domcontentloaded")
+            await pg7.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg7.wait_for_timeout(3000)   # 等 app init 走完（含舞台跳过分支）
+
+            # l-1 迷你模式激活：class 切换 + 顶栏/舞台隐藏 + Live2D 零挂载
+            #    （canvases==0 是 const 不挂 window 老坑的回归断言——挂载守卫失效时 PIXI 会照常画）
+            st_l1 = await pg7.evaluate(
+                """() => ({
+                  fm: window.FloatMode ? FloatMode.on : null,
+                  body: document.body.classList.contains('float-mode'),
+                  html: document.documentElement.classList.contains('float-root'),
+                  topbar: getComputedStyle(document.querySelector('.topbar')).display,
+                  stage: getComputedStyle(document.getElementById('stage')).display,
+                  canvases: document.querySelectorAll('#stage canvas').length,
+                })""")
+            ok_l1 = (st_l1["fm"] is True and st_l1["body"] and st_l1["html"]
+                     and st_l1["topbar"] == "none" and st_l1["stage"] == "none"
+                     and st_l1["canvases"] == 0)
+            print("⑦l-1 迷你模式布局+Live2D跳过:", "PASS" if ok_l1 else f"FAIL {st_l1}")
+            check("⑦l-1 迷你模式布局+Live2D跳过", ok_l1)
+
+            # l-2 迷你窗聊天完整可用（同源对话引擎：发消息收回复）
+            n_l = await pg7.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+            await pg7.fill("#textInput", "今天好累呀")
+            await pg7.click("#sendBtn")
+            t_l = ""
+            end_l = time.time() + 15
+            while time.time() < end_l:
+                cnt = await pg7.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+                if cnt > n_l:
+                    t_l = await them_tail(pg7, n_l)
+                    break
+                await asyncio.sleep(0.5)
+            ok_l2 = len(t_l.strip()) > 4 and not err_l
+            print("⑦l-2 迷你窗聊天可用:", "PASS" if ok_l2 else f"FAIL tail={t_l[:40]!r} err={err_l}")
+            check("⑦l-2 迷你窗聊天可用", ok_l2)
+            await pg7.screenshot(path=os.path.join(SHOTS, "24_p24_float_mode.png"))
+
+            # l-3 入口守卫：无 AndroidTTS 桥的浏览器中设置面板 floatField 保持隐藏
+            hid_l = await pg7.evaluate("document.getElementById('floatField').hidden")
+            ok_l3 = hid_l is True
+            print("⑦l-3 无桥浏览器悬浮入口隐藏:", "PASS" if ok_l3 else f"FAIL hidden={hid_l}")
+            check("⑦l-3 无桥浏览器悬浮入口隐藏", ok_l3)
+            await ctx7.close()
+
+            # l-4 正常模式不受污染（无参数：无 float 类 + Live2D 正常挂载——跳过只发生在迷你窗）
+            ctx8 = await b.new_context(viewport={"width": 390, "height": 844})
+            pg8 = await ctx8.new_page()
+            err_m = []
+            pg8.on("pageerror", lambda e: err_m.append(str(e)))
+            await pg8.goto(BASE, wait_until="domcontentloaded")
+            await pg8.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg8.wait_for_timeout(4000)   # 等模型挂载
+            st_l4 = await pg8.evaluate(
+                """() => ({
+                  fm: window.FloatMode ? FloatMode.on : null,
+                  body: document.body.classList.contains('float-mode'),
+                  canvases: document.querySelectorAll('#stage canvas').length,
+                })""")
+            ok_l4 = (st_l4["fm"] is False and not st_l4["body"] and st_l4["canvases"] >= 1
+                     and not err_m)
+            print("⑦l-4 正常模式无污染+舞台正常:", "PASS" if ok_l4 else f"FAIL {st_l4} err={err_m}")
+            check("⑦l-4 正常模式无污染+舞台正常", ok_l4)
+            await ctx8.close()
+
+            # l-5 零控制台错误（迷你模式 context）
+            print("⑦l-5 迷你模式零控制台错误:", "PASS" if not err_l else f"FAIL {err_l}")
+            check("⑦l-5 迷你模式零控制台错误", not err_l)
+
             print("⑩ 控制台错误:", errors if errors else "无")
             print("⑪ HTTP>=400:", [x for x in bad if "favicon" not in x[1]] or "无")
         finally:

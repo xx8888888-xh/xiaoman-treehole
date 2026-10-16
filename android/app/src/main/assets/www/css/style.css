@@ -235,3 +235,21 @@ body.widget-mode #stage {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* ============ 悬浮窗迷你模式（?float=1，FloatWindowService 迷你窗 WebView 专用） ============ */
+/* 目标：340×460 小窗里聊天功能完整可用——砍装饰、砍舞台、砍顶栏，对话区+输入栏占满 */
+body.float-mode .bg-layer,
+body.float-mode .topbar,
+body.float-mode #stage,
+body.float-mode #widgetBubble { display: none !important; }
+
+body.float-mode #app { max-width: none; height: 100%; }
+
+body.float-mode #chatArea { flex: 1; }
+body.float-mode #chatScroll { padding: 6px 10px 4px; }
+
+body.float-mode .inputbar { padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px)); }
+body.float-mode .bubble { font-size: 13.5px; }
+
+/* 迷你窗里隐藏只能看不能用的按钮（语音输入在迷你窗走浏览器降级，保留） */
+body.float-mode .float-hidden { display: none !important; }

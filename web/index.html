@@ -114,10 +114,16 @@
         </select>
       </label>
       <div class="about">
-        <p>小满树洞 v0.1 · 开源软件（MIT）</p>
+        <p>小满树洞 v0.4 · 开源软件（MIT）</p>
         <p class="mini">渲染: PixiJS + pixi-live2d-display (MIT) · 模型: Hiyori（Live2D 免费素材，经结构化改造）· 语音: edge-tts</p>
         <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）</p>
       </div>
+      <label class="field float-field" id="floatField" hidden><span>悬浮窗（小满浮在其他应用上）</span>
+        <div class="float-actions">
+          <button class="solid-btn" id="floatOpenBtn">开启悬浮球</button>
+          <button class="ghost-btn" id="floatCloseBtn">关闭悬浮窗</button>
+        </div>
+      </label>
     </div>
   </div>
 
@@ -131,6 +137,7 @@
 <script src="js/vendor/live2dcubismcore.min.js" onerror="console.error('[load-fail] js/vendor/live2dcubismcore.min.js')"></script>
 <script src="js/vendor/pixi-live2d-cubism4.min.js" onerror="console.error('[load-fail] js/vendor/pixi-live2d-cubism4.min.js')"></script>
 <script src="js/api.js"></script>
+<script src="js/float_mode.js"></script>
 <script src="js/mock_engine.js"></script>
 <script src="js/memory.js"></script>
 <script src="js/reminders.js"></script>

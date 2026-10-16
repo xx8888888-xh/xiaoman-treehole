@@ -4,7 +4,28 @@
 
 ---
 
-## 2026-10-11 · 15:53–16:5x P3-1 mock 链路活人感修复包（用户视角体检首轮→修复→三端闭环）
+## 2026-10-16 · 07:0x–08:5x P2-4b Android 原生悬浮窗（用户指令：悬浮球+迷你对话窗·挂账收口）
+
+> 上会话（07:03 前后）完成全部三端实现+测试编写（FloatWindowService.java / float_mode.js / G12 / E2E ⑦l / 截图 24），被切断在提交前且无 daily 交接；本轮 08:19 巡检触发挂账收口：验证→补缺口→回归→CI→合并→交付 APK。
+
+### 收口验证与补缺口
+1. **语法全过**：node --check ×4（web+assets 两份 float_mode.js/app.js）+ py_compile ×2 + bash -n；assets/www 与 web/ 四文件 diff 逐对一致（P0-3 教训预防）
+2. **抓到 1 个真缺口**：`FloatWindowService.buildPanel()` 创建迷你窗 WebView 后**从未 loadUrl**——面板会白屏。补 `panelWeb.loadUrl("file:///android_asset/www/index.html?float=1")`（与主壳同源路径 + float 参数触发小屏布局）
+3. **补 CI 真机交互验收**（完成标准"含交互过程"缺口）：新建 `scripts/emulator_float_check.py`——HOME 退后台（防主 WebView 文本污染 dump 定位）→ appops 授 SYSTEM_ALERT_WINDOW（等价用户手动授权）→ start-foreground-service → dump 定位悬浮球（text=满）→ swipe 拖动验证位移 → 点球展开迷你窗 → WebView 内真实聊天一轮（tap EditText→input→ENTER，回复=新 CJK 节点前后对比判定）→ 点「收起」回球态 → stopservice 干净退出 + 全程 logcat FATAL 抓取；产出 emulator_04~08 五张交互过程截图；接入 android-ci.yml emulator-smoke
+4. **版本**：build.gradle.kts + build_apk.sh 同步 bump 0.3.0→0.4.0（versionCode 4）
+
+### 实现要点（上会话挂账，本轮验收通过）
+- **FloatWindowService.java**（新，332 行）：前台服务（FGS specialUse）+ WindowManager TYPE_APPLICATION_OVERLAY——60dp 圆形悬浮球（Q 版满字头像+拖动 SLOP>20px 判定/贴边吸附/单击展开）；迷你对话窗 340×460dp cap（标题栏+收起/关闭+WebView 加载 ?float=1 复用全部对话引擎：记忆/提醒/离线回复/TTS 降级 speechSynthesis）；通知栏常驻"小满在身边"；onDestroy 双 view 清理防泄漏
+- **MainActivity 桥**（+49 行）：floatGranted()/floatOpenSettings()/floatShow()/floatHide() 四接口——设置面板「悬浮窗」字段仅壳内露出（浏览器无桥自动隐藏，⑦l-3）
+- **float_mode.js**（新，28 行）：?float=1 → html.float-root 首帧前置 + body.float-mode DOMContentLoaded 兜底挂载；app.js 迷你模式跳过 Live2D 舞台（双 WebView 实例省内存防卡顿）——舞台显示为 none，对话链路全保留
+- **G12 专项 8 点**（test_memory_recall.py）：URL 解析五场景（含组合参数/location 缺失不崩）+ window.FloatMode 跨模块挂载 + DOMContentLoaded 晚就绪兜底
+- **E2E ⑦l 5 点**（test_e2e.py，340×460 视口模拟迷你窗物理尺寸）：⑦l-1 迷你布局+Live2D 零挂载（canvases==0 回归断言防"const 不挂 window"老坑）⑦l-2 迷你窗聊天可用 ⑦l-3 无桥入口隐藏 ⑦l-4 正常模式零污染+舞台正常 ⑦l-5 零控制台错误；截图 24_p24_float_mode.png
+
+### 验收（全部实跑）
+- **G 系列 152/152**（G12 新 9 点：143+9）；**E2E 47/47**（⑦l 新 5 点）——注：本轮曾有两轮 E2E 并发写同一日志文件致交错（一轮 46/47 干扰失败 ⑦g-6），已单独串行重跑复核 47/47 含 ⑦g-6 PASS，以串行轮为准
+- **全套回归**：契约 8/8 + onboarding 9/9 + 记忆 152/152 + 生命线 5/5 + TTS 3/3（test_suite.log 五项 EXIT=0）
+- CI emulator-smoke 新增浮窗五步交互链（授权→球→拖→展开→聊→收起→关闭）→ CI 四绿后 main 合并（见下方闭环补记）
+
 
 > 14:53 轮开启「用户视角体检」阶段（路线图 9 项全清后）：新建 scripts/ux_walkthrough.py 模拟真实用户全旅程（新用户首面→日常聊天→抽屉卡片→隔天 32h 再访→情绪时刻），产出全量 transcript + 9 界面截图 + VLM 视觉评审。逐句审读抓出 4 个体验问题（transcript 证据 docs/shots/ux_audit_transcript.txt + 设计定稿见路线图 §P3-1）→ 本轮实现+测试+复跑对照全部闭环。
 

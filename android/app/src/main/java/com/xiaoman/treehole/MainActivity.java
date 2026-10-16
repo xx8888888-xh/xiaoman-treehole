@@ -2,8 +2,12 @@ package com.xiaoman.treehole;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
@@ -172,6 +176,49 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean available() {
             return ttsReady;
+        }
+
+        // ---- 悬浮窗（FloatWindowService）----
+
+        /** 悬浮窗特殊权限是否已授予（Settings.canDrawOverlays，API 23+，minSdk 24 恒可用） */
+        @JavascriptInterface
+        public boolean floatGranted() {
+            return Settings.canDrawOverlays(getApplicationContext());
+        }
+
+        /** 跳系统"显示在其他应用上层"授权页；授权后返回 App 再调 floatShow */
+        @JavascriptInterface
+        public void floatOpenSettings() {
+            runOnUiThread(() -> {
+                try {
+                    Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:" + getPackageName()));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                } catch (Exception e) {
+                    Log.w("MainActivity", "overlay settings page unavailable: " + e);
+                }
+            });
+        }
+
+        /** 启动悬浮窗服务（悬浮球）；未授权时返回 false 由 web 端引导授权 */
+        @JavascriptInterface
+        public boolean floatShow() {
+            if (!Settings.canDrawOverlays(getApplicationContext())) return false;
+            runOnUiThread(() -> {
+                Intent i = new Intent(MainActivity.this, FloatWindowService.class)
+                        .setAction(FloatWindowService.ACTION_SHOW);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
+                else startService(i);
+            });
+            return true;
+        }
+
+        /** 关闭悬浮窗（收起并停服务） */
+        @JavascriptInterface
+        public void floatHide() {
+            runOnUiThread(() -> startService(new Intent(MainActivity.this, FloatWindowService.class)
+                    .setAction(FloatWindowService.ACTION_HIDE)));
         }
     }
 

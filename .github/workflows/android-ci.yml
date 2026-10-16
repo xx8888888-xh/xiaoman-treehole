@@ -234,6 +234,9 @@ jobs:
             # Screenshot: poke
             adb exec-out screencap -p > emulator_03_poke.png
 
+            # ---- 悬浮窗完整交互验收（P2-4 native：授权→球→拖动→展开→聊天→收起→关闭，产出 emulator_04~08） ----
+            python3 scripts/emulator_float_check.py || { echo "ERROR: float window check failed"; exit 1; }
+
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4

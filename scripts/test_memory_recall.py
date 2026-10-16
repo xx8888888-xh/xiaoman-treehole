@@ -990,6 +990,79 @@ console.log('RESULT_JSON:' + JSON.stringify(out));
         check("G11-5 node可用", False, "node 不在 PATH")
 
 
+def g12_float_mode():
+    """G12 悬浮窗迷你模式探测（P2-4 native 配套）：float_mode.js node 直调
+    铁律验收：?float=1 激活 + class 首帧前置 + 默认三态关闭 + window 显式挂载。
+    window 挂载是老坑钉子——2026-10-05 heartbeat 守卫曾因 const 不挂 window 失效，
+    float_mode.js 初版同样漏挂（本次修复），此断言专门钉死该类回归。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    js = r"""
+const fs = require('fs');
+const SRC = fs.readFileSync(ROOT + '/web/js/float_mode.js', 'utf8');
+const out = [];
+const P = (n, ok, info) => out.push({ n, ok, info: String(info || '').slice(0, 60) });
+
+// 沙箱：参数化 location.search / body 是否就绪（float_mode.js 加载即执行 IIFE）
+function sandbox(search, withBody) {
+  const htmlCls = [], bodyCls = [], events = [];
+  const bodyObj = { classList: { add: c => bodyCls.push(c) } };
+  const doc = {
+    documentElement: { classList: { add: c => htmlCls.push(c) } },
+    body: withBody ? bodyObj : null,
+    addEventListener: (ev, fn, opt) => events.push({ ev, fn, opt }),
+  };
+  const win = {};
+  const loc = search === undefined ? undefined : { search };
+  let err = null;
+  try {
+    new Function('window', 'location', 'document', SRC)(win, loc, doc);
+  } catch (e) { err = e.message; }
+  return { win, doc, bodyObj, htmlCls, bodyCls, events, err };
+}
+
+// ── G12-1 ?float=1 激活链 ──
+const a = sandbox('?float=1', false);
+P('G12-1① ?float=1→on=true+html类前置', a.err === null && a.win.FloatMode && a.win.FloatMode.on === true && a.htmlCls.includes('float-root'),
+  a.err || JSON.stringify(a.htmlCls));
+P('G12-1② body晚就绪→注册DOMContentLoaded{once}', a.events.length === 1 && a.events[0].ev === 'DOMContentLoaded' && a.events[0].opt && a.events[0].opt.once === true,
+  JSON.stringify(a.events.map(e => e.ev)));
+a.doc.body = a.bodyObj;              // 模拟 DOM body 就绪
+if (a.events.length) a.events[0].fn(); // 触发 arm()
+P('G12-1③ 就绪回调挂body.float-mode', a.bodyCls.includes('float-mode'), JSON.stringify(a.bodyCls));
+
+// ── G12-2 默认关闭三态 ──
+const b = sandbox('', false);
+P('G12-2① 无参数→on=false+零类零事件', b.win.FloatMode && b.win.FloatMode.on === false && b.htmlCls.length === 0 && b.events.length === 0,
+  JSON.stringify(b.htmlCls));
+const c = sandbox('?float=0', false);
+P('G12-2② float=0≠1→on=false', c.win.FloatMode && c.win.FloatMode.on === false, '');
+const d = sandbox('?foo=1&float=1', false);
+P('G12-2③ 组合参数仍识别float=1', d.win.FloatMode && d.win.FloatMode.on === true && d.htmlCls.includes('float-root'), '');
+
+// ── G12-3 body 已就绪路径（不等到事件） ──
+const e2 = sandbox('?float=1', true);
+P('G12-3① body即时挂载不注册事件', e2.bodyCls.includes('float-mode') && e2.events.length === 0, JSON.stringify(e2.bodyCls));
+
+// ── G12-4 window 显式挂载守卫（本断言就是抓 const 不挂 window 的回归） ──
+P('G12-4① window.FloatMode挂载(全场景)', [a, b, c, d, e2].every(s => s.win.FloatMode && typeof s.win.FloatMode.on === 'boolean'), '');
+
+// ── G12-5 健壮性：location 缺失走 catch 兜底不崩 ──
+const f = sandbox(undefined, false);
+P('G12-5① location缺失→on=false不崩溃', f.win.FloatMode && f.win.FloatMode.on === false, f.err || '');
+console.log('RESULT_JSON:' + JSON.stringify(out));
+""".replace("ROOT", json.dumps(root))
+    try:
+        p = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
+        line = [l for l in p.stdout.splitlines() if l.startswith("RESULT_JSON:")]
+        if not line:
+            check("G12 float_mode可加载", False, (p.stderr or p.stdout)[-200:])
+            return
+        for item in json.loads(line[-1][len("RESULT_JSON:"):]):
+            check(item["n"], item["ok"], item.get("info", ""))
+    except FileNotFoundError:
+        check("G12 node可用", False, "node 不在 PATH")
+
+
 def main():
     print(f"目标服务: {CHAT_URL}")
     # 健康预检
@@ -999,7 +1072,7 @@ def main():
     except Exception as e:
         print(f"[FAIL] mock 服务不可达: {e}（先跑 scripts/dev_up.sh）")
         return 1
-    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx, g9_self_narrative, g10_depress_signal, g11_mem_aware_dedup):
+    for fn in (g1_server, g2_greet_dedup, g3_offline_engine, g4_generic_guard, g5_boss_guard, g6_continuity, g7_relation, g8_heartbeat_ctx, g9_self_narrative, g10_depress_signal, g11_mem_aware_dedup, g12_float_mode):
         try:
             fn()
         except Exception as e:

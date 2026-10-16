@@ -8,8 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ---- 版本统一定义（单一变量三处引用）----
-VER_CODE=3
-VER_NAME="0.3.0"
+VER_CODE=4
+VER_NAME="0.4.0"
 APK_BASE="xiaoman-treehole-v${VER_NAME//./}-debug"
 
 # ---- SDK 路径：强制要求 ANDROID_HOME，缺省不再用他机路径 ----

@@ -4,6 +4,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 悬浮窗：SYSTEM_ALERT_WINDOW 为特殊权限，需用户在设置页手动授权（canDrawOverlays） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 悬浮球以前台服务承载（保证后台不被杀）；API34 要求声明 FGS 类型 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:label="@string/app_name"
@@ -23,5 +28,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 悬浮窗服务：悬浮球 + 迷你对话窗（specialUse = 跨应用聊天浮层，无其他 FGS 类型匹配） -->
+        <service
+            android:name=".FloatWindowService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating chat bubble overlay for companion app" />
+        </service>
     </application>
 </manifest>

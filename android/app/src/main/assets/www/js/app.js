@@ -816,6 +816,22 @@ const App = (() => {
     });
     // P2-4 悬浮挂件：收起按钮 + 点挂件展开（widget.js 内部绑定 stage 点击）
     if (window.Widget) Widget.bind();
+
+    // 悬浮窗设置（仅 Android 壳内显示：桥上挂了 floatGranted 才露出入口）
+    try {
+      if (window.AndroidTTS && typeof window.AndroidTTS.floatGranted === "function") {
+        $("floatField").hidden = false;
+        $("floatOpenBtn").onclick = () => {
+          if (window.AndroidTTS.floatGranted()) {
+            toast(window.AndroidTTS.floatShow() ? "小满来了——拖动小球，点一下就能聊" : "启动失败，请重试");
+          } else {
+            toast("请先允许「显示在其他应用上层」");
+            window.AndroidTTS.floatOpenSettings();
+          }
+        };
+        $("floatCloseBtn").onclick = () => { window.AndroidTTS.floatHide(); toast("悬浮窗已关闭"); };
+      }
+    } catch (e) { console.warn("[probe] FLOAT_UI_FAIL", e.message); }
   }
 
   function init() {
@@ -825,9 +841,16 @@ const App = (() => {
     } catch (e) { console.error("[probe] BIND_FAIL", e.message); return; }
 
     // 舞台初始化独立兜底：PIXI/模型失败只降级隐藏舞台，不影响对话
-    try {
-      Stage.mount($("stage")); console.log("[probe] mount ok");
-    } catch (e) { console.warn("[probe] STAGE_FAIL", e.message); }
+    // 悬浮窗迷你模式：跳过 Live2D（双 WebView 实例省内存），布局由 CSS float-mode 接管
+    const isFloat = window.FloatMode && FloatMode.on;
+    if (isFloat) {
+      console.log("[probe] float-mode: stage & widget skipped");
+      try { $("stage").style.display = "none"; } catch (e) {}
+    } else {
+      try {
+        Stage.mount($("stage")); console.log("[probe] mount ok");
+      } catch (e) { console.warn("[probe] STAGE_FAIL", e.message); }
+    }
 
     try { greet(); console.log("[probe] greet ok"); } catch (e) { console.warn("[probe] GREET_FAIL", e.message); }
     armIdle();

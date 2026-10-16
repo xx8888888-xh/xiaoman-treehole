@@ -12,8 +12,8 @@ android {
         targetSdk = 34
         // 与手工构建 scripts/build_apk.sh 的 VER_CODE/VER_NAME 保持同源，
         // 避免 Gradle 路径与手工路径出包版本号不一致（审计 android D3）。
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
     }
     buildTypes {
         release {
