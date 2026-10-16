@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-emulator_float_check.py · CI 模拟器悬浮窗验收 v5（P2-4b）
+emulator_float_check.py · CI 模拟器悬浮窗验收 v6（P2-4b）
 --------------------------------------------------------------------
+v6 变更（run 38884396667 实测 20/21，收起按钮错点根因）：
+  实测证据链（/tmp/v5art 真实截图工件标定，emulator_06 顶栏 4 簇）：
+  a) 簇扫描实测：标题(112~400) | 收起(705~771, 763点) | 关闭(875~940,
+     753点) | 右缘阴影杂点(999~1006, 仅16点/7px宽)。
+     v5"右数第二簇"被 7px 杂点簇顶位——错取「关闭」(910,540)：
+     点击后球窗口注销+白字0+像素归零正是"关闭"特征（大窗口消失 PASS
+     掩盖了球消失这一旁证）。
+     ⇒ 微簇过滤（≥100点且宽≥30px）后右数第二=收起(738,541)。
+  b) 兜底坐标按实测收起中心标定：(px2-269, py1+58)。
+  c) 顶栏文字行实测 y 523~563（此前 640 的标定作废）。
 v5 变更（run 38877847899 实测 9/10，球身份判别器换代 + 面板重试）：
   实测证据链（真实截图工件标定，/tmp/v4art）：
   a) 模拟器壁纸本身是粉色系（球区旁对照 24915 px 命中品牌粉容差）——
@@ -148,7 +158,14 @@ def find_collapse_button(img_path, panel_box):
     在其左。overlay 窗口内原生 Button 与球 TextView 同样不进 uiautomator dump
     （v2/v3 实测盲区），故只能像素定位。
     v5：cx/cy 都取簇内真实暗点质心（v4 的 cy 公式实测偏下 74px 会点进
-    WebView 区）。返回 (cx, cy) 或 None。"""
+    WebView 区）。
+    v6（run 38884396667 实测 20/21 根因）：面板右缘 7px 圆角阴影杂点簇
+    （16 点）被当成"最右簇"，右数第二簇错位到「关闭」（x910 实测）——
+    点击后球窗口被注销、白字归零、像素归零，正是"关闭"特征。
+    ⇒ 微簇过滤：有效簇须 ≥100 点且宽 ≥30px（真实按钮文字簇实测
+    收起 763点/66px、关闭 753点/65px），过滤后右数第二=收起。
+    真实标定（emulator_06 全屏坐标）：收起中心 (738,541)、关闭 (910,540)、
+    顶栏文字行 y 523~563。返回 (cx, cy) 或 None。"""
     try:
         from PIL import Image
         px1, py1, px2, py2 = [int(v) for v in panel_box]
@@ -170,9 +187,11 @@ def find_collapse_button(img_path, panel_box):
             else:
                 cur.append(pt)
         clusters.append(cur)
-        if len(clusters) < 2:
+        # v6 微簇过滤：面板右缘阴影杂点簇（16点/7px）会把"右数第二"顶成「关闭」
+        valid = [c for c in clusters if len(c) >= 100 and (c[-1][0] - c[0][0]) >= 30]
+        if len(valid) < 2:
             return None
-        coll = clusters[-2]          # 右数第二簇 = 收起
+        coll = valid[-2]          # 右数第二有效簇 = 收起
         cx = x1 + sum(x for x, _ in coll) // len(coll)
         cy = int(py1) + sum(y for _, y in coll) // len(coll)
         return (cx, cy)
@@ -379,7 +398,7 @@ def main():
             print(f"[FLOAT-BTN] 收起按钮暗点质心定位 {btn}", flush=True)
         else:
             px1, py1, px2, py2 = panel_box
-            collapse_x, collapse_y = int(px2 - 209), int(py1 + 51)
+            collapse_x, collapse_y = int(px2 - 269), int(py1 + 58)
             print(f"[FLOAT-BTN] 扫描未命中，兜底坐标 ({collapse_x},{collapse_y})", flush=True)
         sh(f"adb shell input tap {int(collapse_x)} {int(collapse_y)}")
         time.sleep(3)
