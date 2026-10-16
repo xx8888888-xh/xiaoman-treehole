@@ -53,6 +53,7 @@ public class FloatWindowService extends Service {
     private WindowManager.LayoutParams ballParams;
     private WindowManager.LayoutParams panelParams;
     private boolean panelShown = false;
+    private int screenW;   // 拖动松手贴边吸附用
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
@@ -61,6 +62,7 @@ public class FloatWindowService extends Service {
     public void onCreate() {
         super.onCreate();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        screenW = getResources().getDisplayMetrics().widthPixels;
         startForegroundNotify();
         showBall();
     }
@@ -120,6 +122,7 @@ public class FloatWindowService extends Service {
         tv.setTextColor(Color.WHITE);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
         tv.setGravity(Gravity.CENTER);
+        tv.setContentDescription("小满悬浮球");   // TalkBack 无障碍：双击展开迷你对话窗
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.OVAL);
         bg.setColor(Color.parseColor("#F7A8B8")); // 品牌粉
@@ -180,12 +183,21 @@ public class FloatWindowService extends Service {
                 }
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    if (!moved) togglePanel();  // 单击：展开/收起迷你窗
+                    if (moved) snapToEdge();  // 拖动松手：贴边吸附
+                    else togglePanel();       // 单击：展开/收起迷你窗
                     return true;
                 default:
                     return false;
             }
         }
+    }
+
+    /** 拖动松手贴边吸附：球心在屏幕左半 → 吸左缘，右半 → 吸右缘（y 不变） */
+    private void snapToEdge() {
+        int size = dp(BALL_SIZE_DP);
+        int centerX = ballParams.x + size / 2;
+        ballParams.x = centerX < screenW / 2 ? 0 : screenW - size;
+        try { wm.updateViewLayout(ball, ballParams); } catch (Exception ignored) {}
     }
 
     // ---------------- 迷你对话窗 ----------------

@@ -234,7 +234,11 @@ jobs:
             # Screenshot: poke
             adb exec-out screencap -p > emulator_03_poke.png
 
-            # ---- 悬浮窗完整交互验收（P2-4 native：授权→球→拖动→展开→聊天→收起→关闭，产出 emulator_04~08） ----
+            # ---- 悬浮窗完整交互验收（P2-4b v3：授权→球→拖动→展开→聊天→收起→关闭，产出 emulator_04~09） ----
+            # v3 三通道证据：dumpsys window（窗口级）+ PIL 像素基线差分（像素级）+ logcat probe（链路级）。
+            # uiautomator dump 对 TYPE_APPLICATION_OVERLAY 有盲区（run 38853971176 实锤：球已渲染但 dump 无节点）。
+            pip3 install --quiet --user pillow 2>/dev/null || pip3 install --quiet pillow || true
+            python3 -c "import PIL; print('PIL', PIL.__version__)" || { echo "ERROR: pillow unavailable"; exit 1; }
             python3 scripts/emulator_float_check.py || { echo "ERROR: float window check failed"; exit 1; }
 
       - name: Upload screenshots
@@ -251,7 +255,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: uiautomator-dump
-          path: window_dump.xml
+          path: |
+            window_dump.xml
+            float_dumpsys.txt
           if-no-files-found: ignore
           retention-days: 7
 

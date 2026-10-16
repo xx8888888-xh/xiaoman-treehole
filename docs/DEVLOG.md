@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-10-16 · 15:0x P2-4b CI 失败二次收口：uiautomator 盲区→v3 三通道证据（15:00 巡检触发，挂账续跑到闭环）
+
+> 15:00 巡检：496c3b4（13:05 推送）CI run 38853971176 emulator-smoke 仍 FAILED——但 7/8 过，唯一红点 `[FLOAT-FAIL] 悬浮球可见（dump 定位）`。04 截图视觉实锤球已渲染：uiautomator dump 对 TYPE_APPLICATION_OVERLAY 有盲区（与 WebView DOM 同类）。工作区躺 14:08–14:14 v3 挂账被切断。按挂账收口法：验证→修 bug→回归→提交→CI→合并→交付。
+
+### v3 挂账内容（上会话 14:0x，本轮验收）
+1. **emulator_float_check.py v3 全量重写**：放弃 dump 通道，改三通道证据——A 窗口级 dumpsys window（mType=2038 overlay + mFrame 坐标，解析失败仅 WARN）；B 像素级 PIL 基线差分（主证据通道：球可见 BALL 1200~150k px/拖动位移>300px/面板 PANEL_MIN 300k/收起回球/移除归零 GONE_MAX 8k）；C 链路级 logcat probe（[probe] msg me/them）。产出 emulator_04~09 六张交互截图
+2. **FloatWindowService v3**：+snapToEdge() 拖动松手贴边吸附（球心左半屏吸左缘/右半屏吸右缘）+ ball contentDescription（TalkBack 无障碍）
+3. **android-ci.yml**：pillow 安装 + float_dumpsys.txt 失败工件上传
+
+### 本轮抓到并修掉 1 个会崩 CI 的真 bug
+- `chat_round()` 第 133 行 `_, _, (x1,y1,x2,y2) = panel_box`——panel_box 是扁平 4 元组，解包直接 ValueError（Python 本地实测复现）。修为 `x1, y1, x2, y2 = panel_box`。此 bug 只在 CI 路径触发（本地不跑 emulator 脚本），挂账验证价值再+1
+
+### 本轮验收（全部实跑）
+- py_compile 过；ENTER 发送链路核对（app.js keydown Enter→submitText，keyevent 66 可触发）；dumpsys 面板坐标→收起/关闭按钮命中区估算核对；assets↔web 同步 diff 逐字节一致
+- **全套回归 6 项全绿**：契约 8/8 + onboarding 9/9 + **G 系列 152/152（G12 悬浮窗专项在内）** + 生命线 5/5 + TTS 3/3 + **E2E 47/47**，SUMMARY 0 个非零退出；截图 07–24 由本轮 verified 轮重新生成
+- **APK 重建 EXIT=0**：v040-debug 4.9M（15:07，含 snapToEdge/contentDescription，ecj 编译过）
+- 过程两次 504 断连，均靠 ps/日志探针确认实际状态后继续，未双跑
+
+→ 下一步：提交推送 zhiqiu/dev → CI 四绿 → main 合并 → 拉验收截图归档 → APK 交付用户 → 删本 cron 任务
+
+---
+
 ## 2026-10-16 · 13:0x P2-4b CI 失败收口：意图通道+渲染探针（13:00 巡检触发，挂账续跑到闭环）
 
 > 13:00 巡检：ee7ad93 已推送但 **CI run 38846237625 emulator-smoke FAILED**（4/7 项过）——悬浮窗代码本体没问题，死在 CI 验收脚本与安全设计的冲突上。工作区躺上会话挂账（11:44–11:46 改完、12:23 后台 E2E 47/47 跑完被切断）。按挂账收口法：验证→回归→提交→CI→合并→交付。
