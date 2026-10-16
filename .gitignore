@@ -17,6 +17,7 @@ node_modules/
 backups/
 *.apk
 *.aab
+deliver/
 
 # Python 缓存与脚本自测临时产物
 __pycache__/

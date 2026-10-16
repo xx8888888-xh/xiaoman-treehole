@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-10-16 · 19:0x P2-4b 悬浮窗收官：CI 验收六轮攻坚双绿 + 交付物溯源核验 + APK 交付（19:00 巡检触发）
+
+> 19:00 巡检：v4/v5/v6 三轮会话（15:10–18:12）均已提交但 DEVLOG 无条目（会话连续被切断）。此刻检查：main 已在 4b27824 且 **CI 双绿**（run 38885156657 + 38885705125，同 commit），交付目录已组装（18:12）但 **APK 未发出**。完成标准 6 项中前 5 项已满足 → 本轮收口：交付物溯源核验 → 补账 → 交付 → 删本 cron。
+
+### CI 验收六轮攻坚时间线（全部实测 run，Beijing 时间）
+
+| 轮 | 提交 | CI run | 结果 | 根因 → 修法 |
+|---|---|---|---|---|
+| v0 | ee7ad93 | 38846237625 | 4/7 FAIL | exported=false 安全设计 vs shell 直启被拒；WebView DOM 不进 uiautomator dump |
+| v1 | 496c3b4 13:05 | 38853971176 | 7/8 FAIL | **uiautomator 对 TYPE_APPLICATION_OVERLAY 全盲**——球已渲染但 dump 无节点（04 截图视觉实锤） |
+| v3 | ef92ffd 15:10 | 38865512010 | 14/20 FAIL | 像素差分 bbox 未还原全屏坐标（缺 y+TOP_CROP 偏 120px）→ tap/swipe 全打偏；dumpsys ty= 双写法兼容 |
+| v4 | 39c2557 17:03 | 38877847899 | 9/10 FAIL | 模拟器壁纸粉色系 → 品牌粉判别失效（球区旁壁纸 24915px 命中容差，差分仅 4365px 与时钟跳变同量级） |
+| v5 | f64070a 18:01 | 38884396667 | 20/21 FAIL | 顶栏右数第二簇被 7px 阴影杂点顶位 → 错点「关闭」而非「收起」（球窗口注销+白字 0 正是关闭特征） |
+| v6 | 4b27824 18:07 | **38885156657 + 38885705125 双绿** ✅ | 21/21 | 微簇过滤（≥100 点且宽≥30px）+ 按真实工件标定收起中心 (738,541) + 兜底重标定 |
+
+### 方法论沉淀（可复用资产）
+1. **三通道证据**：uiautomator 对 overlay 窗口全盲（与 WebView DOM 同类盲区）→ CI 验收 TYPE_APPLICATION_OVERLAY 必须走 ①dumpsys window（窗口级 mType=2038/mFrame）②PIL 像素基线差分（主证据）③WebView console→logcat probe（链路级），DOM dump 通道死路
+2. **假绿教训**（v1 轮 7/8）：交互链整段被 dump 盲区跳过仍记 PASS——**验收脚本本身也要被验收**，v4 起每轮用真实工件标定复核
+3. **像素判别器防环境色**：壁纸色/时钟跳变都会进容差 → 终版主判据=球窗口 frame 内「满」字白像素（>245 全通道；实测有球 3412 px vs 球已移 0，WHITE_MIN=1500 留 2.3x 余量）
+4. **v4/v5/v6 只改 scripts/emulator_float_check.py（CI 验收脚本），产品代码自 v3 后零变更** → 15:0x 会话的本地全套 6 项全绿（G 152/152 + E2E 47/47 + 契约 8/8 + onboarding 9/9 + 生命线 5/5 + TTS 3/3）对 main HEAD 仍有效，CI 双绿即最终验收
+
+### 本轮收口动作（19:00–19:3x，全部实跑）
+1. **交付物溯源核验**：原 deliver/ 组装件经 md5 比对来自 run#1（38885156657）——与最终 main 合并绿 run#2（38885705125）同 commit 但非同轮产物 → **全部替换为 run#2 工件**（APK `d137a06b…` + 9 张截图逐张 md5 一致）
+2. **APK 内容实锤**：dex 含 FloatWindowService/DragTapListener/autostart_float 意图通道 + assets/www/js/float_mode.js；签名完整（XIAOMAN.RSA）；manifest 实为 versionName 0.4.0/versionCode 4 → 交付目录更名 v0.4.1-float→**v0.4.0-float**（上会话误标版本号，0.4.0 即悬浮窗发布版：ee7ad93 会话 0.3.0→0.4.0 bump）
+3. **补账**：DEVLOG 本条 + CONTRIBUTIONS P2-4b 价值条目（此前完全缺失）；float_dumpsys.txt 调试残留删除；.gitignore 补 deliver/；run#2 九张截图入 docs/shots 归档（证据永久化，CI 工件 90 天过期）
+4. **交付**：`小满树洞-v0.4.0-悬浮窗-debug.apk`（4.9M）+ ci_shots 9 张（home→chat→poke→悬浮球→拖动→展开→聊天→收起→关闭全交互链）发送用户
+5. **删 cron**：悬浮窗任务巡检（6ad154f0491303d8653d5d4f）——完成标准 6 项全满足
+
+→ **P2-4b 悬浮窗全链路闭环：实现 → 本地 152/152+47/47+全套 6 项 → CI 六轮攻坚双绿 → main 合并 4b27824 → APK 交付**
+
+---
+
 ## 2026-10-16 · 15:0x P2-4b CI 失败二次收口：uiautomator 盲区→v3 三通道证据（15:00 巡检触发，挂账续跑到闭环）
 
 > 15:00 巡检：496c3b4（13:05 推送）CI run 38853971176 emulator-smoke 仍 FAILED——但 7/8 过，唯一红点 `[FLOAT-FAIL] 悬浮球可见（dump 定位）`。04 截图视觉实锤球已渲染：uiautomator dump 对 TYPE_APPLICATION_OVERLAY 有盲区（与 WebView DOM 同类）。工作区躺 14:08–14:14 v3 挂账被切断。按挂账收口法：验证→修 bug→回归→提交→CI→合并→交付。

@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-10-16 · P2-4b Android 原生悬浮窗——小满"住出 App"，六轮 CI 攻坚双绿闭环
+
+**贡献**：小满从"打开 App 才在"升级为"常驻身边"——60dp Q 版「满」字悬浮球（可拖动+松手贴边吸附+单击展开）→ 340×460dp 迷你对话窗复用全部对话引擎（记忆/提醒/离线回复/TTS 降级），前台服务保活+通知栏「小满在身边」常驻；浏览器端无桥自动隐藏入口（Web 版零破坏）。这是 P2-4 Q 版挂件（页内 widget）的 Android 原生续作：真·跨 App 悬浮。
+
+- **零妥协安全设计下的 CI 验收通道**：FloatWindowService `exported=false`（外部无法直启直停，防劫持）与 CI 需要拉起服务天然冲突 → **意图通道**（`--ez autostart_float/float_stop` 经 MainActivity onCreate/onNewIntent 壳内转发，语义=「已授权用户打开 App」）——CI 与真实用户走同一条通道，安全边界零让步。
+- **三通道证据方法论（本轮最大可复用资产）**：实测 uiautomator 对 TYPE_APPLICATION_OVERLAY **全盲**（球已渲染但 dump 无节点，与 WebView DOM 同类盲区）→ CI 验收 overlay 改走 ①dumpsys window 窗口级（mType=2038+mFrame 坐标）②PIL 像素基线差分（球可见/拖动位移/面板/收起/移除五态）③WebView console→logcat probe 双向断言（聊天链路）。六轮 CI 失败逐轮根因（dump 盲区→坐标系偏差 120px→壁纸粉色污染判别→顶栏按钮簇 7px 杂点错点关闭）全部以真实工件标定修掉，v6 双绿（run 38885156657/38885705125）。
+- **假绿教训钉进流程**：v1 轮 7/8 的"绿"里交互链整段被 dump 盲区跳过仍记 PASS——验收脚本自身也要被验收，此后每轮以失败工件复盘标定（v5 轮即靠 20/21 的唯一红点工件抓到"点错按钮"）。
+- **产品侧零重复造轮**：迷你窗=同一 WebView 加载 `?float=1` 复用全部对话逻辑，Live2D 舞台跳过（双 WebView 实例省内存）；悬浮球 contentDescription（TalkBack 无障碍）；onDestroy 双 view 清理防泄漏。
+- **产物**：FloatWindowService.java（332 行）/ MainActivity 桥 4 接口 / float_mode.js / G12 专项 8 点 / E2E ⑦l 5 点 / emulator_float_check.py（三通道 21 断言）/ emulator_04~09 交互截图 / v0.4.0 APK（4.9M，dex 实锤含悬浮窗类+意图通道）。
+- **验证**：G 系列 **152/152** + E2E **47/47** + 全套回归 6 项（契约 8/8 · onboarding 9/9 · 生命线 5/5 · TTS 3/3）+ CI 双绿 + main 合并 4b27824 + APK 交付用户。
+
+---
+
 ## 2026-10-11（下午·体检阶段）· P3-1 mock 链路活人感修复包——用户视角体检首战
 
 **贡献**：建立"用户视角体检"体系（scripts/ux_walkthrough.py 全旅程走查+transcript 全量审读+VLM 视觉评审），并以首轮体检抓出的 4 个体验问题驱动 P3-1 修复包三端闭环——**断言式测试测不出"复读机感"，体检补上了这块盲区**。
