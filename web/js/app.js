@@ -268,6 +268,8 @@ const App = (() => {
 
   // ---------- 渲染 ----------
   function addMsg(text, who, opts = {}) {
+    // [probe] 渲染探针（logcat tag=XiaoManWeb）：只记方向与长度，不落内容（CI 验证迷你窗聊天链路）
+    try { console.log("[probe] msg " + who + " len=" + String(text == null ? "" : text).length); } catch (e) {}
     const row = document.createElement("div");
     row.className = `msg-row ${who}`;
     if (opts.crisis) {

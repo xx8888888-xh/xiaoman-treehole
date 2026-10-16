@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(newConsoleClient());
         webView.addJavascriptInterface(new Bridge(), "AndroidTTS");
 
         boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
@@ -107,6 +107,52 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl("file:///android_asset/www/index.html");
         }
+        handleFloatIntent(getIntent());
+    }
+
+    /** WebView console → logcat 桥：[probe] 前缀行转发到 tag=XiaoManWeb（CI 验收与真机联调证据通道） */
+    private WebChromeClient newConsoleClient() {
+        return new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                String m = cm.message();
+                if (m != null && m.contains("[probe]")) {
+                    Log.d("XiaoManWeb", m.length() > 300 ? m.substring(0, 300) : m);
+                }
+                return false;
+            }
+        };
+    }
+
+    /**
+     * 悬浮窗意图通道（CI 自动化与"打开 App 即挂球"共用）：
+     * --ez autostart_float true → 等价设置面板开启悬浮窗（canDrawOverlays 已授权才挂）
+     * --ez float_stop true       → 等价 floatHide（收球+停服务）
+     * FloatWindowService 为 exported=false（安全设计），外部无法直启/直停，只能经本壳中转。
+     */
+    private void handleFloatIntent(Intent i) {
+        if (i == null) return;
+        if (i.getBooleanExtra("autostart_float", false)) {
+            runOnUiThread(() -> {
+                if (!Settings.canDrawOverlays(getApplicationContext())) {
+                    Log.w("MainActivity", "autostart_float: overlay permission not granted, skip");
+                    return;
+                }
+                Intent s = new Intent(MainActivity.this, FloatWindowService.class)
+                        .setAction(FloatWindowService.ACTION_SHOW);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(s);
+                else startService(s);
+            });
+        } else if (i.getBooleanExtra("float_stop", false)) {
+            runOnUiThread(() -> startService(new Intent(MainActivity.this, FloatWindowService.class)
+                    .setAction(FloatWindowService.ACTION_HIDE)));
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleFloatIntent(intent);
     }
 
     // 返回键：优先回退 WebView 历史，否则交还系统。
@@ -147,7 +193,7 @@ public class MainActivity extends Activity {
                     return true;
                 }
             });
-            webView.setWebChromeClient(new WebChromeClient());
+            webView.setWebChromeClient(newConsoleClient());
             webView.addJavascriptInterface(new Bridge(), "AndroidTTS");
             boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
             if (isDebuggable) {

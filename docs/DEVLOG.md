@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-10-16 · 13:0x P2-4b CI 失败收口：意图通道+渲染探针（13:00 巡检触发，挂账续跑到闭环）
+
+> 13:00 巡检：ee7ad93 已推送但 **CI run 38846237625 emulator-smoke FAILED**（4/7 项过）——悬浮窗代码本体没问题，死在 CI 验收脚本与安全设计的冲突上。工作区躺上会话挂账（11:44–11:46 改完、12:23 后台 E2E 47/47 跑完被切断）。按挂账收口法：验证→回归→提交→CI→合并→交付。
+
+### CI 失败根因（日志实锤）
+1. `[FLOAT-FAIL] start-foreground-service`：`Error: Requires permission not exported from uid 10130`——FloatWindowService 是 `exported=false`（安全设计：外部无法直启直停），CI 的 `am start-foreground-service` 从 shell uid 发出 → 必然拒绝，服务从未起来，后续球定位/停服务连锁全红
+2. 悬浮球 dump 定位失败（服务没起来自然没有球）+ 聊天回复断言依赖 WebView DOM——本模拟器 WebView DOM 不进 uiautomator dump（实测 2KB 空 dump）
+
+### 修复三件套（上会话挂账，本轮验收）
+1. **MainActivity 意图通道**：`handleFloatIntent()`（onCreate+onNewIntent 双路，FLAG_ACTIVITY_SINGLE_TOP 热实例走 onNewIntent）——`--ez autostart_float true` 等价"已授权用户打开 App"由壳内拉起 FGS；`--ez float_stop true` 等价 floatHide 收球停服务。**服务保持 exported=false，安全设计零妥协**，CI 与"打开 App 即挂球"共用同一条通道
+2. **WebView console→logcat 桥 + 渲染探针**：主壳与迷你窗两处 WebChromeClient 转发 `[probe]` 行到 tag=XiaoManWeb；app.js addMsg 加一行探针（只记方向+长度，不落对话内容）——CI 聊天链路证据从"DOM dump"（不可行）改为"logcat probe"（可靠）
+3. **emulator_float_check.py 全量重写**（184→205 行）：HOME 隔离→appops 授权→意图通道拉起→ServiceRecord 严格计数→dump 定位球→swipe 拖动验证位移>300px→点球展开（标题栏+WebView 挂载）→坐标法点输入框聊天+probe 双向断言（me+them）→收起回球态→意图通道停服务→ServiceRecord=0+球消失→全程 FATAL 抓取；产出 emulator_04~08 五张交互截图
+4. **run_bg_e2e.sh**（新）：setsid+nohup 后台跑 E2E——长测试防会话断裂绞杀（504 教训沉淀）
+
+### 本轮验收（全部实跑）
+- **语法/同步**：py_compile + node --check×2 + app.js 两份 diff 逐字节一致（web↔assets）
+- **G 系列 152/152**（探针行加入后无退化）；**E2E 47/47**（12:23 后台轮——WIP 文件 mtime 11:44–11:46 均早于 12:23，覆盖确认；⑦l 5 点全过）
+- **全套回归**：契约 8/8 + onboarding 9/9 + 生命线 5/5 + TTS 3/3
+- **APK 重建 EXIT=0**（ecj 编译验证：handleFloatIntent + console 桥 + Build/Log import 全过，4.7M 签名完整）
+
+→ 下一步：提交推送 zhiqiu/dev → CI 四绿 → main 合并 → APK 交付用户 → 删本 cron 任务
+
+---
+
 ## 2026-10-16 · 07:0x–08:5x P2-4b Android 原生悬浮窗（用户指令：悬浮球+迷你对话窗·挂账收口）
 
 > 上会话（07:03 前后）完成全部三端实现+测试编写（FloatWindowService.java / float_mode.js / G12 / E2E ⑦l / 截图 24），被切断在提交前且无 daily 交接；本轮 08:19 巡检触发挂账收口：验证→补缺口→回归→CI→合并→交付 APK。

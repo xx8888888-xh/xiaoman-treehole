@@ -258,6 +258,17 @@ public class FloatWindowService extends Service {
         ws.setDomStorageEnabled(true);
         ws.setMediaPlaybackRequiresUserGesture(false);
         panelWeb.setWebViewClient(new WebViewClient());
+        // console → logcat 桥（与主壳一致）：[probe] 行转发 tag=XiaoManWeb，CI 可验证迷你窗内聊天链路
+        panelWeb.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                String m = cm.message();
+                if (m != null && m.contains("[probe]")) {
+                    android.util.Log.d("XiaoManWeb", m.length() > 300 ? m.substring(0, 300) : m);
+                }
+                return false;
+            }
+        });
         // 加载迷你模式入口（与主壳同源 asset 路径；?float=1 触发 web 端小屏布局+跳过 Live2D）
         panelWeb.loadUrl("file:///android_asset/www/index.html?float=1");
         // 注：迷你窗不挂 AndroidTTS 桥（主 WebView 独占 TTS 引擎）；web 端检测不到桥时
