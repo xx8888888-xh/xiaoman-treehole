@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-emulator_float_check.py · CI 模拟器悬浮窗验收 v4（P2-4b）
+emulator_float_check.py · CI 模拟器悬浮窗验收 v5（P2-4b）
 --------------------------------------------------------------------
-v4 变更（v3 三通道框架保留，修实测抓到的 3 类脚本 bug，run 38865512010）：
-  实测证据链（run 38865512010，14/20）：
-  a) 坐标系错位（致命）：像素差分 bbox 是 TOP_CROP=120 裁剪坐标系，而
-     adb input tap/swipe 是全屏坐标系 → 所有交互打偏 120px 打到球上方壁纸
-     （v3 的"tap 球无反应"全因于此；chat_round 误打误撞 tap 到球心才展开
-     面板——them greet 探针 07:13:34 即迷你窗 WebView 加载铁证）。
-     ⇒ diff_stat 的 bbox 统一还原为全屏坐标（y+TOP_CROP），与 dumpsys
-       mFrame 同一坐标系，tap/swipe/text 直接用。
-  b) dumpsys 解析错格式：窗口 type 实际输出 `ty=APPLICATION_OVERLAY`（文字）
-     或 `ty=2038`（数字，systemui 混用），v3 正则找 `mType=(\d+)` 永远 0 命中
-     （mType 是 insets 的 ITYPE_xxx 字段）。
-     ⇒ ty= 双写法兼容 + mFrame 提取不变（mFrame=[x1,y1][x2,y2] 实测吻合）。
-  c) BALL_MIN=1200 太宽松：launcher 时钟分钟跳变实测 ~4400px 被误判"球可见"
-     （真球 60dp=165px 粉球差分 ~18000px）。
-     ⇒ BALL_MIN 提至 8000 + bbox 区域品牌粉 #F7A8B8 像素数双保险。
-  d) 收起按钮坐标凭空估算（v3 固定 px2-256 负坐标）：overlay 窗口内原生
-     Button 同样不进 uiautomator dump（与球 TextView 同盲区）。
-     ⇒ 像素扫描面板顶栏右侧深色文字簇（"收起"/"关闭"两按钮，
-       字色 #5B4A43 灰度~75 vs 顶栏底 ~247，右数第二簇=收起），
-       兜底固定比例坐标。
-  e) v2 轮的 7/8 是假绿：交互链整段包在 if ball（dump 盲区）里被跳过，
-     拖动/展开/聊天/收起四交互在 v4 才首次真正全链路验证。
+v5 变更（run 38877847899 实测 9/10，球身份判别器换代 + 面板重试）：
+  实测证据链（真实截图工件标定，/tmp/v4art）：
+  a) 模拟器壁纸本身是粉色系（球区旁对照 24915 px 命中品牌粉容差）——
+     v4 的品牌粉像素判别器失效；粉球灰度(~193) vs 粉壁纸(~193) 几乎同色
+     → 灰度差分仅 4365px（v4 按"深色壁纸~18000px"标定 BALL_MIN=8000 必挂），
+     且与 launcher 时钟跳变(~4400px)完全同量级，计数不可判别。
+     ⇒ 球身份/可见主证据改「满」字白像素：球 frame 内 >245 白像素
+       实测 04(有球)=3412 vs 09(球已移,同壁纸)=0，完美分离；
+       壁纸全域白密度 3.5% → WHITE_MIN=1500 留 2.3x 余量。
+  b) 球/面板窗口 frame 是权威坐标（mFrame 与截图实测吻合）：
+     拖动位移断言改 dumpsys 球窗口 frame 前后对比（不再依赖差分计数）。
+  c) expandPanel() 会 ball.setVisibility(GONE)（窗口仍注册但隐藏）——
+     展开=球frame白字0、收起=白字回来，天然判别；v3 轮 dumpsys 双窗口共存
+     之谜由此解开。
+  d) 面板渲染时机容错：tap 后 WebView 冷加载可能 >7s，v5 双条件
+     (差分>PANEL_MIN 且 dumpsys 大窗口) 最多重试 3 次 x4s。
+  e) 收起按钮定位修 y 偏差：v4 公式 cy=+0.55*bar_h 实测偏下 74px（按钮
+     中心~640 vs 公式 714，714 已落在 WebView 区）；v5 改暗点质心（x,y 都
+     用真实暗像素均值），兜底 (px2-209, py1+51) 按真实布局标定（收起按钮
+     中心 ~(800,640)：2字13sp+padding≈127px 宽/枚，两枚+margins≈735..999）。
+v4 遗产（坐标系/解析修复，run 38865512010 验证）：
+  - diff_stat bbox 还原全屏坐标（y+TOP_CROP）——v3 tap/swipe 打偏 120px 根因
+  - dumpsys ty= 双写法兼容（APPLICATION_OVERLAY 文字 / 2038 数字）
+  - 收起按钮像素扫描（overlay 原生控件不进 uiautomator dump）
+v4→v5 复盘（run 38877847899）：9/10——4 项基础+4 项停服务全绿，
+唯一红点=球可见阈值（本版 a 项修复）；交互链 04 截图 bbox=(40,343,205,508)
+与 dumpsys mFrame 完全一致，坐标链路 v4 已修好，v5 只换判别器。
 流程：⓪HOME+基线截图 → ①appops 授权 → ②意图通道拉起 FGS（exported=false，
   等价用户打开 App）→ ③球可见（像素差分球簇+dumpsys）→ ④拖动（swipe→像素
   位移>300px，含贴边吸附）→ ⑤单击展开迷你窗（大面积像素差分+大窗口出现）→
@@ -47,10 +52,11 @@ RESULTS = []
 # ---- 像素差分阈值（1080x2148 实测分辨率标定；按比例自适应其他屏）----
 TOP_CROP = 120          # 裁掉状态栏+launcher时钟区（分钟跳变防误报）
 DIFF_SENS = 25          # 灰度差>25 视为变化像素
-BALL_MIN, BALL_MAX = 8000, 150000      # 球量级（真球~18000px；时钟跳变实测~4400px 被挡）
-PINK_MIN = 3000                         # bbox 内品牌粉 #F7A8B8 像素下限（双保险）
-PANEL_MIN = 300000                       # 面板量级（≈892x1207≈1.08M px）
-GONE_MAX = 8000                          # 移除后残留容忍（时钟跳变<3200px）
+WHITE_MIN = 1500                         # 球frame内「满」字白像素(>245)下限：实测3412 vs 移除后0
+BALL_MAX = 150000                        # 差分计数上限仅诊断（v5起判据=白字/窗口frame）
+PINK_MIN = 3000                          # 品牌粉像素仅诊断（实测壁纸粉色系，无判别力）
+PANEL_MIN = 300000                       # 面板量级（≈935x1265≈1.18M px）
+GONE_MAX = 8000                          # 移除后残留容忍（时钟跳变~4400px 可容忍）
 
 
 def sh(cmd, timeout=60):
@@ -110,11 +116,39 @@ def pink_px(path, box):
         return 0
 
 
+def white_glyph_px(path, box):
+    """区域「满」字白像素数（>245 全通道）——球身份主判别器（v5）。
+    实测标定：球 frame 内 3412 vs 球移除后同区域 0（壁纸粉色系但无纯白）；
+    壁纸全域白密度 3.5%，WHITE_MIN=1500 留 2.3x 余量。box 为全屏坐标。"""
+    try:
+        from PIL import Image
+        im = Image.open(path).convert("RGB")
+        if not box:
+            return 0
+        r = im.crop(box)
+        return sum(1 for p in r.getdata() if p[0] > 245 and p[1] > 245 and p[2] > 245)
+    except Exception:
+        return 0
+
+
+def ball_frame(wins):
+    """从窗口列表取悬浮球小窗口 frame（宽 100~300px 的 overlay）。
+    面板展开时球窗口仍注册（setVisibility(GONE) 隐藏）——frame 依旧权威，
+    渲染与否由白字像素判别。"""
+    for w in overlay_wins(wins):
+        fw = w["frame"][2] - w["frame"][0]
+        if 100 < fw < 300:
+            return w["frame"]
+    return None
+
+
 def find_collapse_button(img_path, panel_box):
     """面板顶栏右侧深色文字簇 → 「收起」按钮中心（右数第二簇）。
     依据：顶栏按钮字色 #5B4A43（灰度~75）vs 顶栏底 ~247；「关闭」最右、「收起」
     在其左。overlay 窗口内原生 Button 与球 TextView 同样不进 uiautomator dump
-    （v2/v3 实测盲区），故只能像素定位。返回 (cx, cy) 或 None。"""
+    （v2/v3 实测盲区），故只能像素定位。
+    v5：cx/cy 都取簇内真实暗点质心（v4 的 cy 公式实测偏下 74px 会点进
+    WebView 区）。返回 (cx, cy) 或 None。"""
     try:
         from PIL import Image
         px1, py1, px2, py2 = [int(v) for v in panel_box]
@@ -124,22 +158,24 @@ def find_collapse_button(img_path, panel_box):
         bar = im.crop((x1, int(py1), int(px2), y2))
         w, h = bar.size
         p = bar.load()
-        dark_xs = sorted(x for y in range(h) for x in range(w) if p[x, y] < 170)
-        if len(dark_xs) < 12:
+        pts = sorted(((x, y) for y in range(h) for x in range(w) if p[x, y] < 170),
+                     key=lambda t: t[0])
+        if len(pts) < 12:
             return None
-        clusters, cur = [], [dark_xs[0]]
-        for x in dark_xs[1:]:
-            if x - cur[-1] > 40:
+        clusters, cur = [], [pts[0]]
+        for pt in pts[1:]:
+            if pt[0] - cur[-1][0] > 40:
                 clusters.append(cur)
-                cur = [x]
+                cur = [pt]
             else:
-                cur.append(x)
+                cur.append(pt)
         clusters.append(cur)
         if len(clusters) < 2:
             return None
         coll = clusters[-2]          # 右数第二簇 = 收起
-        cy = int(py1 + (y2 - py1) * 0.55)
-        return (x1 + sum(coll) // len(coll), cy)
+        cx = x1 + sum(x for x, _ in coll) // len(coll)
+        cy = int(py1) + sum(y for _, y in coll) // len(coll)
+        return (cx, cy)
     except Exception:
         return None
 
@@ -253,56 +289,75 @@ def main():
           f"record={cnt}" if cnt else "dumpsys无输出")
     check("logcat 无 FATAL（起服务后）", fatal_in_logcat() == "")
 
-    # ③ 球可见 —— 主证据：像素差分球簇+品牌粉像素；副证据：dumpsys overlay 窗口
+    # ③ 球可见 —— 主证据：球窗口 frame 内「满」字白像素（v5 判别器）；
+    #    副证据：dumpsys overlay 窗口注册 + 像素差分球簇（bbox 应≈球 frame）
     shot("emulator_04_float_ball.png")
     cur = gray("emulator_04_float_ball.png")
     cnt4, box4 = diff_stat(base, cur)
-    ball_visible = box4 is not None and BALL_MIN < cnt4 < BALL_MAX
-    check("悬浮球可见（像素差分球簇）", ball_visible, f"diff={cnt4}px box={box4}")
-    if ball_visible:
-        n_pink = pink_px("emulator_04_float_ball.png", box4)
-        ball_visible = n_pink >= PINK_MIN
-        check("悬浮球身份（bbox 品牌粉像素）", ball_visible,
-              f"pink={n_pink}px（球 #F7A8B8 vs 时钟误报无粉）")
     wins = dumpsys_windows()
     ov = overlay_wins(wins)
     check("overlay 窗口已注册（dumpsys ty=APPLICATION_OVERLAY）", len(ov) >= 1,
           f"overlay={len(ov)}/{len(wins)} frames={[w['frame'] for w in ov][:3]}" if wins
           else "dumpsys未解析出窗口(诊断已存)")
+    bframe = ball_frame(wins)
+    region = bframe or box4        # dumpsys 球窗口 frame 权威坐标优先，差分 bbox 兜底
+    n_white = white_glyph_px("emulator_04_float_ball.png", region)
+    n_pink = pink_px("emulator_04_float_ball.png", region)
+    ball_visible = region is not None and n_white >= WHITE_MIN
+    check("悬浮球可见（球窗口frame内「满」字白像素≥1500）", ball_visible,
+          f"white={n_white}px pink={n_pink}px diff={cnt4}px box={box4} region={region}")
 
     if not ball_visible:
         # 球不可见时后续交互无从谈起，直接跳到停服务清理段
         print("[FLOAT-SKIP] 球不可见，跳过交互链（后续步骤验证停服务兜底）", flush=True)
 
-    ball_center = box_center(box4) if ball_visible else None
+    ball_center = box_center(region) if ball_visible else None
 
     if ball_center:
         bx, by = ball_center
-        # ④ 拖动（>SLOP 位移 600px；松手贴边吸附）→ 像素位移断言
+        # ④ 拖动（>SLOP 位移 600px；松手贴边吸附）→ dumpsys 球窗口 frame 位移断言
         sh(f"adb shell input swipe {bx} {by} {bx + 600} {by + 700} 600")
         time.sleep(2)
         shot("emulator_05_float_drag.png")
         cur5 = gray("emulator_05_float_drag.png")
         cnt5, box5 = diff_stat(base, cur5)
-        ball5 = box5 is not None and BALL_MIN < cnt5 < BALL_MAX + 60000
-        moved = ball5 and abs(box_center(box5)[0] - bx) > 300
-        check("悬浮球可拖动（像素位移>300px）", bool(moved),
-              f"({bx},{by})→{box_center(box5) if ball5 else 'lost'} diff={cnt5}px")
+        wins5 = dumpsys_windows()
+        nframe = ball_frame(wins5) or box5     # 拖动后球窗口 frame（吸附后新位置）
+        n_white5 = white_glyph_px("emulator_05_float_drag.png", nframe) if nframe else 0
+        ball5 = nframe is not None and n_white5 >= WHITE_MIN
+        if nframe:
+            ncx, ncy = box_center(nframe)
+            moved = ball5 and (abs(ncx - bx) > 300 or abs(ncy - by) > 300)
+        else:
+            ncx, ncy = 0, 0
+            moved = False
+        check("悬浮球可拖动（球窗口frame位移>300px+白字跟随）", bool(moved),
+              f"({bx},{by})→({ncx},{ncy}) white={n_white5}px diff={cnt5}px")
 
-        # ⑤ 单击球心（吸附后位置；swipe 松手后球心 x 吸至右缘 SCREEN_W-82）→
-        #    展开迷你窗：大面积像素差分 + 大 overlay 窗口
+        # ⑤ 单击球心（拖动吸附后位置）→ 展开迷你窗：
+        #    双条件（差分>PANEL_MIN 且 dumpsys 大窗口）重试（WebView 冷加载容错）
         SCREEN_W = 1080
-        tapx, tapy = box_center(box5) if ball5 else (SCREEN_W - 82, by + 700)
+        tapx, tapy = (ncx, ncy) if (nframe and ball5) else (SCREEN_W - 82, by + 700)
         sh(f"adb shell input tap {tapx} {tapy}")
-        time.sleep(7)                    # WebView 加载 + app init
-        shot("emulator_06_float_panel.png")
-        cur6 = gray("emulator_06_float_panel.png")
-        cnt6, box6 = diff_stat(base, cur6)
-        check("迷你窗展开（大面积像素差分）", cnt6 > PANEL_MIN, f"diff={cnt6}px")
-        wins6 = dumpsys_windows()
-        big = [w for w in overlay_wins(wins6) if (w["frame"][2] - w["frame"][0]) > 500]
+        cnt6, box6, big = 0, None, []
+        for i in range(3):
+            time.sleep(4)
+            shot("emulator_06_float_panel.png")
+            cur6 = gray("emulator_06_float_panel.png")
+            cnt6, box6 = diff_stat(base, cur6)
+            wins6 = dumpsys_windows()
+            big = [w for w in overlay_wins(wins6) if (w["frame"][2] - w["frame"][0]) > 500]
+            if cnt6 > PANEL_MIN and big:
+                break
+            print(f"[FLOAT-RETRY] 面板未就绪(第{i+1}轮) diff={cnt6}px big={len(big)}", flush=True)
+        check("迷你窗展开（大面积像素差分>30万px）", cnt6 > PANEL_MIN, f"diff={cnt6}px")
         check("迷你窗大窗口已注册（dumpsys 宽>500px）", len(big) >= 1,
               f"{[w['frame'] for w in overlay_wins(wins6)]}" if wins6 else "dumpsys未解析(诊断已存)")
+        # 展开后球必须隐藏（expandPanel→setVisibility(GONE)，窗口仍注册但白字=0）
+        hframe = ball_frame(wins6)
+        n_white_h = white_glyph_px("emulator_06_float_panel.png", hframe) if hframe else -1
+        check("展开后球已隐藏（球窗口frame白字=0）", hframe is not None and n_white_h == 0,
+              f"hidden_white={n_white_h}px frame={hframe}")
         check("logcat 无 FATAL（展开后）", fatal_in_logcat() == "")
 
         # 面板交互区：dumpsys 大窗口 frame 优先，像素 bbox 兜底
@@ -321,19 +376,22 @@ def main():
         btn = find_collapse_button("float_bar.png", panel_box)
         if btn:
             collapse_x, collapse_y = btn
-            print(f"[FLOAT-BTN] 收起按钮像素定位 {btn}", flush=True)
+            print(f"[FLOAT-BTN] 收起按钮暗点质心定位 {btn}", flush=True)
         else:
             px1, py1, px2, py2 = panel_box
-            collapse_x, collapse_y = int(px2 - 209), int(py1 + 67)
+            collapse_x, collapse_y = int(px2 - 209), int(py1 + 51)
             print(f"[FLOAT-BTN] 扫描未命中，兜底坐标 ({collapse_x},{collapse_y})", flush=True)
         sh(f"adb shell input tap {int(collapse_x)} {int(collapse_y)}")
         time.sleep(3)
         shot("emulator_08_float_collapsed.png")
         cur8 = gray("emulator_08_float_collapsed.png")
         cnt8, box8 = diff_stat(base, cur8)
-        back_ball = box8 is not None and BALL_MIN < cnt8 < BALL_MAX
-        check("收起后回悬浮球（像素回球量级）", back_ball, f"diff={cnt8}px box={box8}")
         wins8 = dumpsys_windows()
+        bframe8 = ball_frame(wins8) or box8   # 收起后球在拖动吸附位复现
+        n_white8 = white_glyph_px("emulator_08_float_collapsed.png", bframe8) if bframe8 else 0
+        back_ball = bframe8 is not None and n_white8 >= WHITE_MIN
+        check("收起后回悬浮球（球窗口frame白字复现）", back_ball,
+              f"white={n_white8}px diff={cnt8}px frame={bframe8}")
         big_gone = not [w for w in overlay_wins(wins8) if (w["frame"][2] - w["frame"][0]) > 500]
         check("迷你窗已收起（大窗口消失）", big_gone,
               f"{[w['frame'] for w in overlay_wins(wins8)]}" if wins8 else "dumpsys未解析(诊断已存)")
