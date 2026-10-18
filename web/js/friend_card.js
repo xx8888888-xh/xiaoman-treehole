@@ -192,7 +192,7 @@ const FriendCard = (() => {
       ["聊了", String(d.msgs), "句"],
       ["笑出声", String(d.haha), "次"],
       ["来找过小满", String(d.rounds), "次"],
-      ["招牌表情", d.emoji || "—", ""],
+      ["招牌表情", d.emoji || "还没有，快发一个~", ""],
     ];
     cells.forEach((c, i) => {
       const gx = 60 + (i % 2) * 400, gy = 668 + Math.floor(i / 2) * 154;

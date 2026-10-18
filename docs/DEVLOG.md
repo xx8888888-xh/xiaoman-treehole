@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-10-18 · 18:0x UI 打磨包六审四修（VLM 审查低严重度项收口 + float 疑案告破）
+
+> 用户令：收掉打磨项。VLM 首轮 6 条低严重度意见逐项落实：**4 修 1 改判 1 误报**。
+
+### 修复（web/css/style.css + js/friend_card.js）
+1. 摸头引导提示对比度：stage-tip 颜色 ink-light→ink、底衬 0.6→0.78
+2. 输入栏边界感：border-top 虚线浅粉 → 实线 #F2B9C6 + 底衬 0.82→0.92
+3. 气泡行距：1.55 → 1.65
+4. 全局浅色文字：--ink-light #7A6A6F → #6C5A60（次级文字整体提一档对比度）
+5. 友谊卡"招牌表情"空态："—" → "还没有，快发一个~"
+
+### 改判/误报（探针实锤）
+- **float 迷你窗发送键"缺失"= 误报**：Playwright 探针实锤 sendBtn 恒在（44px，rect(336,794)，elementFromPoint 无遮挡）——F1 轮 VLM 漏看
+- 探针断言全过：stageTipColor=rgb(90,74,79)、border=solid #F2B9C6、lineHeight 24.75/15=1.65、float sendBtn visible=true
+
+**触及**：web/css/style.css / web/js/friend_card.js / docs/DEVLOG.md（本条）
+
+
 ## 2026-10-18 · 16:0x 悬浮窗 CI flake 修复 v7：收起按钮定位确定性 y 带锚定 + 补枪安全网（全面测试轮抓到现行失败）
 
 > 用户约束"先全面测试确认能用再停定时任务"。本地全套 6/6 全绿（契约+onboarding 9/9+G 152/152+生命线 5/5+TTS+E2E 47/47，零 FAIL）；同时 dev 文档 commit（70d33ff）CI **抓到现行 flake**：run 39107576044 emulator-smoke 19/21。
