@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-emulator_float_check.py · CI 模拟器悬浮窗验收 v6（P2-4b）
+emulator_float_check.py · CI 模拟器悬浮窗验收 v7（P2-4b）
 --------------------------------------------------------------------
+v7 变更（run 39107576044 实测 19/21 flake——连绿 4 轮后的第 5 轮翻车）：
+  实测证据链：收起按钮定位 (703,628)——既非收起(738,541)也非关闭(910,540)，
+  tap 落空 → 面板没收起（大窗仍在 diff=115 万px）→ 球未复现（白字 0）。
+  根因：扫描区 y2=py1+0.18*panel_h（≈710px）侵入 WebView 内容区，聊天
+  内容暗像素与「收起」簇 x 间距 <40px 被并簇，质心拉偏 35px/87px。
+  （间歇性：取决于当轮聊天内容是否滚入扫描带——绿 4 轮纯走运）
+  修法双保险：
+  a) 扫描区 0.18→0.10（y2≈609px，按钮文字行 523~563 仍在带内，
+     WebView 内容 ≥620 全部排除）
+  b) tap 后验证「球复现+大窗消失」，未收起自动换兜底坐标补一枪
+     （定位漂移的通用安全网，不再赌单发命中）
 v6 变更（run 38884396667 实测 20/21，收起按钮错点根因）：
   实测证据链（/tmp/v5art 真实截图工件标定，emulator_06 顶栏 4 簇）：
   a) 簇扫描实测：标题(112~400) | 收起(705~771, 763点) | 关闭(875~940,
@@ -170,9 +181,12 @@ def find_collapse_button(img_path, panel_box):
         from PIL import Image
         px1, py1, px2, py2 = [int(v) for v in panel_box]
         x1 = int(px1 + (px2 - px1) * 0.55)
-        y2 = int(py1 + (py2 - py1) * 0.18)
+        # v7: 确定性 y 带锚定——原生标题栏布局固定（8dp 顶 padding + 按钮居中），
+        # 按钮文字行实测恒在 py1+40~80（523~563 @py1=483）。裁剪带 [py1+25, py1+100]
+        # 把 WebView 内容（≥py1+100）彻底挡在带外——0.18/0.10 比例裁剪都被聊天
+        # 内容暗像素并簇拉偏质心过（run 39107576044 得 (703,628) 点空）。
         im = Image.open(img_path).convert("L")
-        bar = im.crop((x1, int(py1), int(px2), y2))
+        bar = im.crop((x1, int(py1) + 25, int(px2), int(py1) + 100))
         w, h = bar.size
         p = bar.load()
         pts = sorted(((x, y) for y in range(h) for x in range(w) if p[x, y] < 170),
@@ -193,7 +207,7 @@ def find_collapse_button(img_path, panel_box):
             return None
         coll = valid[-2]          # 右数第二有效簇 = 收起
         cx = x1 + sum(x for x, _ in coll) // len(coll)
-        cy = int(py1) + sum(y for _, y in coll) // len(coll)
+        cy = int(py1) + 25 + sum(y for _, y in coll) // len(coll)
         return (cx, cy)
     except Exception:
         return None
@@ -388,30 +402,36 @@ def main():
         shot(shot_6)
 
         # ⑦ 点「收起」：BACK 收软键盘（input focus 时只收键盘不 goBack，无历史页）→
-        #    实时截图后像素扫描顶栏右侧深色文字簇（关闭最右/收起在其左）
+        #    实时截图后像素扫描顶栏右侧深色文字簇（关闭最右/收起在其左）。
+        #    v7 安全网：tap 后验证「球复现+大窗消失」，未收起则换兜底坐标补一枪
+        #    （run 39107576044 实测：定位偶发被 WebView 内容并簇拉偏→点空→面板没关）
         sh("adb shell input keyevent 4")
         time.sleep(1)
         shot("float_bar.png")
         btn = find_collapse_button("float_bar.png", panel_box)
-        if btn:
-            collapse_x, collapse_y = btn
-            print(f"[FLOAT-BTN] 收起按钮暗点质心定位 {btn}", flush=True)
-        else:
-            px1, py1, px2, py2 = panel_box
-            collapse_x, collapse_y = int(px2 - 269), int(py1 + 58)
-            print(f"[FLOAT-BTN] 扫描未命中，兜底坐标 ({collapse_x},{collapse_y})", flush=True)
-        sh(f"adb shell input tap {int(collapse_x)} {int(collapse_y)}")
-        time.sleep(3)
-        shot("emulator_08_float_collapsed.png")
-        cur8 = gray("emulator_08_float_collapsed.png")
-        cnt8, box8 = diff_stat(base, cur8)
-        wins8 = dumpsys_windows()
-        bframe8 = ball_frame(wins8) or box8   # 收起后球在拖动吸附位复现
-        n_white8 = white_glyph_px("emulator_08_float_collapsed.png", bframe8) if bframe8 else 0
-        back_ball = bframe8 is not None and n_white8 >= WHITE_MIN
+        px1, py1, px2, py2 = panel_box
+        fallback = (int(px2 - 269), int(py1 + 58))   # 实测收起按钮中心标定
+        candidates = ([btn] if btn else []) + [fallback]
+        back_ball = big_gone = False
+        cnt8 = box8 = wins8 = bframe8 = n_white8 = None
+        for i, (cx, cy) in enumerate(candidates):
+            tag = "扫描质心" if (btn and (cx, cy) == btn) else "兜底坐标"
+            print(f"[FLOAT-BTN] 第{i+1}枪 tap ({cx},{cy})（{tag}）", flush=True)
+            sh(f"adb shell input tap {int(cx)} {int(cy)}")
+            time.sleep(3)
+            shot("emulator_08_float_collapsed.png")
+            cur8 = gray("emulator_08_float_collapsed.png")
+            cnt8, box8 = diff_stat(base, cur8)
+            wins8 = dumpsys_windows()
+            bframe8 = ball_frame(wins8) or box8   # 收起后球在拖动吸附位复现
+            n_white8 = white_glyph_px("emulator_08_float_collapsed.png", bframe8) if bframe8 else 0
+            back_ball = bframe8 is not None and n_white8 >= WHITE_MIN
+            big_gone = not [w for w in overlay_wins(wins8) if (w["frame"][2] - w["frame"][0]) > 500]
+            if back_ball and big_gone:
+                break
+            print(f"[FLOAT-RETRY] 第{i+1}枪未收起（white={n_white8} 大窗仍在），换下一坐标", flush=True)
         check("收起后回悬浮球（球窗口frame白字复现）", back_ball,
               f"white={n_white8}px diff={cnt8}px frame={bframe8}")
-        big_gone = not [w for w in overlay_wins(wins8) if (w["frame"][2] - w["frame"][0]) > 500]
         check("迷你窗已收起（大窗口消失）", big_gone,
               f"{[w['frame'] for w in overlay_wins(wins8)]}" if wins8 else "dumpsys未解析(诊断已存)")
         check("logcat 无 FATAL（收起后）", fatal_in_logcat() == "")
