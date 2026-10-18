@@ -1,0 +1,64 @@
+UI 全旅程操作截图清单
+====================
+
+A1_first_open.png
+    操作: 打开应用首面，小满主动打招呼（开场白渲染）
+
+A2_onboarding.png
+    操作: 发送「你好呀」→ 新用户引导/称呼询问回复
+
+A3_intro_memory.png
+    操作: 自我介绍（名字+宠物）→ 观察称呼与记忆钩子条
+
+A4_daily_chat.png
+    操作: 日常吐槽 → 普通陪伴回复（不应误触抑郁层）
+
+A5_poke.png
+    操作: 点击 Live2D 舞台（摸头）→ 表情/动作反馈
+
+A6_mic.png
+    操作: 点击语音按钮 → 语音输入态
+
+A7_widget_open.png
+    操作: 点击悬浮挂件 → Q 版挂件气泡展开
+
+A8_widget_closed.png
+    操作: 点击舞台退出挂件 → 回到主界面（输入框恢复）
+
+B1_reminder_set.png
+    操作: 发送提醒请求 → 确认回复
+
+B2_memory_drawer.png
+    操作: 打开记忆抽屉 → 记忆条目+提醒清单+取消按钮
+
+B3_reminder_cancel.png
+    操作: 点击「取消提醒」→ toast 反馈
+
+B4_settings.png
+    操作: 打开设置面板 → API/TTS 配置项
+
+B5_friend_card.png
+    操作: 打开友谊卡片 → 手绘风卡片渲染
+
+C1_relation_days.png
+    操作: 关系问答「认识多久」→ 相识天数播报
+
+C2_memory_recall.png
+    操作: 记忆回访「猜年糕在干嘛」→ 宠物记忆召回
+
+D1_crisis_care.png
+    操作: 危机词 → 关怀卡（AI 边界+12356 转介）
+
+E1_return_heartbeat.png
+    操作: 模拟 32h 后再访 → 心跳情境化问候
+
+F1_float_mode.png
+    操作: 悬浮窗迷你模式（?float=1）→ 迷你对话窗形态
+
+F2_float_chat.png
+    操作: 迷你窗内发消息 → 复用完整对话引擎
+
+G1_memory_clear.png
+    操作: 点击「清空记忆」→ toast + 记忆清空（抽屉空态）
+
+console/page errors: 0
