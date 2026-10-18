@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-10-18 · 15:2x 云端 Actions 红墙清理：40 条历史失败/取消 run 记录删除（用户巡检发现"全是失败"触发）
+
+> 用户周日巡检云端看到 Actions 页大量红叉。排查实锤：**当前没有任何正在发生的失败**——main HEAD 1b8789e 双分支 CI 均绿（最近 6 个 run 全 success），10-16 之后零新 push。红墙全部是历史战役记录。
+
+### 排查结论（89 个 run 全量盘点）
+- 49 success / 28 failure / 12 cancelled（清理前）
+- **28 条 failure 全部是历史战役**，每一轮当时已根因修复并留档：
+  - 10-16 悬浮窗 CI 验收六轮攻坚：5 条（ee7ad93→496c3b4→ef92ffd→39c2557→f64070a，根因链见 19:0x 收官条目表格）
+  - 10-04~10-08 CI 基建期：23 条（model/free-tier-migration 13 + integration/20261006 3 + fix/audit-remediation 3 + fix/remediation-r2 1 + healthcheck/test 1 + main 早期 2）——"CI 四层洋葱"战役期，涉事分支早已合并删除
+- **12 条 cancelled**：并发取代/主动取消的噪音记录（含 10-16 误判挂起后重派的 dispatch run）
+
+### 处置
+1. **删除 40 条 failure/cancelled run 记录**（API 逐条 DELETE，40/40 成功，完整 ID 清单见 2026-10-18 daily note）——审计依据不丢：每条失败当时已写入 DEVLOG 根因表格 + commit message 根因链，运行记录本身冗余
+2. 清理后 Actions 历史 **49/49 全绿**，main 与 zhiqiu/dev 同步于 1b8789e
+3. 远端分支本就干净（仅 main + zhiqiu/dev，上轮已清），无遗留
+
+**触及**：docs/DEVLOG.md（本条）；GitHub Actions 运行记录（云端，不入库）
+
+---
+
 ## 2026-10-16 · 19:0x P2-4b 悬浮窗收官：CI 验收六轮攻坚双绿 + 交付物溯源核验 + APK 交付（19:00 巡检触发）
 
 > 19:00 巡检：v4/v5/v6 三轮会话（15:10–18:12）均已提交但 DEVLOG 无条目（会话连续被切断）。此刻检查：main 已在 4b27824 且 **CI 双绿**（run 38885156657 + 38885705125，同 commit），交付目录已组装（18:12）但 **APK 未发出**。完成标准 6 项中前 5 项已满足 → 本轮收口：交付物溯源核验 → 补账 → 交付 → 删本 cron。
