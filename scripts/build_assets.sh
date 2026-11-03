@@ -4,7 +4,10 @@
 # 文档截图 docs/shots（非运行时资源）、模型回滚备份 *.orig（仅手术用）。
 set -e
 SRC="$(cd "$(dirname "$0")/../web" 2>/dev/null && pwd)" || { echo "❌ 目录不存在: $(dirname "$0")/../web" >&2; exit 1; }
-DST="$(cd "$(dirname "$0")/../android/app/src/main/assets" 2>/dev/null && pwd)" || { echo "❌ 目录不存在: $(dirname "$0")/../android/app/src/main/assets" >&2; exit 1; }
+ASSETS_DIR="$(cd "$(dirname "$0")/.." && pwd)/android/app/src/main/assets"
+# assets/www 是生成物、不入库（见 .gitignore），所以目录可能不存在 → 先建
+mkdir -p "$ASSETS_DIR"
+DST="$(cd "$ASSETS_DIR" && pwd)"
 EXCLUDES=(
   --exclude=node_modules
   --exclude=package.json
