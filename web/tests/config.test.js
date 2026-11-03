@@ -4,9 +4,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const cfg = require("../js/config.js");
 
-test("默认配置：mock 模式 + nvidia 免费模型", () => {
+test("默认配置：openai 模式（P1-2：mock 只作兜底）+ nvidia 免费模型", () => {
   const c = cfg.normalizeCfg({});
-  assert.equal(c.mode, "mock");
+  assert.equal(c.mode, "openai");
   assert.equal(c.model, "nvidia/nemotron-3.5-lightning:free");
   assert.equal(c.ttsBase, "http://127.0.0.1:8903");
   assert.equal(c.mockBase, "http://127.0.0.1:8902");
@@ -16,7 +16,7 @@ test("兼容旧 mode：local→mock，auto→openai", () => {
   assert.equal(cfg.normalizeMode("local"), "mock");
   assert.equal(cfg.normalizeMode("auto"), "openai");
   assert.equal(cfg.normalizeMode("openai"), "openai");
-  assert.equal(cfg.normalizeMode("whatever"), "mock");
+  assert.equal(cfg.normalizeMode("whatever"), "openai");
 });
 
 test("apiKey 永不进入持久化配置", () => {
@@ -37,6 +37,14 @@ test("非法 tts 取值回退 server，voice 去空格", () => {
   const c = cfg.normalizeCfg({ tts: "boom", voice: "  zh-CN-XiaoxiaoNeural  " });
   assert.equal(c.tts, "server");
   assert.equal(c.voice, "zh-CN-XiaoxiaoNeural");
+});
+
+test("语速档位：默认 normal，非法值回退 normal，合法值保留", () => {
+  assert.equal(cfg.normalizeCfg({}).ttsRate, "normal");
+  assert.equal(cfg.normalizeCfg({ ttsRate: "fast" }).ttsRate, "fast");
+  assert.equal(cfg.normalizeCfg({ ttsRate: "slow" }).ttsRate, "slow");
+  assert.equal(cfg.normalizeCfg({ ttsRate: "turbo" }).ttsRate, "normal");
+  assert.deepEqual(cfg.RATES, ["slow", "normal", "fast"]);
 });
 
 test("maskKey 不泄露完整 key", () => {

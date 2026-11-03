@@ -1,4 +1,4 @@
-﻿# 小满树洞 · 三服务（前端静态站 8901 / mock+AI 代理 8902 / TTS 8903）
+# 小满树洞 · 三服务（前端静态站 8901 / mock+AI 代理 8902 / TTS 8903）
 # 宿主机端口全部映射到 127.0.0.1（回环），容器内监听 0.0.0.0。
 # 启动：docker compose up -d --build
 name: treehole
@@ -25,9 +25,18 @@ services:
       target: runtime
       network: host
     image: treehole-web:local
-    command: ["python", "-m", "http.server", "8901", "--bind", "0.0.0.0", "--directory", "web"]
+    # 启动前强校验：镜像内 /app/web 是 build_assets.sh 产出的唯一副本，
+    # 必须与 ASSET_MANIFEST.json 逐文件 sha256/字节一致，否则 fail fast 并打印差异。
+    command:
+      - sh
+      - -c
+      - "python /app/scripts/verify_manifest.py --dir /app/web --manifest /app/web/ASSET_MANIFEST.json && exec python -m http.server 8901 --bind 0.0.0.0 --directory web"
     ports:
       - "127.0.0.1:8901:8901"
+    # 运行期直接只读挂载唯一真源（assets/www），杜绝镜像里留旧副本造成漂移；
+    # Dockerfile 的 COPY 保留给独立 `docker run` 场景。
+    volumes:
+      - ./android/app/src/main/assets/www:/app/web:ro
     environment:
       <<: *common-env
     labels: *labels

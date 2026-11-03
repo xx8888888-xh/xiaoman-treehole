@@ -6,7 +6,11 @@ data
 logs
 .cache
 .venv
-android
+.venv-win
+# web/ 不再是镜像来源（单一真源为 android/app/src/main/assets/www，见 Dockerfile）
+web
+# android 只放行 app/src/main/assets/www（其余构建产物不进镜像上下文）
+android/app/build
 docs
 __pycache__
 **/__pycache__

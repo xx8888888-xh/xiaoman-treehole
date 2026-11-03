@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test \"tests/*.test.js\"",
-    "lint": "biome check js/config.js js/store.js js/api.js tests/"
+    "lint": "biome check js/config.js js/store.js js/api.js js/backup.js js/risk.js tests/"
   },
   "keywords": [],
   "author": "",

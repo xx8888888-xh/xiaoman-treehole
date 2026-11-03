@@ -12,7 +12,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 COPY server/ ./server/
-COPY web/ ./web/
+# 静态站单一真源：只消费 build_assets.sh 产出的 android assets/www，
+# 不再 COPY web/（否则容器内容会和工作树/APK 漂移，红队 P1-1）。
+COPY android/app/src/main/assets/www/ ./web/
+COPY scripts/verify_manifest.py ./scripts/verify_manifest.py
 
 # 静态站 / mock API / TTS 三个端口
 EXPOSE 8901 8902 8903

@@ -1,0 +1,5 @@
+# 统一换行：保证 Linux/macOS 下脚本可执行（Windows 检出时不转 CRLF）
+* text=auto
+android/gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
