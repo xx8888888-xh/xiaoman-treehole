@@ -26,6 +26,24 @@ WAIT_MAX=15                                               # 健康检查最长�
 cd "$ROOT" || { echo "❌ 无法进入项目根目录 $ROOT"; exit 1; }
 mkdir -p "$LOG_DIR"
 
+# 若存在 .env（与 docker compose 共用同一份配置），载入 AI_MODE / AI_API_BASE 等
+if [ -f "$ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT/.env"
+  set +a
+fi
+
+# 服务端可写目录（容器内由 volume 提供；本地落在项目 .cache/）
+export TTS_CACHE_DIR="${TTS_CACHE_DIR:-$ROOT/.cache/tts}"
+export XIAOMAN_DATA_DIR="${XIAOMAN_DATA_DIR:-$ROOT/.cache/sessions}"
+export XIAOMAN_ALLOW_ORIGINS="${XIAOMAN_ALLOW_ORIGINS:-http://127.0.0.1:8901}"
+mkdir -p "$TTS_CACHE_DIR" "$XIAOMAN_DATA_DIR"
+
+# 优先使用项目 venv（若存在），否则回退系统 python3
+PYTHON="${PYTHON:-python3}"
+if [ -x "$ROOT/.venv/bin/python" ]; then PYTHON="$ROOT/.venv/bin/python"; fi
+
 # ---------- 工具函数 ----------
 
 # 端口是否已有进程在监听（幂等判断：在监听就不再启动）
@@ -101,9 +119,9 @@ ensure_up() {
 # ---------- 1) 启动三个服务 ----------
 echo "▶ 启动小满树洞本地环境 ..."
 
-ensure_up "对话API" "$PORT_MOCK" "$PID_MOCK" "$LOG_MOCK" "$ROOT" "/health" "xiaoman-mock" python3 server/mock_api.py
-ensure_up "语音API" "$PORT_TTS" "$PID_TTS" "$LOG_TTS" "$ROOT" "/health" "edge_tts" python3 server/tts_server.py
-ensure_up "前端"    "$PORT_WEB" "$PID_WEB" "$LOG_WEB" "$ROOT/web" "/index.html" "<!DOCTYPE" python3 -m http.server "$PORT_WEB"
+ensure_up "对话API" "$PORT_MOCK" "$PID_MOCK" "$LOG_MOCK" "$ROOT" "/health" "xiaoman-mock" "$PYTHON" server/mock_api.py
+ensure_up "语音API" "$PORT_TTS" "$PID_TTS" "$LOG_TTS" "$ROOT" "/health" "xiaoman-tts" "$PYTHON" server/tts_server.py
+ensure_up "前端"    "$PORT_WEB" "$PID_WEB" "$LOG_WEB" "$ROOT/web" "/index.html" "<!DOCTYPE" "$PYTHON" -m http.server "$PORT_WEB"
 
 # ---------- 2) 健康检查（最多等 15 秒） ----------
 echo "▶ 健康检查（最多等待 ${WAIT_MAX}s） ..."

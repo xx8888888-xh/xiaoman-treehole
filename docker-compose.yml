@@ -1,0 +1,76 @@
+# 小满树洞 · 三服务（前端静态站 8901 / mock+AI 代理 8902 / TTS 8903）
+# 宿主机端口全部映射到 127.0.0.1（回环），容器内监听 0.0.0.0。
+# 启动：docker compose up -d --build
+name: treehole
+
+x-common-env: &common-env
+  AI_MODE: ${AI_MODE:-mock}
+  AI_API_BASE: ${AI_API_BASE:-}
+  AI_API_KEY: ${AI_API_KEY:-}
+  AI_MODEL: ${AI_MODEL:-nvidia/nemotron-3.5-lightning:free}
+  TTS_BASE: ${TTS_BASE:-http://127.0.0.1:8903}
+  TTS_VOICE: ${TTS_VOICE:-zh-CN-XiaoyiNeural}
+  XIAOMAN_ALLOW_ORIGINS: ${XIAOMAN_ALLOW_ORIGINS:-http://127.0.0.1:8901}
+
+x-labels: &labels
+  com.dsh.project: treehole
+
+services:
+  web:
+    build:
+      context: .
+      target: runtime
+      network: host
+    image: treehole-web:local
+    command: ["python", "-m", "http.server", "8901", "--bind", "0.0.0.0", "--directory", "web"]
+    ports:
+      - "127.0.0.1:8901:8901"
+    environment:
+      <<: *common-env
+    labels: *labels
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8901/', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  mock:
+    build:
+      context: .
+      target: runtime
+      network: host
+    image: treehole-mock:local
+    command: ["python", "server/mock_api.py"]
+    ports:
+      - "127.0.0.1:8902:8902"
+    environment:
+      <<: *common-env
+      XIAOMAN_DATA_DIR: /data/sessions
+    volumes:
+      - ./data/sessions:/data/sessions
+    labels: *labels
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8902/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  tts:
+    build:
+      context: .
+      target: tts
+      network: host
+    image: treehole-tts:local
+    ports:
+      - "127.0.0.1:8903:8903"
+    environment:
+      <<: *common-env
+      TTS_CACHE_DIR: /data/tts
+    volumes:
+      - ./data/tts:/data/tts
+    labels: *labels
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8903/health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3

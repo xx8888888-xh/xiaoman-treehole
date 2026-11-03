@@ -1,0 +1,16 @@
+.git
+.gitignore
+backups
+artifacts
+data
+logs
+.cache
+.venv
+android
+docs
+__pycache__
+**/__pycache__
+**/node_modules
+*.pyc
+.env
+.env.example

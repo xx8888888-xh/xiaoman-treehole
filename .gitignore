@@ -30,5 +30,11 @@ web/assets/audio/selftest*.wav
 # 本地服务运行日志（dev_up.sh 产物）
 logs/
 
+# 验证产物 / 容器数据卷 / 本地 venv（可复现，不入库）
+artifacts/
+data/
+.venv/
+.venv-win/
+
 # 系统
 .DS_Store
