@@ -282,14 +282,21 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
       - name: Start local services (mock 8902 / tts 8903 / web 8901)
+        # CI 没有凭据管理器、也不该让 UI 用例依赖外部模型：统一用 AI_MODE=mock，
+        # 保证「记忆落库 / 提醒 / 心跳」等断言可复现（真模型只在 quick 的契约测试外单独验）
+        env:
+          AI_MODE: mock
         run: bash scripts/dev_up.sh
 
       - name: Run web test suite
+        env:
+          AI_MODE: mock
         run: |
           set -e
           python3 scripts/test_mock_api.py
           python3 scripts/test_mock_api.py      # 幂等复跑：连续两次应一致通过
           python3 scripts/test_lifeline_ui.py
+          python3 scripts/test_onboarding.py
           python3 scripts/test_e2e.py
           python3 scripts/verify_tts.py
 
