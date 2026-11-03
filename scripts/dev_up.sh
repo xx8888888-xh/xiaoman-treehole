@@ -156,4 +156,22 @@ echo "✅ 本地环境就绪"
 echo "   前端    http://127.0.0.1:${PORT_WEB}"
 echo "   对话API http://127.0.0.1:${PORT_MOCK}"
 echo "   语音API http://127.0.0.1:${PORT_TTS}"
+
+# ---------- 4) AI 通道自检：缺 key 时给出明确警告（容器内无法读 Windows 凭据，只能环境变量注入） ----------
+CFG=$(curl -s --connect-timeout 3 "http://127.0.0.1:${PORT_MOCK}/api/config" 2>/dev/null || true)
+if [ -n "$CFG" ]; then
+  MODE=$(printf '%s' "$CFG" | sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  PROV=$(printf '%s' "$CFG" | sed -n 's/.*"provider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  HASKEY=$(printf '%s' "$CFG" | grep -o '"hasServerKey"[[:space:]]*:[[:space:]]*true' | tail -1)
+  # mock 模式下 provider 字段无意义，直接显示 mock
+  [ "${MODE:-}" = "mock" ] && PROV="mock"
+  echo "   AI 通道 mode=${MODE:-?} provider=${PROV:-?} hasKey=$([ -n "$HASKEY" ] && echo yes || echo no)"
+  if [ "${PROV:-openai}" = "openrouter" ] && [ -z "$HASKEY" ]; then
+    echo "⚠️  未检测到 AI key：OpenRouter 通道不可用，将降级为本地 mock。"
+    echo "    本地可用 Windows 凭据管理器；容器内没有凭据管理器，必须在 .env / 环境变量里注入 AI_API_KEY。"
+  fi
+  if [ "${MODE:-mock}" = "offline" ]; then
+    echo "ℹ️  当前为 offline 模式：只用本地规则引擎，不发起任何网络请求。"
+  fi
+fi
 exit 0
