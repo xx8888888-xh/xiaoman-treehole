@@ -465,3 +465,123 @@ treehole/
 - `POST /api/chat` → **2.68s**，返回 41 字有效回复（非 null）：
   > 「哪怕只有短短几分钟，也请记得起身走动一下，伸展一下身体，让疲惫的双脚稍微松一口气。」
 - 结论：兜底通道可用；因免费额度 50 次/天，仅在 Kilo 失败时使用。
+
+---
+
+## 14. 第四阶段：CI 与优化迭代
+
+### 14.1 CI 云端验证
+
+分支 `feat/containerize-and-config` 已推送并开 PR（`#1`，未 merge）。
+本轮新增/修复的 workflow：
+
+最终验证 run：`quick` = [41698090305](https://github.com/xx8888888-xh/xiaoman-treehole/actions/runs/41698090305)（1m24s），
+`android-ci` = [41698090550](https://github.com/xx8888888-xh/xiaoman-treehole/actions/runs/41698090550)（4m43s，全绿）。
+
+| workflow / job | 云端结果 | 耗时（实测） | 说明 |
+| --- | --- | --- | --- |
+| `quick` / `js-fast` | ✅ | 47s | `npm ci` → `node:test` 18/18 → `biome` 0 error |
+| `quick` / `python-fast` | ✅ | 1m20s | `compileall` → 起 mock 8902 → `test_mock_api.py` → `test_memory_recall.py` |
+| `android-ci` / `build-apk` | ✅ | 1m07s | 手工 aapt2 链出包，上传 `xiaoman-treehole-apk` artifact |
+| `android-ci` / `web-tests` | ✅ | 4m02s | dev_up + Playwright（5 套脚本）；见下方两条修复 |
+| `android-ci` / `emulator-smoke` | ✅ | 3m29s | KVM 云端可用；装 APK、冷启动、截图 artifact |
+| `android-ci` / `assemble-release` | 跳过 | — | 需要签名 secrets，未在云端伪造 |
+
+结论：**PR 上所有必跑 job 全绿**；`quick` 不依赖 Docker/模拟器，每次 push 都会在云端
+47s–1m24s 内回归 lint + node:test + Python 单测。模拟器类 job（`emulator-smoke`）虽然云端
+KVM 能跑，但真实听感/Live2D 观感/系统深浅色重绘仍只能在本机 MuMu 验证（见 14.7）。
+
+云端摸到并修掉的两个真问题：
+
+1. **步骤间后台进程不存活**：`quick` 原先把「起 mock 服务」和「跑测试」拆成两步，runner 在 step
+   结束时清理子进程 → `Connection refused`（0/8）。改为**同一步**起服务、轮询 `/health`、
+   跑测试、`trap` 收尸。
+2. **UI 用例被真模型干扰**：`android-ci/web-tests` 的 `MEMORY_WRITE` 在云端 FAIL。根因不是代码，
+   而是 CI 里 `AI_MODE` 默认走真模型，记忆落库断言依赖规则引擎的确定性输出。改为该 job
+   `AI_MODE=mock`，并补跑 `test_onboarding.py`。
+
+推送手记：`git push` 在本机遇到 GitHub smart-HTTP `500`（代理侧），改用 GitHub Git Data API
+（`git/trees` + `git/commits` + `refs`）逐提交发布；因此云端 commit sha 与本地不同（GitHub 将
+提交时区规整为 UTC），但**内容树一致**，PR diff 无差异。
+
+### 14.2 第 1 轮：用户视角（能不能用）
+
+MuMu 实测 24 条用例暴露 4 个阻断项，本轮全部修掉：
+
+| # | 修复前 | 修复后 |
+| --- | --- | --- |
+| 1 | Live2D 不渲染：`file://` 页面 XHR 被 CORS 拦 | 自研 `WebViewAssetLoader`（纯 Java，零依赖），页面走 `https://appassets.androidplatform.net/www/…` 同源；`shouldInterceptRequest` 映射 assets，`.moc3/.json/.png` MIME 齐全 |
+| 2 | 无 key 时 `chatViaProxy` 打 `127.0.0.1:8902`（APK 内无服务） | 新增 `NetBridge`：Java `HttpURLConnection` 代发（无 Origin 头，绕开 Kilo 不回 CORS 的问题）；主界面+悬浮窗都挂 `AndroidNet`；mock 模式在 APK 内直接短路到离线引擎 |
+| 3 | TTS 跨域 `<audio>` + WebAudio → analyser 全 0、输出被静音 | `crossOrigin="anonymous"` + 服务端 `Access-Control-Allow-Origin: *`；三级降级：口型失败→纯播放→browser；AudioContext 挂起（45 帧零采样）→ 随机口型兜底但不拆音频图 |
+| 4 | `Origin: null` 不在白名单，`file://` 一律被拒 | `xm_config` 默认白名单加字面量 `null` 与 appassets 域；compose 的 `XIAOMAN_ALLOW_ORIGINS` 默认值同步 |
+
+配套：`WebSettings` 放开 `MIXED_CONTENT_ALWAYS_ALLOW`（https 页面调 http 本地 TTS 必需）；
+APK 构建加 `--debug-mode` 以便 CDP 复测；`build_apk.sh` 兼容 WSL（无 `zip` 用 Python 追加
+`classes.dex`、自动探测可执行 `aapt2`、路径含空格时用相对路径源清单、keystore 进缓存目录
+保证签名稳定）。
+
+### 14.3 第 2 轮：设计一致性（审美硬约束）
+
+修复前（`web/css/style.css`，255 行）：**43 处** `animation`/`transition`/`@keyframes`；
+图标是粉色/薄荷绿；正文 13–15px；背景有云朵/星星/爪印装饰层与 6s 淡出引导贴片；只有浅色。
+
+修复后：
+
+- **动画/过渡 0 处**（`Select-String 'animation|transition|@keyframes|scroll-behavior'` 命中 0）。
+  打字指示器改为静态「正在想…」；抽屉/弹窗直接显隐，不再等退场。
+- **图标灰阶**：按钮/图标全部最深灰（`#2B2B2B`），黑色只出现在 1px 边框；移除彩色品牌点/麦克风。
+- **大字号**：正文 17px、次要 15px、按钮 16px、标题 20px。
+- **左对齐 + 少元素**：删除整层背景装饰与引导贴片；阴影收敛为单层极淡；记忆抽屉空态
+  （`drawer-empty`）不再空白。
+- **明暗主题**：全部颜色变量化；`:root` 浅色、`body.theme-dark` 深色、
+  `@media (prefers-color-scheme: dark) body:not(.theme-light)` 跟随系统。设置页新增
+  「外观：跟随系统 / 浅色 / 深色」，手动覆盖系统。
+- **无障碍**：`:focus-visible` 统一 2px 实线焦点环；浅色正文对比度 5.3:1、深色 5.6:1。
+
+新增元素全部可关闭：降级标识有 `✕`（本次会话内不再出现）、外观可随时切回。
+
+### 14.4 第 3 轮：工程师视角与 UX 细节
+
+| 问题 | 修复 |
+| --- | --- |
+| 降级到本地引擎时用户无感知（以为在跟真模型聊） | 安静的小号角标「本地模式 / 离线模式」，可关闭，不用横幅/弹窗 |
+| 刷新/重进后开场问候一条条累积 | 按「上次开场末条文案 + 6h 窗口」内容去重；有待补消息时例外 |
+| 原生通道 `content=null`（reasoning 吃光）直接判死 | 强约束 JSON 重试一次；仍空才降级 |
+| 原生桥等待无上限风险 | `Promise` 60s 超时 + waiter 清理，避免内存泄漏 |
+| APK 内 mock 模式每次先等 15s 超时 | 检测到 `AndroidNet` 直接走同进程离线引擎 |
+| 首屏 `serverConfig` 等 4s | 同上，原生壳内直接返回 null |
+| 友谊卡片长文案横向溢出 | `fillText(..., maxWidth)` 压缩：格子 336px、尾注 780/800px |
+| 麦克风按钮是死路（manifest 无 `RECORD_AUDIO`） | 直接移除（倾向隐藏，不做半成品权限） |
+| E2E `⑦g-7` 在云端假失败 | 等待词从「信号不太好」（历史里已有）改为本次开场特有的「没接上」 |
+| 安卓 assets 副本与 `web/` 双真源、易漂移 | `assets/www` 改为生成物（`.gitignore` + `build_assets.sh` 自动建目录），CI 每次构建前同步 |
+| `docs/shots` 被 E2E 覆盖 | 三套脚本截图目录改 `artifacts/shots`，`docs/shots` 恢复静态只读 |
+
+### 14.5 测试矩阵（修复前 → 修复后）
+
+| 套件 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `web` `node:test` | 18/18 | **18/18** |
+| `biome` lint | 0 error / 9 warning | **0 error / 9 warning** |
+| `test_e2e.py` | 47/47（含 1 处时序假失败风险） | **47/47** |
+| `test_onboarding.py` | 9/9 | **9/9** |
+| `test_lifeline_ui.py` | 5/5 | **5/5** |
+| `test_mock_api.py` | 8/8 | **8/8** |
+| `test_memory_recall.py` | 152/152 | **152/152** |
+| MuMu 4 阻断项 | 0/4 | **4/4** |
+
+### 14.6 MuMu 复测（adb `192.168.0.100:5555`）
+
+- 首屏：Live2D 正常渲染（`#stage canvas 720×492`，截图有角色），无 console error。
+- AI：`API.chat()` 经原生桥拿到真实模型回复（非规则引擎模板），`location.origin =
+  https://appassets.androidplatform.net`。
+- TTS：音频 `duration=2.016s`、播放后 `currentTime` 正常推进；`/tts` 返回 200。
+- CORS：`Origin: null` 与 appassets 域均回 `Access-Control-Allow-Origin`。
+- 外观：切深色后 `body` 背景 `rgb(31,31,31)`，气泡 `rgb(42,42,40)`；设置页三档可选。
+- 记忆抽屉空态、友谊卡片长文案、降级角标均按预期显示。
+
+### 14.7 仍需本地/人工验证（云做不到）
+
+- 真机听感（TTS 是否自然、是否有回声）与 Live2D 动作/口型观感。
+- 飞行模式/弱网下的降级体验与 429 排队文案。
+- 安卓系统深浅色切换后的重绘（已挂 `onConfigurationChanged → __retheme`，需实机确认）。
+- release 签名包与上架渠道（需 secrets 与 keystore）。
