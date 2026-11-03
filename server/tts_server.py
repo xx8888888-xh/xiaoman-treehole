@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+import xm_config
+
 # ---------------- 日志配置 ----------------
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +28,9 @@ logging.basicConfig(
 logger = logging.getLogger("xiaoman-tts")
 
 # ---------------- 环境变量配置 ----------------
-BIND_HOST = os.environ.get("XIAOMAN_BIND_HOST", "0.0.0.0")
+# 默认仅本机回环；容器内由 compose 注入 0.0.0.0，再由端口映射回宿主机回环
+BIND_HOST = xm_config.BIND_HOST
+PORT = xm_config.TTS_PORT
 
 # 代理：aiohttp 默认不读环境变量，必须显式传给 edge-tts，否则受限网络直连会超时
 # 优先 HTTPS_PROXY → https_proxy → ALL_PROXY → all_proxy，都没有则为 None
@@ -54,7 +58,12 @@ ALLOWED_VOICES = frozenset({
 })
 
 # ---------------- 磁盘缓存 + single-flight ----------------
-CACHE_DIR = Path("/tmp/xiaoman_tts_cache")
+# 缓存目录可配置（容器内挂 volume 到 /data/tts；本地 dev 默认落在项目 .cache/tts）
+CACHE_DIR = Path(
+    os.environ.get("TTS_CACHE_DIR")
+    or os.environ.get("XIAOMAN_TTS_CACHE_DIR")
+    or Path.home() / ".cache" / "xiaoman_tts"
+)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_CACHE_ENTRIES = 200
 CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7天
@@ -140,12 +149,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         logger.info("%s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
 
+    def _cors(self):
+        """CORS 白名单（默认仅 http://127.0.0.1:8901）；未命中不发 ACAO"""
+        for k, v in xm_config.cors_headers(self.headers.get("Origin")).items():
+            self.send_header(k, v)
+
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        # CORS：Origin 保留 *，收敛 Headers/Methods
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors()
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Content-Length", str(len(body)))
@@ -159,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors()
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.end_headers()
@@ -171,7 +184,8 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
 
         if path == "/health":
-            self._json({"ok": True, "edge_tts": HAS_EDGE})
+            self._json({"ok": True, "service": "xiaoman-tts", "edge_tts": HAS_EDGE,
+                        "cache_dir": str(CACHE_DIR)})
             logger.debug("GET /health %dms", int((time.time() - start) * 1000))
             return
 
@@ -197,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
             audio = asyncio.run(_get_or_generate_audio(text, voice))
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._cors()
             self.send_header("Content-Length", str(len(audio)))
             self.end_headers()
             self.wfile.write(audio)
@@ -211,5 +225,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"小满 TTS 服务就绪 → http://{BIND_HOST}:8903/tts （edge-tts: {'可用' if HAS_EDGE else '未安装'}） (bind: {BIND_HOST})")
-    ThreadingHTTPServer((BIND_HOST, 8903), Handler).serve_forever()
+    print(f"小满 TTS 服务就绪 → http://{BIND_HOST}:{PORT}/tts "
+          f"（edge-tts: {'可用' if HAS_EDGE else '未安装'}） (bind: {BIND_HOST}, cache: {CACHE_DIR})")
+    ThreadingHTTPServer((BIND_HOST, PORT), Handler).serve_forever()
