@@ -136,3 +136,5 @@ const ChatStore = (() => {
 })();
 
 if (typeof module === "object" && module.exports) module.exports = ChatStore;
+// 浏览器全局：classic script 的顶层 const 不会挂到 window，显式导出供 app.js 使用
+if (typeof window !== "undefined") window.ChatStore = ChatStore;

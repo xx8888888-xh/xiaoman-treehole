@@ -663,24 +663,20 @@ def load_history(session_id):
 def make_reply(messages, session_id=None):
     """主入口：读历史 → 识别 → 回"""
     user_text = ""
-    # 扫描所有 user 消息做危机检测（不只最后一条）
-    all_user_texts = []
+    # 取最后一条 user 消息作为主文本
     for m in reversed(messages):
         if m.get("role") == "user":
             content = m.get("content", "")
             if content:
-                all_user_texts.append(content)
-                if not user_text:
-                    user_text = content  # 最后一条作为主文本
+                user_text = content
+                break
     if not user_text:
         user_text = messages[-1].get("content", "") if messages else ""
 
-    # 危机拦截：扫描整个历史
-    crisis_hit = False
-    for ut in all_user_texts:
-        if CRISIS_RE.search(ut):
-            crisis_hit = True
-            break
+    # 危机拦截：只看最后一条 user 消息。
+    # 历史里出现过的危机由客户端当轮已拦截并递了关怀卡；若这里继续扫描整段历史，
+    # 之后每一轮都会被判成危机（重复热线、且记忆永不写入），与客户端拦截语义冲突。
+    crisis_hit = bool(CRISIS_RE.search(user_text))
 
     if crisis_hit:
         crisis_count = _STATE.increment_crisis(session_id)
