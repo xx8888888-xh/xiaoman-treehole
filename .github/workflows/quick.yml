@@ -1,0 +1,64 @@
+name: quick
+
+# 轻量云端回归：不依赖 Android SDK / 模拟器 / Docker，每次 push 都能 1-2 分钟内出结果。
+# 真正的出包与模拟器验收在 android-ci.yml 中（耗时 3-4 分钟，含 KVM 模拟器）。
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, 'feat/**', 'zhiqiu/**', 'fix/**', 'model/**', 'integration/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-fast:
+    name: python-fast
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 语法编译检查（server + scripts）
+        run: python -m compileall -q server scripts
+
+      - name: mock API 契约单测
+        run: python scripts/test_mock_api.py
+
+      - name: 记忆召回单测（纯 stdlib，无需浏览器）
+        run: python scripts/test_memory_recall.py
+
+  js-fast:
+    name: js-fast
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: node:test 单测
+        run: npm test
+
+      - name: Biome lint
+        run: npm run lint

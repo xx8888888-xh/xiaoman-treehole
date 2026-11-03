@@ -30,7 +30,9 @@ def _load_env():
 HOST, WEB_PORT, MOCK_PORT, TTS_PORT = _load_env()
 BASE = f"http://{HOST}:{WEB_PORT}/index.html"
 TTS_ORIGIN = f"{HOST}:{TTS_PORT}"
-SHOTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "shots"))
+# 测试产物一律写 artifacts/，docs/shots 是静态文档截图，测试不得覆盖
+SHOTS = os.environ.get("XIAOMAN_SHOTS_DIR") or os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "artifacts", "shots"))
 
 
 def wait_ready(url, timeout=15):

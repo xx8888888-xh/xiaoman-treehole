@@ -33,7 +33,8 @@ def _load_env():
 
 HOST, WEB_PORT, MOCK_PORT = _load_env()
 BASE = f"http://{HOST}:{WEB_PORT}/index.html"
-SHOTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "shots"))
+SHOTS = os.environ.get("XIAOMAN_SHOTS_DIR") or os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "artifacts", "shots"))
 MAX_TURNS = 10  # 验收口径：新会话 10 轮内
 
 

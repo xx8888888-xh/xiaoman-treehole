@@ -28,7 +28,8 @@ def _load_env():
 
 _HOST, _WEB_PORT, _MOCK_PORT, _TTS_PORT = _load_env()
 URL = f"http://{_HOST}:{_WEB_PORT}/index.html"
-SHOTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "shots"))
+SHOTS = os.environ.get("XIAOMAN_SHOTS_DIR") or os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "artifacts", "shots"))
 
 
 async def main():

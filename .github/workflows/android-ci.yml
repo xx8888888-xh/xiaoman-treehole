@@ -304,6 +304,6 @@ jobs:
           name: web-test-logs
           path: |
             logs/
-            docs/shots/
+            artifacts/
           if-no-files-found: ignore
           retention-days: 7
