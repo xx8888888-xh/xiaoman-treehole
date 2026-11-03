@@ -96,9 +96,27 @@
     <div class="drawer-mask overlay"></div>
     <div class="modal-panel">
       <div class="drawer-head"><h2 id="settingsTitle">设置</h2><button class="icon-btn" id="settingsClose" aria-label="关闭">✕</button></div>
-      <label class="field"><span>对话服务地址（OpenAI 兼容 / 内置 Mock）</span>
-        <input id="cfgApi" type="url" inputmode="url" placeholder="http://127.0.0.1:8902">
+      <label class="field"><span>对话模式</span>
+        <select id="cfgMode">
+          <option value="mock">本地 Mock（无需 Key）</option>
+          <option value="openai">OpenAI 兼容（Kilo 免 Key / OpenRouter 带 Key）</option>
+          <option value="offline">纯离线规则引擎</option>
+        </select>
       </label>
+      <label class="field"><span>对话服务地址（OpenAI 兼容）</span>
+        <input id="cfgApi" type="url" inputmode="url" placeholder="https://api.kilo.ai/api/gateway">
+      </label>
+      <label class="field"><span>API Key（仅本页内存，不写入本地存储）</span>
+        <input id="cfgApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="留空则用服务端环境变量 / Kilo 免 Key">
+      </label>
+      <label class="field"><span>模型</span>
+        <input id="cfgModel" type="text" spellcheck="false" placeholder="nvidia/nemotron-3.5-lightning:free">
+      </label>
+      <label class="field"><span>语音服务地址</span>
+        <input id="cfgTtsBase" type="url" inputmode="url" placeholder="http://127.0.0.1:8903">
+      </label>
+      <button class="ghost-btn" id="cfgTestBtn">测试连接</button>
+      <p class="mini" id="cfgTestResult" role="status" aria-live="polite"></p>
       <label class="field"><span>语音回复</span>
         <select id="cfgTts">
           <option value="server">服务端语音（自然）</option>
@@ -136,6 +154,8 @@
 <script src="js/vendor/pixi.min.js" onerror="console.error('[load-fail] js/vendor/pixi.min.js')"></script>
 <script src="js/vendor/live2dcubismcore.min.js" onerror="console.error('[load-fail] js/vendor/live2dcubismcore.min.js')"></script>
 <script src="js/vendor/pixi-live2d-cubism4.min.js" onerror="console.error('[load-fail] js/vendor/pixi-live2d-cubism4.min.js')"></script>
+<script src="js/config.js"></script>
+<script src="js/store.js"></script>
 <script src="js/api.js"></script>
 <script src="js/float_mode.js"></script>
 <script src="js/mock_engine.js"></script>

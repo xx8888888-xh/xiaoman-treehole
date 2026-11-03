@@ -151,8 +151,7 @@ const App = (() => {
       await new Promise(r => setTimeout(r, 700));   // 分条节奏：里程碑单独一条，稍隔半拍
       const line = milestoneLine(m);
       addMsg(line, "them", { tip: true });
-      history.push({ role: "assistant", content: line, at: Date.now() });
-      if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+      pushHistory("assistant", line);
     } catch (e) { /* 数据层异常不影响对话主流程 */ }
   }
   /** 关系进度注入行（真模型路径让 LLM 也有感知，数据同源） */
@@ -216,6 +215,7 @@ const App = (() => {
   window.__lastLimitLine = () => lastLimitLine;     // E2E：连发不重样断言
 
   let history = [];          // [{role, content, at}]
+  const SID = API.sessionId();   // 浏览器侧与服务端落盘共用同一个 session id
   let busy = false;
   let sending = false;       // 发送互斥锁：防止 greet/心跳/poke/hook 与用户发送并发
   let sendQueue = [];        // 等待发送的消息队列
@@ -223,6 +223,34 @@ const App = (() => {
   let idleTimers = [];
   let pings = 0;
   const MAX_HISTORY = 30;    // 历史滑动窗口上限
+
+  /** 统一写历史：内存滑动窗口 + IndexedDB 持久化（刷新/重启不丢） */
+  function pushHistory(role, content, at) {
+    const ts = at || Date.now();
+    history.push({ role, content, at: ts });
+    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    if (window.ChatStore) {
+      ChatStore.append(SID, { role, content, at: ts }).catch(() => {});
+      if (history.length >= MAX_HISTORY) {
+        ChatStore.prune(SID, ChatStore.MAX_KEEP).catch(() => {});
+      }
+    }
+  }
+
+  /** 启动时从 IndexedDB 恢复最近对话（失败不影响主流程） */
+  async function restoreHistory() {
+    if (!window.ChatStore) return;
+    try {
+      const msgs = await ChatStore.list(SID, MAX_HISTORY);
+      if (!msgs.length) return;
+      history = msgs.map(m => ({ role: m.role, content: m.content, at: m.at }));
+      for (const m of msgs) {
+        addMsg(m.content, m.role === "user" ? "me" : "them",
+               m.role !== "user" && m.content === CARE_SCRIPT ? { crisis: true } : {});
+      }
+      console.log("[probe] history restored n=" + msgs.length);
+    } catch (e) { console.warn("[probe] HISTORY_RESTORE_FAIL", e.message); }
+  }
 
   // ---------- 工具 ----------
   const $ = id => document.getElementById(id);
@@ -422,9 +450,7 @@ const App = (() => {
 
     await withSendLock(async () => {
       addMsg(text, "me");
-      history.push({ role: "user", content: text, at: Date.now() });
-      // 滑动窗口：保留最近 MAX_HISTORY 条
-      if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+      pushHistory("user", text);
       bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
       if (window.Stats) Stats.bump(text);   // P2-1：小本本计数（真实数据，自我叙事素材）
 
@@ -433,8 +459,7 @@ const App = (() => {
         await showTyping(900);
         addMsg(CARE_SCRIPT, "them", { crisis: true });
         Stage.setEmotion("gentle");
-        history.push({ role: "assistant", content: CARE_SCRIPT, at: Date.now() });
-        if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+        pushHistory("assistant", CARE_SCRIPT);
         return;
       }
 
@@ -469,8 +494,7 @@ const App = (() => {
             const conf = pickConfirm(item);
             await showTyping(700);
             addMsg(conf, "them", { tip: true });
-            history.push({ role: "assistant", content: conf, at: Date.now() });
-            if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+            pushHistory("assistant", conf);
             toast(`已设提醒：${Reminders.fmt(item.at)}`);
             return;
           }
@@ -530,8 +554,7 @@ const App = (() => {
         await showTyping(900);
         addMsg(CARE_SCRIPT, "them", { crisis: true });
         Stage.setEmotion("gentle");
-        history.push({ role: "assistant", content: CARE_SCRIPT, at: Date.now() });
-        if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+        pushHistory("assistant", CARE_SCRIPT);
         return;
       }
 
@@ -544,8 +567,7 @@ const App = (() => {
         const seg = limitedParts[i];
         await showTyping(typingDelay(seg));
         lastRow = addMsg(seg, "them");
-        history.push({ role: "assistant", content: seg, at: Date.now() });
-        if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+        pushHistory("assistant", seg);
       }
 
       // 表情 + 动作
@@ -799,17 +821,63 @@ const App = (() => {
     }
     $("settingsBtn").onclick = () => {
       const cfg = API.loadCfg();
-      $("cfgApi").value = cfg.apiBase || "http://127.0.0.1:8902";
+      $("cfgMode").value = cfg.mode;
+      $("cfgApi").value = cfg.apiBase || "";
+      $("cfgApiKey").value = API.getApiKey();
+      $("cfgModel").value = cfg.model || "";
+      $("cfgTtsBase").value = cfg.ttsBase || "";
       $("cfgTts").value = cfg.tts || "server";
       $("cfgVoice").value = cfg.voice || "zh-CN-XiaoyiNeural";
+      $("cfgTestResult").textContent = "";
       openPanel($("settingsModal"), $("settingsBtn"));
     };
     $("settingsClose").onclick = () => closePanel($("settingsModal"));
     $("settingsModal").querySelector(".drawer-mask").onclick = () => closePanel($("settingsModal"));
-    [$("cfgApi"), $("cfgTts"), $("cfgVoice")].forEach(el => el.addEventListener("change", () => {
-      API.saveCfg({ apiBase: $("cfgApi").value.trim(), tts: $("cfgTts").value, voice: $("cfgVoice").value });
-      toast("已保存");
-    }));
+    [$("cfgMode"), $("cfgApi"), $("cfgModel"), $("cfgTtsBase"), $("cfgTts"), $("cfgVoice")].forEach(el => {
+      el.addEventListener("change", () => {
+        API.saveCfg({
+          mode: $("cfgMode").value,
+          apiBase: $("cfgApi").value.trim(),
+          model: $("cfgModel").value.trim(),
+          ttsBase: $("cfgTtsBase").value.trim(),
+          tts: $("cfgTts").value,
+          voice: $("cfgVoice").value
+        });
+        toast("已保存");
+      });
+    });
+    // Key 只进内存，不落 localStorage
+    $("cfgApiKey").addEventListener("change", () => {
+      API.setApiKey($("cfgApiKey").value.trim());
+      toast("Key 仅保存在本次页面内存中");
+    });
+    $("cfgTestBtn").onclick = async () => {
+      const btn = $("cfgTestBtn"), out = $("cfgTestResult");
+      btn.disabled = true;
+      out.textContent = "测试中…";
+      try {
+        const r = await API.testConnection({
+          mode: $("cfgMode").value,
+          apiBase: $("cfgApi").value.trim(),
+          apiKey: $("cfgApiKey").value.trim()
+        });
+        if (r && r.ok) {
+          const list = (r.models || []).slice(0, 8).join("、");
+          out.textContent = "连接成功：" + (r.note || "可用") + (list ? "｜模型：" + list : "");
+          if (r.model && !$("cfgModel").value) {
+            $("cfgModel").value = r.model;
+            API.saveCfg({ model: r.model });
+          }
+        } else {
+          out.textContent = "连接失败：" + ((r && r.error) || "未知原因") +
+            (r && r.status ? `（HTTP ${r.status}）` : "");
+        }
+      } catch (e) {
+        out.textContent = "连接失败：" + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    };
     // 抽屉/弹窗：Esc 关闭 + Tab 焦点循环
     document.addEventListener("keydown", onKeydown);
     // 舞台键盘等价操作：摸头（Live2D 命中区只能点击，键盘走同一反应）
@@ -836,11 +904,17 @@ const App = (() => {
     } catch (e) { console.warn("[probe] FLOAT_UI_FAIL", e.message); }
   }
 
-  function init() {
+  async function init() {
+    // 服务端 env 提供默认配置（mode/model/apiBase/ttsBase），不覆盖用户已保存值
+    try { await API.bootstrap(); } catch (e) { console.warn("[probe] BOOTSTRAP_FAIL", e.message); }
+
     // 事件绑定独立兜底：即便舞台/心跳初始化失败，输入与发送也必须可用
     try {
       bind(); console.log("[probe] bind ok");
     } catch (e) { console.error("[probe] BIND_FAIL", e.message); return; }
+
+    // 从 IndexedDB 恢复历史（先于开场白，保证时间顺序）
+    try { await restoreHistory(); } catch (e) { console.warn("[probe] HISTORY_FAIL", e.message); }
 
     // 舞台初始化独立兜底：PIXI/模型失败只降级隐藏舞台，不影响对话
     // 悬浮窗迷你模式：跳过 Live2D（双 WebView 实例省内存），布局由 CSS float-mode 接管
@@ -877,4 +951,6 @@ const App = (() => {
   return { init, send, onPoke };
 })();
 
-window.addEventListener("DOMContentLoaded", App.init);
+window.addEventListener("DOMContentLoaded", () => {
+  App.init().catch(e => console.error("[probe] INIT_FAIL", e.message));
+});
