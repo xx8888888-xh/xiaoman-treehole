@@ -10,22 +10,26 @@
   "use strict";
 
   const DEFAULTS = {
-    mode: "mock",
+    // 红队 P1-2：全新安装默认走真模型（安卓原生桥 / 服务端代理）；
+    // mock 只在离线/降级时兜底，避免"以为是 AI 其实是规则表"
+    mode: "openai",
     apiBase: "",
     model: "nvidia/nemotron-3.5-lightning:free",
     ttsBase: "http://127.0.0.1:8903",
     mockBase: "http://127.0.0.1:8902",
     tts: "server",
     voice: "zh-CN-XiaoyiNeural",
+    ttsRate: "normal",     // 语速档位：slow / normal / fast（跨启动持久化）
     apiKey: ""            // 仅内存使用，normalizeCfg 会把它丢弃
   };
 
   const MODES = ["openai", "mock", "offline"];
+  const RATES = ["slow", "normal", "fast"];
 
   function normalizeMode(mode) {
     if (mode === "local") return "mock";     // 兼容旧配置
     if (mode === "auto") return "openai";    // 兼容旧配置
-    return MODES.indexOf(mode) >= 0 ? mode : "mock";
+    return MODES.indexOf(mode) >= 0 ? mode : DEFAULTS.mode;
   }
 
   function trimUrl(v) {
@@ -47,6 +51,7 @@
     cfg.mockBase = trimUrl(raw.mockBase || DEFAULTS.mockBase);
     cfg.tts = ["server", "browser", "off"].indexOf(raw.tts) >= 0 ? raw.tts : DEFAULTS.tts;
     cfg.voice = String(raw.voice || DEFAULTS.voice).trim();
+    cfg.ttsRate = RATES.indexOf(raw.ttsRate) >= 0 ? raw.ttsRate : DEFAULTS.ttsRate;
     // 密钥永不进入持久化配置
     delete cfg.apiKey;
     return cfg;
@@ -64,7 +69,7 @@
     return k.length <= 8 ? "*".repeat(k.length) : `${k.slice(0, 3)}***${k.slice(-4)}`;
   }
 
-  const api = { DEFAULTS, MODES, normalizeMode, normalizeCfg, stripSecret, maskKey, trimUrl, apiRoot };
+  const api = { DEFAULTS, MODES, RATES, normalizeMode, normalizeCfg, stripSecret, maskKey, trimUrl, apiRoot };
 
   root.XMConfig = api;
   if (typeof module === "object" && module.exports) module.exports = api;

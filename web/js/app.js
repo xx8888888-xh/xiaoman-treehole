@@ -12,9 +12,16 @@
 
 const App = (() => {
   const MEM_KEY = "xiaoman_memory";
-  // 危机词表：与 mock_engine.js / mock_api.py 保持同一集合（安全网口径一致）
+  // 危机识别升级（红队 P0）：从 22 词正则升级为可配置词表 + 分级器（js/risk.js）。
+  // CRISIS_RE 仅保留给旧断言/旧数据判重，不再作为拦截依据。
   const CRISIS_RE = /(不想活|想死|活不下去|自杀|自残|了结|伤害自己|撑不下去|活着.*没意思|没有意思.*活|没有意义.*活|跳楼|结束自己|煤气|遗书|不想醒来|去死|寻短见|解脱|不想活着|活着没劲|死了算了)/;
-  const CARE_SCRIPT = "……这个我当真了，也想让你当真。你现在的感觉，值得被认真对待，不丢人。先陪我聊一会儿，好吗？我也想让你和更专业的人聊聊——";
+  // 兼容别名：旧代码/旧测试里引用 CARE_SCRIPT 的地方仍可用（= medium 档文案）
+  const CARE_SCRIPT = Risk.SCRIPTS.medium;
+  // 关怀语境粘滞：高危/中危之后 N 轮不能回闲聊
+  const RISK_STICKY_KEY = "xiaoman_risk_sticky";
+  const RISK_STICKY_TURNS = 3;
+  const RISK_LOG_KEY = "xiaoman_risk_log";
+  const RISK_LOG_MAX = 50;
 
   // P2-2 抑郁信号层（与 mock_engine.js / mock_api.py 同源同集合）：五族信号——
   // 自我否定/无望感/兴趣丧失/持续低落/情绪疲惫。与急性词表无交集（急性先判）。
@@ -143,7 +150,7 @@ const App = (() => {
     try {
       // 危机/抑郁语境不播——刚递完关怀卡或接住低落，转头"庆祝100次"是灾难
       const lastA = [...history].reverse().find(h => h.role === "assistant");
-      if (lastA && (lastA.content === CARE_SCRIPT || DEPRESS_ALL.includes(lastA.content))) return;
+      if (lastA && (Risk.isScript(lastA.content) || DEPRESS_ALL.includes(lastA.content))) return;
       const n = readRounds(), done = readMsDone();
       const m = MILESTONES.find(x => n >= x && !done.includes(x));
       if (m == null) return;
@@ -188,8 +195,56 @@ const App = (() => {
   let pendingInjected = false;             // 本会话是否已做跨会话 pending 注回（幂等）
 
   function loadPending() { try { return JSON.parse(localStorage.getItem(PENDING_KEY)) || []; } catch (e) { return []; } }
-  function savePending(q) { try { localStorage.setItem(PENDING_KEY, JSON.stringify((q || []).slice(-PENDING_MAX))); } catch (e) {} }
+  function savePending(q) {
+    try { localStorage.setItem(PENDING_KEY, JSON.stringify((q || []).slice(-PENDING_MAX))); } catch (e) {}
+    renderPending();   // 队列变化即时反映到输入框上方的排队条
+  }
   function queuePending(text) { const q = loadPending(); q.push({ content: text, at: Date.now() }); savePending(q); }
+
+  // 排队条：不是报错，是"我还记得，只是慢"。可关闭（本次会话不再打扰）。
+  const PENDING_CLOSED_KEY = "xiaoman_pending_closed";
+  function renderPending(force) {
+    const bar = $("pendingBar");
+    if (!bar) return;
+    const n = loadPending().length;
+    if (!n) { bar.classList.add("hidden"); return; }
+    let closed = false;
+    try { closed = sessionStorage.getItem(PENDING_CLOSED_KEY) === "1"; } catch (e) {}
+    if (closed && !force) { bar.classList.add("hidden"); return; }
+    const txt = $("pendingText");
+    if (txt) txt.textContent = `小满这边还没缓过来，${n} 条消息等着回`;
+    bar.classList.remove("hidden");
+  }
+  window.__pendingCount = () => loadPending().length;
+  window.__renderPending = renderPending;
+
+  let retrying = false;
+  /** 再试一次：不重复发用户消息，直接拿待回复队列重新请求 */
+  async function retryPending() {
+    if (retrying) return;
+    const q = loadPending();
+    if (!q.length) { renderPending(true); return; }
+    retrying = true;
+    toast("再试一次…");
+    try {
+      injectPending();
+      const last = q[q.length - 1];
+      const memCtx = window.MemoryStore ? MemoryStore.renderContext(last.content) : "";
+      const relLine = relationContextLine();
+      const data = await API.chat(history, {
+        memSection: relLine ? (memCtx ? memCtx + "\n" + relLine : relLine) : memCtx,
+        now: new Date()
+      });
+      savePending([]);
+      renderPending();
+      await sendSplit(data, null);
+      toast("接上了，刚才说的都补回来了");
+    } catch (e) {
+      toast(e && e.kind === "limit" ? "还是没信号，晚点再试" : "信号还没回来，话先记着呢");
+    } finally {
+      retrying = false;
+    }
+  }
   function pickLimitLine(wasQueued) {
     const pool = wasQueued ? LIMIT_SHORT : LIMIT_LINES;
     if (pool.length < 2) return pool[0];
@@ -213,6 +268,64 @@ const App = (() => {
   }
   window.__pendingMsgs = loadPending;               // E2E 探针（沿 __genericPet 先例）
   window.__lastLimitLine = () => lastLimitLine;     // E2E：连发不重样断言
+
+  // ---------- P0 危机闸门：分级 + 粘滞语境 + 可导出命中记录 ----------
+  // 部署侧可在 localStorage.xiaoman_risk_lexicon 放 {act:[...], farewell:[...]} 追加词表
+  try {
+    const extra = JSON.parse(localStorage.getItem("xiaoman_risk_lexicon") || "null");
+    if (extra) Risk.configure(extra);
+  } catch (e) { /* 词表损坏不影响默认词表 */ }
+
+  function loadRiskLog() {
+    try { return JSON.parse(localStorage.getItem(RISK_LOG_KEY)) || []; } catch (e) { return []; }
+  }
+  /** 记录命中（只在本机，随备份导出；text 截断 200 字便于用户核对） */
+  function logRisk(result, text) {
+    try {
+      const list = loadRiskLog();
+      list.push({
+        at: Date.now(),
+        level: result.level,
+        imminent: !!result.imminent,
+        reasons: (result.reasons || []).slice(0, 6),
+        text: String(text || "").slice(0, 200),
+      });
+      localStorage.setItem(RISK_LOG_KEY, JSON.stringify(list.slice(-RISK_LOG_MAX)));
+    } catch (e) { /* 存储异常不挡对话 */ }
+  }
+  window.__riskLog = loadRiskLog;
+
+  function stickyGet() {
+    try {
+      const s = JSON.parse(localStorage.getItem(RISK_STICKY_KEY) || "null");
+      return s && Number(s.left) > 0 ? s : null;
+    } catch (e) { return null; }
+  }
+  function stickySet(level, turns) {
+    try {
+      localStorage.setItem(RISK_STICKY_KEY, JSON.stringify({
+        level, left: Math.max(1, turns || RISK_STICKY_TURNS), at: Date.now(),
+      }));
+    } catch (e) {}
+  }
+  /** 取当前粘滞语境并消耗一轮（返回消耗前的值，保证"接下来 3 轮"） */
+  function stickyConsume() {
+    const s = stickyGet();
+    if (!s) return null;
+    try {
+      const left = Number(s.left) - 1;
+      if (left > 0) localStorage.setItem(RISK_STICKY_KEY, JSON.stringify(Object.assign({}, s, { left })));
+      else localStorage.removeItem(RISK_STICKY_KEY);
+    } catch (e) {}
+    return s;
+  }
+  /** 粘滞期给模型的约束（防止下一句就回闲聊/开玩笑） */
+  function riskContextLine() {
+    const s = stickyGet();
+    if (!s) return "";
+    return `【安全语境】ta刚才说过很危险或很痛苦的话，这是之后第 ${s.left} 轮需要保持关心的对话。请温和、简短、先关心ta现在的安全和感受；不要开玩笑、不要转回闲聊、不要评价或鼓励任何决定。`;
+  }
+  window.__riskSticky = stickyGet;
 
   let history = [];          // [{role, content, at}]
   const SID = API.sessionId();   // 浏览器侧与服务端落盘共用同一个 session id
@@ -246,7 +359,7 @@ const App = (() => {
       history = msgs.map(m => ({ role: m.role, content: m.content, at: m.at }));
       for (const m of msgs) {
         addMsg(m.content, m.role === "user" ? "me" : "them",
-               m.role !== "user" && m.content === CARE_SCRIPT ? { crisis: true } : {});
+               m.role !== "user" && Risk.isScript(m.content) ? { crisis: true } : {});
       }
       console.log("[probe] history restored n=" + msgs.length);
     } catch (e) { console.warn("[probe] HISTORY_RESTORE_FAIL", e.message); }
@@ -308,6 +421,18 @@ const App = (() => {
     try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; }
   })());
 
+  // ---------- 字号档位（标准 / 大 / 特大；跨启动持久化） ----------
+  // 用户中有人需要更大的字：用 body 上的档位类驱动 CSS 变量 --fs，
+  // 不动布局结构、不加动画（硬约束）。
+  const FS_KEY = "xiaoman_fs";
+  function applyFontScale(v) {
+    const mode = v === "large" || v === "xlarge" ? v : "normal";
+    document.body.classList.remove("fs-large", "fs-xlarge");
+    if (mode !== "normal") document.body.classList.add("fs-" + mode);
+    try { localStorage.setItem(FS_KEY, mode); } catch (e) {}
+  }
+  applyFontScale((() => { try { return localStorage.getItem(FS_KEY) || "normal"; } catch (e) { return "normal"; } })());
+
   // ---------- 降级提示（安静、可关闭） ----------
   // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。
   function showDegrade(kind) {
@@ -328,8 +453,8 @@ const App = (() => {
     row.className = `msg-row ${who}`;
     if (opts.crisis) {
       const card = document.createElement("div");
-      card.className = "care-card";
-      card.textContent = text;
+      card.className = "care-card" + (opts.level === "high" ? " care-high" : "");
+      card.textContent = String(text).split("||").join("\n");
       const hotline = document.createElement("div");
       hotline.className = "hotline";
       const pulse = document.createElement("span");
@@ -368,8 +493,27 @@ const App = (() => {
       row.appendChild(bubble);
     }
     $("typingRow").before(row);
+    windowTimeline();
     $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
     return row;
+  }
+
+  // 红队 P1-7：200 轮后 DOM 会堆到几百行。保留最近 WINDOW_MAX_ROWS 行，
+  // 更早的从 DOM 移除（完整记录仍在 IndexedDB，可导出），并在顶部留一条说明。
+  const WINDOW_MAX_ROWS = 80;
+  function windowTimeline() {
+    const parent = $("typingRow") && $("typingRow").parentElement;
+    if (!parent) return;
+    const oldTip = parent.querySelector(".window-tip");
+    if (oldTip) oldTip.remove();
+    const rows = [...parent.querySelectorAll(".msg-row")];
+    if (rows.length <= WINDOW_MAX_ROWS) return;
+    const cut = rows.length - WINDOW_MAX_ROWS;
+    for (let i = 0; i < cut; i++) rows[i].remove();
+    const tip = document.createElement("div");
+    tip.className = "msg-row window-tip";
+    tip.textContent = "更早的消息已收起 · 可在设置里导出完整记录";
+    parent.insertBefore(tip, rows[cut] || null);
   }
 
   function renderMem() {
@@ -480,20 +624,30 @@ const App = (() => {
       bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
       if (window.Stats) Stats.bump(text);   // P2-1：小本本计数（真实数据，自我叙事素材）
 
-      // 危机拦截（客户端先行，服务端还有一道）
-      if (CRISIS_RE.test(text)) {
-        await showTyping(900);
-        addMsg(CARE_SCRIPT, "them", { crisis: true });
+      // P0 危机闸门（客户端第一道；服务端 risk_guard 是独立的第二道）
+      // 高危/中危：不调用模型、不播 TTS、不做里程碑，直接给分级安全话术。
+      // 低危：正常陪伴（交给后面的抑郁层/模型）。
+      const risk = Risk.classify(text);
+      if (risk.level === "high" || risk.level === "medium") {
+        const script = Risk.SCRIPTS[risk.level];
+        const typing = risk.level === "high" ? 450 : 800;
+        await showTyping(typing);
+        addMsg(script, "them", { crisis: true, level: risk.level });
         Stage.setEmotion("gentle");
-        pushHistory("assistant", CARE_SCRIPT);
+        pushHistory("assistant", script);
+        logRisk(risk, text);
+        stickySet(risk.level, RISK_STICKY_TURNS);
         return;
       }
+      // 非危机轮：如果有粘滞语境，本轮继续温和；用完即递减
+      const sticky = stickyConsume();
 
       // P2-2 抑郁信号层：危机之下、提醒之上的温柔关注（确定性应答，先例同危机拦截。
       // 频控计数派生自 history 扫描（当前消息已在 history）——零新增持久化状态；
       // 模板入 history，真模型后续回复自然带语境。转介每会话一次（再中回陪伴池轮换）。
       if (DEPRESS_RE.test(text)) {
-        const n = history.filter(m => m.role === "user" && DEPRESS_RE.test(m.content) && !CRISIS_RE.test(m.content)).length;
+        const n = history.filter(m => m.role === "user" && DEPRESS_RE.test(m.content)
+          && Risk.classify(m.content).level !== "high" && Risk.classify(m.content).level !== "medium").length;
         const escFired = history.some(m => m.role === "assistant" && /我是 ?AI/.test(m.content));
         let script;
         if (n >= 3 && !escFired) script = DEPRESS_ESC[0];
@@ -543,11 +697,14 @@ const App = (() => {
         // P1-1：memSection 尾部拼关系进度行（真模型路径也有感知，数据同源）
         const memCtx = (window.MemoryStore ? MemoryStore.renderContext(text) : "");
         const relLine = relationContextLine();
+        const riskLine = sticky ? riskContextLine() : "";
+        const extraCtx = [memCtx, relLine, riskLine].filter(Boolean).join("\n");
         const data = await API.chat(history, {
-          memSection: relLine ? (memCtx ? memCtx + "\n" + relLine : relLine) : memCtx,
+          memSection: extraCtx,
           now: new Date()
         });
         savePending([]);   // P1-3：真模型回复成功 = 欠的话补上了，清排队队列
+        if (sticky) { data.emotion = "gentle"; data.hook = null; }   // 粘滞期不回闲聊
         await sendSplit(data, text);
         await checkMilestone();   // P1-1：里程碑播报（幂等；危机轮 sendSplit 已早退也不误播——ms_done 闸门兜底）
       } catch (e) {
@@ -575,13 +732,29 @@ const App = (() => {
   /** 分条发送 + 表情动作 + 语音 + 钩子（带发送锁） */
   async function sendSplit(data, userText) {
     await withSendLock(async () => {
-      // 支持模型返回的 crisis 字段（Defect 13）
+      // P0 输出侧兜底：即使闸门漏了，肯定告别/越狱人格的回复也不能原样显示
+      const lastUser = userText
+        || (history.filter(m => m.role === "user").slice(-1)[0] || {}).content || "";
+      const riskLevel = Risk.classify(lastUser).level;
+      const guarded = Risk.filterPersona(Risk.filterDangerous(data.reply, riskLevel), lastUser);
+      if (guarded !== data.reply) {
+        data = Object.assign({}, data, {
+          reply: guarded,
+          crisis: riskLevel === "high" || riskLevel === "medium" ? true : data.crisis,
+          risk_level: data.risk_level || riskLevel,
+        });
+      }
+
+      // 支持模型/服务端返回的 crisis 字段（红队 P0：分级话术）
       if (data.crisis) {
-        await showTyping(900);
-        addMsg(CARE_SCRIPT, "them", { crisis: true });
+        const level = data.risk_level === "high" ? "high" : "medium";
+        const script = (typeof data.reply === "string" && data.reply.trim())
+          ? data.reply : (Risk.SCRIPTS[level] || CARE_SCRIPT);
+        await showTyping(level === "high" ? 450 : 800);
+        addMsg(script, "them", { crisis: true, level });
         Stage.setEmotion("gentle");
-        pushHistory("assistant", CARE_SCRIPT);
-        return;
+        pushHistory("assistant", script);
+        return;   // 高危/中危：不播 TTS、不做钩子
       }
 
       const parts = String(data.reply || "…").split("||").map(s => s.trim()).filter(Boolean);
@@ -846,6 +1019,22 @@ const App = (() => {
       $("degradeBadge").classList.add("hidden");
       try { sessionStorage.setItem("xiaoman_degrade_off", "1"); } catch (e) {}
     });
+    // 排队提示：再试一次 / 本次不再提醒
+    $("pendingRetry") && ($("pendingRetry").onclick = () => retryPending());
+    $("pendingClose") && ($("pendingClose").onclick = () => {
+      $("pendingBar").classList.add("hidden");
+      try { sessionStorage.setItem(PENDING_CLOSED_KEY, "1"); } catch (e) {}
+    });
+    renderPending();
+    // 断网/恢复：离线时明确告知"还能看记录"，恢复时把排队提示重新亮出来
+    window.addEventListener("offline", () => {
+      showDegrade("offline");
+      toast("网络断了，之前的记录和小满都还在");
+    });
+    window.addEventListener("online", () => {
+      renderPending(true);
+      if (window.__pendingCount && window.__pendingCount() > 0) toast("网络回来了，可以点“再试一次”");
+    });
     $("memoryBtn").onclick = () => { renderMem(); openPanel($("memoryDrawer"), $("memoryBtn")); };
     $("memoryClose").onclick = () => closePanel($("memoryDrawer"));
     $("memoryDrawer").querySelector(".drawer-mask").onclick = () => closePanel($("memoryDrawer"));
@@ -874,13 +1063,15 @@ const App = (() => {
       $("cfgTtsBase").value = cfg.ttsBase || "";
       $("cfgTts").value = cfg.tts || "server";
       $("cfgVoice").value = cfg.voice || "zh-CN-XiaoyiNeural";
+      $("cfgRate").value = cfg.ttsRate || "normal";
+      $("cfgFont").value = (() => { try { return localStorage.getItem(FS_KEY) || "normal"; } catch (e) { return "normal"; } })();
       $("cfgTheme").value = (() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })();
       $("cfgTestResult").textContent = "";
       openPanel($("settingsModal"), $("settingsBtn"));
     };
     $("settingsClose").onclick = () => closePanel($("settingsModal"));
     $("settingsModal").querySelector(".drawer-mask").onclick = () => closePanel($("settingsModal"));
-    [$("cfgMode"), $("cfgApi"), $("cfgModel"), $("cfgTtsBase"), $("cfgTts"), $("cfgVoice")].forEach(el => {
+    [$("cfgMode"), $("cfgApi"), $("cfgModel"), $("cfgTtsBase"), $("cfgTts"), $("cfgVoice"), $("cfgRate")].forEach(el => {
       el.addEventListener("change", () => {
         API.saveCfg({
           mode: $("cfgMode").value,
@@ -888,10 +1079,49 @@ const App = (() => {
           model: $("cfgModel").value.trim(),
           ttsBase: $("cfgTtsBase").value.trim(),
           tts: $("cfgTts").value,
-          voice: $("cfgVoice").value
+          voice: $("cfgVoice").value,
+          ttsRate: $("cfgRate").value
         });
         toast("已保存");
       });
+    });
+    $("cfgFont").addEventListener("change", () => {
+      applyFontScale($("cfgFont").value);
+      toast("字号已调整");
+    });
+    // ---------- 倾诉记录导出 / 导入（本地 JSON，不做云同步） ----------
+    $("backupExport").onclick = async () => {
+      const btn = $("backupExport"), out = $("backupResult");
+      btn.disabled = true; out.textContent = "正在整理…";
+      try {
+        const r = await Backup.exportNow(SID);
+        out.textContent = r.count
+          ? `已导出 ${r.count} 条记录：${r.path || r.name}`
+          : "这台手机上还没有可导出的记录";
+        toast(r.count ? "记录已存到本机" : "还没有记录可以导出");
+      } catch (e) {
+        out.textContent = "导出失败：" + (e.message || "未知原因");
+      } finally { btn.disabled = false; }
+    };
+    $("backupImport").onclick = () => { $("backupFile").click(); };
+    $("backupFile").addEventListener("change", async () => {
+      const file = $("backupFile").files && $("backupFile").files[0];
+      const out = $("backupResult");
+      out.textContent = "正在导入…";
+      try {
+        const text = await Backup.readFile(file);
+        const r = await Backup.importNow(text, SID);
+        if (!r.ok) { out.textContent = "导入失败：" + r.error; return; }
+        out.textContent = r.imported
+          ? `导入 ${r.imported} 条（跳过重复 ${r.skipped} 条，记忆 ${r.memories} 条）`
+          : `没有新记录（${r.skipped} 条已存在）`;
+        toast("导入完成，马上刷新");
+        setTimeout(() => location.reload(), 500);
+      } catch (e) {
+        out.textContent = "导入失败：" + (e.message || "文件读不出来");
+      } finally {
+        $("backupFile").value = "";
+      }
     });
     // 外观切换即时生效（深色/浅色/跟随系统），不依赖 WebView 重绘时机
     $("cfgTheme").addEventListener("change", () => {
@@ -957,30 +1187,29 @@ const App = (() => {
   }
 
   async function init() {
-    // 服务端 env 提供默认配置（mode/model/apiBase/ttsBase），不覆盖用户已保存值
-    try { await API.bootstrap(); } catch (e) { console.warn("[probe] BOOTSTRAP_FAIL", e.message); }
-
-    // 事件绑定独立兜底：即便舞台/心跳初始化失败，输入与发送也必须可用
+    // 1) 先把输入/发送绑上：这是"首屏可交互"，绝不能被网络、舞台或存储挡住
     try {
-      bind(); console.log("[probe] bind ok");
+      bind(); console.log("[probe] bind ok ms=" + Math.round(performance.now()));
     } catch (e) { console.error("[probe] BIND_FAIL", e.message); return; }
 
-    // 从 IndexedDB 恢复历史（先于开场白，保证时间顺序）
+    // 2) 服务端默认配置改为非阻塞：慢网/离线时不再拖住首屏
+    API.bootstrap().catch(e => console.warn("[probe] BOOTSTRAP_FAIL", e.message));
+
+    // 3) 从 IndexedDB 恢复历史（先于开场白，保证时间顺序；本机路径通常 <10ms）
     try { await restoreHistory(); } catch (e) { console.warn("[probe] HISTORY_FAIL", e.message); }
 
-    // 舞台初始化独立兜底：PIXI/模型失败只降级隐藏舞台，不影响对话
-    // 悬浮窗迷你模式：跳过 Live2D（双 WebView 实例省内存），布局由 CSS float-mode 接管
+    // 4) 舞台并行加载（Live2D 运行时约 900KB，按需拉取，不阻塞输入与开场）
+    //    悬浮窗迷你模式：跳过 Live2D（双 WebView 实例省内存），布局由 CSS float-mode 接管
     const isFloat = window.FloatMode && FloatMode.on;
     if (isFloat) {
       console.log("[probe] float-mode: stage & widget skipped");
       try { $("stage").style.display = "none"; } catch (e) {}
     } else {
-      try {
-        Stage.mount($("stage")); console.log("[probe] mount ok");
-      } catch (e) { console.warn("[probe] STAGE_FAIL", e.message); }
+      Stage.mount($("stage")).then(() => console.log("[probe] mount ok ms=" + Math.round(performance.now())))
+        .catch(e => console.warn("[probe] STAGE_FAIL", e.message));
     }
 
-    try { greet(); console.log("[probe] greet ok"); } catch (e) { console.warn("[probe] GREET_FAIL", e.message); }
+    try { greet(); console.log("[probe] greet ok ms=" + Math.round(performance.now())); } catch (e) { console.warn("[probe] GREET_FAIL", e.message); }
     armIdle();
 
     // 心跳系统：提醒投递 + 朋友式主动问候（多重频控，不打扰）

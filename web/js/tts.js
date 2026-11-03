@@ -2,7 +2,8 @@
  * tts.js · 语音回复适配层
  * ------------------------------------------------------------
  * 1. server  → 服务端 edge-tts 生成 mp3（自然度高，默认）
- *      GET {ttsBase}/tts?text=…&voice=…  → audio/mpeg
+ *      POST {ttsBase}/tts  JSON {text, voice, rate}  → audio/mpeg
+ *      原文只放 body，不进查询串（避免整句对话被服务端访问日志落盘，审计 P1-5）
  * 2. browser → Web Speech API（离线兜底，音质一般）
  * 播放时通过 onFrame 回调输出音量包络，供 Live2D 口型驱动。
  * 失败语义：server 路不通 → 自动降级 browser，绝不静默无声。
@@ -13,6 +14,10 @@ const TTS = (() => {
   let fakeTimer = null;      // 假包络 interval（Android/browser 路），全局唯一
   let fakeStopTimer = null;  // Android 路时长估算的兜底停止定时器
   let androidSettle = null;  // 当前 Android TTS 的完成回调（供原生 __ttsEnded 触发）
+  let speakGen = 0;          // 播放代际：异步取音频返回时，过期的请求直接丢弃
+  // 语速档位（与设置页同值）：服务端 / 浏览器 / 安卓桥三路共用同一映射
+  const RATE = { slow: 0.86, normal: 1.02, fast: 1.18 };
+  const AUDIO_START_TIMEOUT = 7000;   // 弱网：音频 7s 还没真正开播就降级，先保住文字
 
   // 原生系统 TTS 完成回调穿透：MainActivity UtteranceProgressListener.onDone/onError
   // → evaluateJavascript("window.__ttsEnded && window.__ttsEnded()")。
@@ -33,6 +38,7 @@ const TTS = (() => {
 
   /** 停掉当前所有正在播的语音（含假包络定时器） */
   function stop() {
+    speakGen++;              // 让尚未返回的服务端音频请求作废
     if (currentAudio) { try { currentAudio.pause(); } catch (e) {} currentAudio = null; }
     androidSettle = null;   // 丢弃上一段 Android TTS 的完成回调，防止串台
     clearFake();
@@ -54,9 +60,11 @@ const TTS = (() => {
     if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
     currentAudio = audio;
     let ctx = null, analyser = null, srcNode = null, raf = 0, settled = false;
+    let startTimer = 0;
     const settle = (failed) => {
       if (settled) return;
       settled = true;
+      clearTimeout(startTimer);
       cancelAnimationFrame(raf);
       if (ctx) { try { ctx.close(); } catch (e) {} }
       if (currentAudio === audio) currentAudio = null;
@@ -66,7 +74,14 @@ const TTS = (() => {
     audio.onended = () => settle(false);
     audio.onerror = () => settle(true);   // 真败因（404/解码失败/服务端无 CORS）走降级
 
+    // 弱网兜底：请求发出但迟迟没有真正开播 → 判定失败并降级（文字已经在屏幕上了）
+    startTimer = setTimeout(() => {
+      if (settled) return;
+      if (!audio.currentTime && audio.readyState < 3) settle(true);
+    }, AUDIO_START_TIMEOUT);
+
     audio.play().then(() => {
+      audio.onplaying = () => clearTimeout(startTimer);
       try {
         ctx = new (window.AudioContext || window.webkitAudioContext)();
         // 非用户手势下 AudioContext 可能 suspended → 全部输出为 0、嘴不动
@@ -105,24 +120,30 @@ const TTS = (() => {
     if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
     currentAudio = audio;
     let settled = false;
+    let startTimer = 0;
     const settle = (failed) => {
       if (settled) return;
       settled = true;
+      clearTimeout(startTimer);
       if (currentAudio === audio) currentAudio = null;
       onFrame && onFrame(0);
       if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
     };
     audio.onended = () => settle(false);
     audio.onerror = () => settle(true);
+    audio.onplaying = () => clearTimeout(startTimer);
+    startTimer = setTimeout(() => {
+      if (!audio.currentTime && audio.readyState < 3) settle(true);
+    }, AUDIO_START_TIMEOUT);
     onFrame && onFrame(-1);   // 没有真实包络 → 走舞台的随机口型兜底
     audio.play().catch(() => settle(true));
   }
 
   /** 浏览器 SpeechSynthesis（离线兜底） */
-  function speakBrowser(text, onFrame, onEnd) {
+  function speakBrowser(text, onFrame, onEnd, rate) {
     try {
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = "zh-CN"; u.rate = 1.02; u.pitch = 1.15;
+      u.lang = "zh-CN"; u.rate = RATE[rate] || RATE.normal; u.pitch = 1.15;
       const done = () => { clearFake(); onFrame && onFrame(0); onEnd && onEnd(); };
       u.onend = done;
       u.onerror = done;
@@ -133,9 +154,14 @@ const TTS = (() => {
   }
 
   /** Android JSBridge：系统 TTS（WebView 内 speechSynthesis 不可用时的真机方案） */
-  function speakAndroid(text, onFrame, onEnd) {
+  function speakAndroid(text, onFrame, onEnd, rate) {
     try {
-      if (!(window.AndroidTTS.speak(text))) return false;
+      const r = RATE[rate] || RATE.normal;
+      // speakRate 为 0.5 起的新桥方法；老包没有时退回固定语速
+      const ok = window.AndroidTTS.speakRate
+        ? window.AndroidTTS.speakRate(text, r)
+        : window.AndroidTTS.speak(text);
+      if (!ok) return false;
       clearFake();
       fakeTimer = setInterval(() => onFrame && onFrame(0.35 + Math.random() * 0.35), 90);
       let settled = false;
@@ -154,33 +180,76 @@ const TTS = (() => {
     } catch (e) { console.warn("AndroidTTS 桥失败:", e); return false; }
   }
 
+  /**
+   * 服务端语音：POST JSON body → blob URL（audio/mpeg）
+   * 原文不进 URL：GET 查询串会被服务端访问日志整行记录（审计 P1-5）。
+   * 沿用 7s 弱网兜底：请求本身也受 AUDIO_START_TIMEOUT 约束，超时即降级。
+   */
+  async function fetchServerAudio(base, text, voice, rate) {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const abortTimer = ctrl ? setTimeout(() => ctrl.abort(), AUDIO_START_TIMEOUT) : 0;
+    try {
+      const res = await fetch(`${base}/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voice, rate }),
+        signal: ctrl ? ctrl.signal : undefined
+      });
+      if (!res.ok) throw new Error(`tts http ${res.status}`);
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    } finally {
+      if (abortTimer) clearTimeout(abortTimer);
+    }
+  }
+
   async function speak(text, onFrame, onEnd) {
     const cfg = API.loadCfg();
     const mode = cfg.tts || "server";
     stop();                                  // 先停上一段，防多路叠加
+    const gen = speakGen;                    // stop() 之后取代际，异步返回时校验
     if (mode === "off" || !text) { onEnd && onEnd(); return; }
 
     // Android 桥优先于 server（真机无本地 8903 时）
     if (window.AndroidTTS && window.AndroidTTS.available && window.AndroidTTS.available()) {
-      if (speakAndroid(text, onFrame, onEnd)) return;
+      if (speakAndroid(text, onFrame, onEnd, cfg.ttsRate)) return;
     }
 
     if (mode === "server") {
       const base = (cfg.ttsBase || "http://127.0.0.1:8903").replace(/\/$/, "");
-      const url = `${base}/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(cfg.voice || "zh-CN-XiaoyiNeural")}`;
-      // server 路失败（服务挂/超时/解码失败/跨域被拦）→ 先尝试无口型的纯播放，
-      // 再降级 browser，绝不静默无声
-      playWithLipSync(url, onFrame, onEnd, () => {
+      const voice = cfg.voice || "zh-CN-XiaoyiNeural";
+      let blobUrl = null;
+      try {
+        blobUrl = await fetchServerAudio(base, text, voice, cfg.ttsRate || "normal");
+      } catch (e) {
+        if (gen !== speakGen) return;        // 已发新消息/已 stop，不再降级插播旧语音
+        console.warn("server tts 请求失败，降级 browser:", e);
+        speakBrowser(text, onFrame, onEnd, cfg.ttsRate);
+        return;
+      }
+      if (gen !== speakGen) {                // 请求期间用户又发了新消息 → 丢弃旧音频
+        try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+        return;
+      }
+      // server 路失败（解码失败/跨域被拦）→ 先尝试无口型的纯播放，再降级 browser
+      playWithLipSync(blobUrl, onFrame, () => {
+        try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+        onEnd && onEnd();
+      }, () => {
         console.warn("server tts 口型链路失败，尝试纯播放");
-        playPlain(url, onFrame, onEnd, () => {
+        playPlain(blobUrl, onFrame, () => {
+          try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+          onEnd && onEnd();
+        }, () => {
           console.warn("server tts 纯播放失败，降级 browser");
-          speakBrowser(text, onFrame, onEnd);
+          try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+          speakBrowser(text, onFrame, onEnd, cfg.ttsRate);
         });
       });
       return;
     }
 
-    speakBrowser(text, onFrame, onEnd);
+    speakBrowser(text, onFrame, onEnd, cfg.ttsRate);
   }
 
   return { speak, stop };

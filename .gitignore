@@ -11,6 +11,11 @@ upload/
 .env
 *_token*
 .git_askpass*
+
+# Android 签名材料（严禁入库，见 docs/RELEASE_SIGNING.md）
+android/keystore.properties
+*.keystore
+*.jks
 node_modules/
 
 # 备份归档与打包产物（体积大，不入库）

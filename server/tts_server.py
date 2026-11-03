@@ -3,11 +3,14 @@
 """
 tts_server.py · 语音回复服务（edge-tts 封装）
 ===========================================
-GET /tts?text=你好&voice=zh-CN-XiaoyiNeural → audio/mpeg
+POST /tts  {"text": "你好", "voice": "zh-CN-XiaoyiNeural"} → audio/mpeg
+GET  /tts?text=你好&voice=… → audio/mpeg（保留兼容旧客户端，新客户端请用 POST）
+安全约定：对话原文只走 POST body；日志只记「方法 + path」，查询串/body 均不落盘。
 语音质量验证：TTS 生成后用 ASR 回环核对文本（见 scripts/verify_tts.py）
 """
 import json
 import os
+import re
 import urllib.parse
 import hashlib
 import asyncio
@@ -52,10 +55,80 @@ ALLOWED_VOICES = frozenset({
     "zh-CN-YunjianNeural",     # 男性，沉稳
     "zh-CN-YunxiNeural",       # 男性，阳光
     "zh-CN-XiaoxiaoNeural",    # 女性，温柔
+    "zh-CN-XiaoyuanNeural",    # 女性，甜妹（设置页可选音色）
     "zh-CN-YunxiaNeural",      # 女性，知性
     "zh-CN-liaoning-XiaobeiNeural",  # 东北方言
     "zh-CN-shaanxi-XiaoniNeural",    # 陕西方言
 })
+
+# 语速档位 → edge-tts rate 参数（与前端设置页 slow/normal/fast 对齐）
+TTS_RATES = {
+    "slow": "-12%",
+    "normal": "+4%",
+    "fast": "+18%",
+}
+
+DEFAULT_VOICE = "zh-CN-XiaoyiNeural"
+MAX_TEXT_LEN = 300        # 单条语音文本上限（超出截断，防止超长请求拖垮合成）
+MAX_BODY_BYTES = 8 * 1024  # POST JSON body 上限
+
+_QUERY_RE = re.compile(r"\?\S*")
+_HTTP_VER_RE = re.compile(r"\s+HTTP/\d+(?:\.\d+)?")
+
+
+# ---------------- 纯函数：日志脱敏 / POST 参数解析 ----------------
+def redact_request_line(line):
+    """日志脱敏：抹掉查询串与 HTTP 版本，只留「方法 + path」及状态码。
+
+    审计 P1-5：旧版 GET /tts?text=… 会把对话原文整行写进日志。任何日志行
+    进入 logger 前都要过这里；body 从不参与日志拼接。
+
+    >>> redact_request_line('"GET /tts?text=你好 HTTP/1.1" 200 -')
+    '"GET /tts" 200 -'
+    """
+    if not line:
+        return "-"
+    s = str(line).replace("\r", " ").replace("\n", " ")
+    s = _QUERY_RE.sub("", s)      # ? 及其后到空白前的查询串整体删除
+    s = _HTTP_VER_RE.sub("", s)   # 去掉 HTTP/1.1 版本号
+    return s.strip()
+
+
+def parse_tts_payload(raw_body):
+    """解析 POST /tts 的 JSON body，返回 {"text", "voice", "rate"}。
+
+    - text 缺失/空白/非字符串 → ValueError("missing text")
+    - voice 不在白名单 → ValueError("invalid voice: …")
+    - rate 非法 → 回退 normal（不报错）
+    - text 超长 → 截断到 MAX_TEXT_LEN
+    """
+    if isinstance(raw_body, (bytes, bytearray)):
+        try:
+            raw_body = raw_body.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError("invalid json body")
+    try:
+        data = json.loads(raw_body or "{}")
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError("invalid json body")
+    if not isinstance(data, dict):
+        raise ValueError("invalid json body")
+
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("missing text")
+    text = text[:MAX_TEXT_LEN]
+
+    voice = data.get("voice") or DEFAULT_VOICE
+    if not isinstance(voice, str) or voice not in ALLOWED_VOICES:
+        raise ValueError(f"invalid voice: {voice}")
+
+    rate_key = data.get("rate") or "normal"
+    if not isinstance(rate_key, str) or rate_key not in TTS_RATES:
+        rate_key = "normal"
+
+    return {"text": text, "voice": voice, "rate": rate_key}
+
 
 # ---------------- 磁盘缓存 + single-flight ----------------
 # 缓存目录可配置（容器内挂 volume 到 /data/tts；本地 dev 默认落在项目 .cache/tts）
@@ -129,7 +202,9 @@ async def _get_or_generate_audio(text: str, voice: str, rate: str = "+4%", pitch
 
         logger.info("TTS generating: voice=%s text_len=%d", voice, len(text))
         try:
-            audio = await asyncio.wait_for(_synthesize(text, voice, rate, pitch), timeout=10.0)
+            # 首次连接 edge-tts 端点可能因 TLS/DNS 冷启动 >10s；生成结果会落缓存，
+            # 客户端另有 7s 超时兜底（先出文字），服务端给 20s 让冷请求有机会成功
+            audio = await asyncio.wait_for(_synthesize(text, voice, rate, pitch), timeout=20.0)
         except asyncio.TimeoutError:
             logger.error("TTS timeout: voice=%s", voice)
             raise RuntimeError("TTS synthesis timeout")
@@ -147,7 +222,14 @@ async def _get_or_generate_audio(text: str, voice: str, rate: str = "+4%", pitch
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        logger.info("%s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
+        # 审计 P1-5：只记录「方法 + path」，查询串（旧 GET 的 ?text=…）整体抹掉；
+        # body 从不参与日志拼接。
+        try:
+            msg = format % args
+        except Exception:
+            msg = str(format)
+        logger.info("%s - - [%s] %s", self.address_string(),
+                    self.log_date_time_string(), redact_request_line(msg))
 
     def _cors(self):
         """CORS 白名单；未命中不发 ACAO"""
@@ -170,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self._cors()
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -181,11 +263,36 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": message}, code)
 
     def do_OPTIONS(self):
+        # POST application/json 会触发预检，必须放行 Content-Type 与 POST
         self.send_response(204)
         self._cors()
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
+
+    def _serve_tts(self, text, voice, rate_key, start):
+        """GET/POST 共用的合成 + 音频响应"""
+        if not HAS_EDGE:
+            self._error(503, "edge-tts not installed")
+            return
+
+        try:
+            audio = asyncio.run(_get_or_generate_audio(text, voice, TTS_RATES[rate_key]))
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self._cors_audio()
+            self.send_header("Content-Length", str(len(audio)))
+            self.end_headers()
+            self.wfile.write(audio)
+            logger.debug("tts 200 %dms audio_len=%d",
+                         int((time.time() - start) * 1000), len(audio))
+        except RuntimeError:
+            # 已在 _get_or_generate_audio 中记录详细日志，这里只返回通用错误
+            self._error(500, "tts synthesis failed")
+        except Exception:
+            logger.exception("Unexpected TTS error")
+            self._error(500, "internal server error")
 
     def do_GET(self):
         start = time.time()
@@ -201,37 +308,54 @@ class Handler(BaseHTTPRequestHandler):
 
         if path != "/tts":
             self._error(404, "not found")
-            logger.debug("GET %s 404 %dms", self.path, int((time.time() - start) * 1000))
+            logger.debug("GET %s 404 %dms", redact_request_line(self.path),
+                         int((time.time() - start) * 1000))
             return
 
-        if not HAS_EDGE:
-            self._error(503, "edge-tts not installed")
-            return
-
+        # 兼容旧客户端：GET /tts?text=… 仍可用；新客户端一律走 POST（原文不进日志）
         qs = urllib.parse.parse_qs(parsed.query)
-        text = (qs.get("text", ["你好呀"])[0])[:300]
-        voice = qs.get("voice", ["zh-CN-XiaoyiNeural"])[0]
+        text = (qs.get("text", ["你好呀"])[0])[:MAX_TEXT_LEN]
+        voice = qs.get("voice", [DEFAULT_VOICE])[0]
+        rate_key = qs.get("rate", ["normal"])[0]
+        if rate_key not in TTS_RATES:
+            rate_key = "normal"
 
         # Voice 白名单校验：非法直接 400 JSON
         if voice not in ALLOWED_VOICES:
             self._error(400, f"invalid voice: {voice}")
             return
 
+        self._serve_tts(text, voice, rate_key, start)
+
+    def do_POST(self):
+        start = time.time()
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
+
+        if path != "/tts":
+            self._error(404, "not found")
+            return
+
         try:
-            audio = asyncio.run(_get_or_generate_audio(text, voice))
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/mpeg")
-            self._cors_audio()
-            self.send_header("Content-Length", str(len(audio)))
-            self.end_headers()
-            self.wfile.write(audio)
-            logger.debug("GET /tts 200 %dms audio_len=%d", int((time.time() - start) * 1000), len(audio))
-        except RuntimeError as e:
-            # 已在 _get_or_generate_audio 中记录详细日志，这里只返回通用错误
-            self._error(500, "tts synthesis failed")
-        except Exception as e:
-            logger.exception("Unexpected TTS error")
-            self._error(500, "internal server error")
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._error(400, "invalid content length")
+            return
+        if length < 1:
+            self._error(400, "missing text")
+            return
+        if length > MAX_BODY_BYTES:
+            self._error(413, "request body too large")
+            return
+
+        try:
+            payload = parse_tts_payload(self.rfile.read(length))
+        except ValueError as e:
+            self._error(400, str(e))
+            return
+
+        # body（对话原文）只用于合成，绝不写日志
+        self._serve_tts(payload["text"], payload["voice"], payload["rate"], start)
 
 
 if __name__ == "__main__":

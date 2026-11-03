@@ -2,6 +2,7 @@ package com.xiaoman.treehole;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
@@ -18,8 +19,12 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.ValueCallback;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Locale;
 
@@ -35,12 +40,16 @@ public class MainActivity extends Activity {
     /** WebViewAssetLoader 的零依赖等价实现：把 https://appassets… 映射到 assets/。
      *  为什么不用 file://：file:// 页面的 Origin 是 "null"，模型 JSON / 贴图 XHR 会被
      *  CORS 拦（Live2D 直接不渲染），且 http 子资源会被 mixed-content 拦。 */
-    private static final String ASSET_HOST = "appassets.androidplatform.net";
-    private static final String BASE_URL = "https://" + ASSET_HOST + "/www/index.html";
+    static final String ASSET_HOST = "appassets.androidplatform.net";
+    /** 主界面与悬浮窗共用的同源入口（同一 Origin 才能共享 localStorage/IndexedDB） */
+    static final String BASE_URL = "https://" + ASSET_HOST + "/www/index.html";
 
     private WebView webView;
     private TextToSpeech tts;
     private volatile boolean ttsReady = false;
+    /** <input type="file"> 的系统选择器回调（备份导入） */
+    private static final int REQ_FILE_CHOOSER = 41;
+    private ValueCallback<Uri[]> filePathCallback;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -130,7 +139,37 @@ public class MainActivity extends Activity {
                 }
                 return false;
             }
+
+            /** 让 <input type="file"> 真的能打开系统文件选择器（备份导入用，无此实现点了没反应） */
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                             FileChooserParams params) {
+                if (filePathCallback != null) filePathCallback.onReceiveValue(null);
+                filePathCallback = callback;
+                try {
+                    Intent i = params.createIntent();
+                    startActivityForResult(Intent.createChooser(i, "选择备份文件"), REQ_FILE_CHOOSER);
+                    return true;
+                } catch (Exception e) {
+                    filePathCallback = null;
+                    Log.w("MainActivity", "file chooser unavailable: " + e.getMessage());
+                    return false;
+                }
+            }
         };
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQ_FILE_CHOOSER) {
+            if (filePathCallback != null) {
+                filePathCallback.onReceiveValue(
+                        WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+                filePathCallback = null;
+            }
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     /**
@@ -226,21 +265,12 @@ public class MainActivity extends Activity {
     class AssetClient extends WebViewClient {
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
-            Uri uri = req.getUrl();
-            if (uri == null || !ASSET_HOST.equals(uri.getHost())) return null;
-            String path = uri.getPath();
-            if (path == null || !path.startsWith("/www/")) return null;
-            String assetPath = path.substring(1);   // 去掉前导 / → "www/index.html"
-            // 目录穿越保护
-            if (assetPath.contains("..")) return null;
-            try {
-                InputStream in = getAssets().open(assetPath);
-                return new WebResourceResponse(mimeOf(assetPath), charsetOf(assetPath), in);
-            } catch (Exception e) {
-                Log.w("MainActivity", "asset miss: " + assetPath);
-                return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
-                        new HashMap<String, String>(), null);
-            }
+            return assetResponse(MainActivity.this, req.getUrl());
+        }
+
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+            return guardNavigation(MainActivity.this, req.getUrl());
         }
 
         @Override
@@ -249,6 +279,57 @@ public class MainActivity extends Activity {
             recreateWebView();
             return true;
         }
+    }
+
+    /** WebViewAssetLoader 等价实现的共用入口：主界面与悬浮窗都走它，
+     *  保证两边加载同一份 assets/www 且同 Origin（localStorage/IndexedDB 不分裂）。 */
+    static WebResourceResponse assetResponse(Context ctx, Uri uri) {
+        if (ctx == null || uri == null || !ASSET_HOST.equals(uri.getHost())) return null;
+        String path = uri.getPath();
+        if (path == null || !path.startsWith("/www/")) return null;
+        String assetPath = path.substring(1);   // 去掉前导 / → "www/index.html"
+        // 目录穿越保护
+        if (assetPath.contains("..")) return null;
+        try {
+            InputStream in = ctx.getAssets().open(assetPath);
+            return new WebResourceResponse(mimeOf(assetPath), charsetOf(assetPath), in);
+        } catch (Exception e) {
+            Log.w("MainActivity", "asset miss: " + assetPath);
+            return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
+                    new HashMap<String, String>(), null);
+        }
+    }
+
+    /**
+     * 导航守卫（主界面与悬浮窗共用）：
+     *  - https://appassets.androidplatform.net 留在当前 WebView；
+     *  - 本机 127.0.0.1/localhost（显式端口）留在当前 WebView；
+     *  - 其余 http(s) 一律交给系统浏览器；
+     *  - file:/javascript:/intent:/content: 等一律丢弃，防止任意页面/脚本在本 WebView 打开。
+     *  @return true 表示已处理（WebView 不应再加载该 URL）
+     */
+    static boolean guardNavigation(Context ctx, Uri uri) {
+        if (uri == null) return true;
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        String host = uri.getHost();
+        if ("https".equals(scheme) && ASSET_HOST.equals(host)) return false;
+        if ("about".equals(scheme)) return false;
+        if (("http".equals(scheme) || "https".equals(scheme))
+                && ("127.0.0.1".equals(host) || "localhost".equals(host)) && uri.getPort() > 0) {
+            return false;
+        }
+        if ("http".equals(scheme) || "https".equals(scheme)) {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, uri);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(i);
+            } catch (Exception e) {
+                Log.w("MainActivity", "external nav unavailable: " + e.getMessage());
+            }
+            return true;
+        }
+        Log.w("MainActivity", "blocked nav scheme: " + scheme);
+        return true;
     }
 
     private static String mimeOf(String p) {
@@ -271,15 +352,41 @@ public class MainActivity extends Activity {
                 || s.endsWith(".json")) ? "utf-8" : null;
     }
 
-    /** JS 桥：系统 TTS */
+    /** JS 桥：系统 TTS + 本地备份保存 */
     class Bridge {
         @JavascriptInterface
         public boolean speak(String text) {
+            return speakRate(text, 1.02f);
+        }
+
+        /** 带语速的朗读（慢/正常/快三档由 web 端映射成 0.86/1.02/1.18） */
+        @JavascriptInterface
+        public boolean speakRate(String text, float rate) {
             if (!ttsReady || tts == null) return false;
+            float r = rate < 0.5f ? 0.5f : (rate > 2.0f ? 2.0f : rate);
             tts.setPitch(1.15f);
-            tts.setSpeechRate(1.02f);
+            tts.setSpeechRate(r);
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, new Bundle(), "xiaoman_" + System.currentTimeMillis());
             return true;
+        }
+
+        /** 备份写进 App 专属外部目录（无需存储权限）；成功返回绝对路径，失败返回空串 */
+        @JavascriptInterface
+        public String saveBackup(String name, String content) {
+            try {
+                File dir = getExternalFilesDir("backup");
+                if (dir == null) return "";
+                if (!dir.exists() && !dir.mkdirs()) return "";
+                String safe = name == null ? "xiaoman-backup.json" : name.replaceAll("[^A-Za-z0-9._-]", "_");
+                File f = new File(dir, safe);
+                try (FileOutputStream out = new FileOutputStream(f)) {
+                    out.write(content.getBytes(StandardCharsets.UTF_8));
+                }
+                return f.getAbsolutePath();
+            } catch (Exception e) {
+                Log.w("MainActivity", "saveBackup failed: " + e.getMessage());
+                return "";
+            }
         }
 
         @JavascriptInterface

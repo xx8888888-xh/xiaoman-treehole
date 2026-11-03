@@ -17,6 +17,8 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -269,7 +271,28 @@ public class FloatWindowService extends Service {
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
         ws.setMediaPlaybackRequiresUserGesture(false);
-        panelWeb.setWebViewClient(new WebViewClient());
+        // 与主壳完全一致的加载策略：https 同源 + 本地 http 子资源（TTS/代理）放行
+        ws.setAllowFileAccess(true);
+        ws.setAllowFileAccessFromFileURLs(false);
+        ws.setAllowUniversalAccessFromFileURLs(false);
+        ws.setAllowContentAccess(false);
+        ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+        ws.setGeolocationEnabled(false);
+        if (Build.VERSION.SDK_INT >= 21) {
+            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
+        // 与 MainActivity 共用同一套 asset 映射与导航守卫：同 Origin 才能共享 localStorage/IndexedDB
+        panelWeb.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
+                return MainActivity.assetResponse(getApplicationContext(), req.getUrl());
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                return MainActivity.guardNavigation(getApplicationContext(), req.getUrl());
+            }
+        });
         // console → logcat 桥（与主壳一致）：[probe] 行转发 tag=XiaoManWeb，CI 可验证迷你窗内聊天链路
         panelWeb.setWebChromeClient(new android.webkit.WebChromeClient() {
             @Override
@@ -281,10 +304,11 @@ public class FloatWindowService extends Service {
                 return false;
             }
         });
-        // 加载迷你模式入口（与主壳同源 asset 路径；?float=1 触发 web 端小屏布局+跳过 Live2D）
-        // 迷你窗同样挂原生 HTTP 桥：免 key 通道在 file:// 下也能用（Java 侧代发，无 CORS）
+        // 加载迷你模式入口：与主界面同一份 assets 且同一 Origin（https://appassets…）。
+        // 旧实现用 file:///android_asset/www/index.html —— file:// 的 Origin 为 "null"，
+        // localStorage/IndexedDB 与主界面分裂，悬浮窗里看不到主界面的记忆/历史。
         panelWeb.addJavascriptInterface(new NetBridge(panelWeb), "AndroidNet");
-        panelWeb.loadUrl("file:///android_asset/www/index.html?float=1");
+        panelWeb.loadUrl(MainActivity.BASE_URL + "?float=1");
         // 注：迷你窗不挂 AndroidTTS 桥（主 WebView 独占 TTS 引擎）；web 端检测不到桥时
         // 自动降级 speechSynthesis，语音同样可用，主界面语音不受双实例影响
         panelWeb.setBackgroundColor(Color.parseColor("#FFF9F2"));

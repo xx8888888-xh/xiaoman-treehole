@@ -47,6 +47,12 @@
       </div>
     </div>
     <div class="hook-bar hidden" id="hookBar"></div>
+    <!-- 429/断网排队提示：安静、可关闭；只有存在未回复消息时出现 -->
+    <div class="pending-bar hidden" id="pendingBar" role="status" aria-live="polite">
+      <span id="pendingText">还有 1 条没回</span>
+      <button class="pending-btn" id="pendingRetry">再试一次</button>
+      <button class="pending-close" id="pendingClose" aria-label="关闭排队提示">✕</button>
+    </div>
     <div class="inputbar">
       <input id="textInput" type="text" placeholder="跟小满说点什么…" aria-label="给小满发消息" enterkeyhint="send" autocomplete="off" maxlength="500">
       <button class="send-btn" id="sendBtn" aria-label="发送">
@@ -60,7 +66,7 @@
     <div class="drawer-mask overlay"></div>
     <div class="drawer-panel">
       <div class="drawer-head"><h2 id="memoryDrawerTitle">小满记得的事</h2><button class="icon-btn" id="memoryClose" aria-label="关闭">✕</button></div>
-      <p class="drawer-sub">聊天中提到的称呼、人物、事件会自动记在这里，只保存在你手机上</p>
+      <p class="drawer-sub">称呼、人物、事件会记在这台手机上。开启在线对话时，聊天内容会经服务器转发给第三方模型；选离线模式则只在本地。</p>
       <div id="reminderList"></div>
       <div class="chips" id="memoryChips"></div>
       <button class="solid-btn" id="cardBtn">生成我们的友谊卡片</button>
@@ -86,8 +92,8 @@
       <div class="drawer-head"><h2 id="settingsTitle">设置</h2><button class="icon-btn" id="settingsClose" aria-label="关闭">✕</button></div>
       <label class="field"><span>对话模式</span>
         <select id="cfgMode">
-          <option value="mock">本地 Mock（无需 Key）</option>
-          <option value="openai">OpenAI 兼容（Kilo 免 Key / OpenRouter 带 Key）</option>
+          <option value="openai">在线 AI（原生桥 / 服务端代理，推荐）</option>
+          <option value="mock">本地 Mock（无需 Key，仅作兜底）</option>
           <option value="offline">纯离线规则引擎</option>
         </select>
       </label>
@@ -110,6 +116,13 @@
           <option value="dark">深色</option>
         </select>
       </label>
+      <label class="field"><span>字号</span>
+        <select id="cfgFont">
+          <option value="normal">标准</option>
+          <option value="large">大（+15%）</option>
+          <option value="xlarge">特大（+30%）</option>
+        </select>
+      </label>
       <button class="ghost-btn" id="cfgTestBtn">测试连接</button>
       <p class="mini" id="cfgTestResult" role="status" aria-live="polite"></p>
       <label class="field"><span>语音回复</span>
@@ -126,10 +139,28 @@
           <option value="zh-CN-XiaoyuanNeural">小圆 · 甜妹</option>
         </select>
       </label>
+      <label class="field"><span>语速</span>
+        <select id="cfgRate">
+          <option value="slow">慢一点</option>
+          <option value="normal">正常</option>
+          <option value="fast">快一点</option>
+        </select>
+      </label>
+      <div class="field backup-field">
+        <span>倾诉记录</span>
+        <div class="backup-actions">
+          <button class="ghost-btn" id="backupExport">导出为 JSON 文件</button>
+          <button class="ghost-btn" id="backupImport">从 JSON 文件导入</button>
+        </div>
+        <input id="backupFile" type="file" accept="application/json,.json" hidden />
+        <p class="mini" id="backupResult" role="status" aria-live="polite"></p>
+        <p class="mini">只导出这台手机上的聊天记录与记忆，不上传云端。</p>
+      </div>
       <div class="about">
-        <p>小满树洞 v0.4 · 开源软件（MIT）</p>
+        <p>小满树洞 v0.5 · 开源软件（MIT）</p>
         <p class="mini">渲染: PixiJS + pixi-live2d-display (MIT) · 模型: Hiyori（Live2D 免费素材，经结构化改造）· 语音: edge-tts</p>
-        <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）</p>
+        <p class="mini">隐私：聊天默认存本机；在线模式下内容会经服务端转发给第三方模型服务商。可随时导出或清空本机记录。</p>
+        <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）；紧急情况打 120 / 110。</p>
       </div>
       <label class="field float-field" id="floatField" hidden><span>悬浮窗（小满浮在其他应用上）</span>
         <div class="float-actions">
@@ -152,11 +183,11 @@
   <div id="widgetBubble" role="status" aria-live="polite"></div>
 </div>
 
-<script src="js/vendor/pixi.min.js" onerror="console.error('[load-fail] js/vendor/pixi.min.js')"></script>
-<script src="js/vendor/live2dcubismcore.min.js" onerror="console.error('[load-fail] js/vendor/live2dcubismcore.min.js')"></script>
-<script src="js/vendor/pixi-live2d-cubism4.min.js" onerror="console.error('[load-fail] js/vendor/pixi-live2d-cubism4.min.js')"></script>
+<!-- Live2D 渲染库（约 900KB）改为 stage.js 里按需加载：
+     先把输入/历史/开场交给用户（TTI），舞台随后补上，不阻塞首屏 -->
 <script src="js/config.js"></script>
 <script src="js/store.js"></script>
+<script src="js/risk.js"></script>
 <script src="js/api.js"></script>
 <script src="js/float_mode.js"></script>
 <script src="js/mock_engine.js"></script>
@@ -168,6 +199,7 @@
 <script src="js/widget.js"></script>
 <script src="js/tts.js"></script>
 <script src="js/stage.js"></script>
+<script src="js/backup.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

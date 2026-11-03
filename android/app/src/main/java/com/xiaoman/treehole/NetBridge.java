@@ -23,14 +23,54 @@ import java.nio.charset.StandardCharsets;
  *          window.__nativeChatDone(id, ok, status, base64Body)
  */
 public class NetBridge {
+    /** 允许代发的目标：https 的已知模型网关 + 本机 127.0.0.1:8902（mock/代理）。
+     *  其余 URL 一律拒绝 —— 否则 WebView 页面一旦被注入，就能把原生桥当任意 URL 跳板
+     *  （内网探测 / 数据外带）。 */
+    private static final String[] ALLOWED_HTTPS_HOSTS = {
+            "api.kilo.ai", "openrouter.ai", "api.openrouter.ai"
+    };
+    private static final int LOCAL_MOCK_PORT = 8902;
+
     private final WebView webView;
 
     public NetBridge(WebView webView) {
         this.webView = webView;
     }
 
+    /** 目标白名单校验：禁止 userinfo、非默认 https 端口、非 http(s) scheme。 */
+    static boolean isAllowedTarget(String url) {
+        if (url == null) return false;
+        try {
+            URL u = new URL(url);
+            if (u.getHost() == null || u.getUserInfo() != null) return false;
+            String scheme = u.getProtocol();
+            if ("https".equalsIgnoreCase(scheme)) {
+                if (u.getPort() != -1 && u.getPort() != 443) return false;
+                for (String h : ALLOWED_HTTPS_HOSTS) {
+                    if (h.equalsIgnoreCase(u.getHost())) return true;
+                }
+                return false;
+            }
+            if ("http".equalsIgnoreCase(scheme)) {
+                return "127.0.0.1".equals(u.getHost()) && u.getPort() == LOCAL_MOCK_PORT;
+            }
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     @JavascriptInterface
     public void chat(final String id, final String url, final String body) {
+        if (!isAllowedTarget(url)) {
+            Log.w("XiaoManNet", "blocked chat target: " + url);
+            final WebView wv = webView;
+            if (wv != null) {
+                wv.post(() -> wv.evaluateJavascript(
+                        "window.__nativeChatDone('" + id + "',false,0,'')", null));
+            }
+            return;
+        }
         new Thread(() -> {
             int status = 0;
             String resp = null;
@@ -39,6 +79,7 @@ public class NetBridge {
                 c.setRequestMethod("POST");
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(60000);
+                c.setInstanceFollowRedirects(false);   // 防白名单域跳转到任意站点
                 c.setRequestProperty("Content-Type", "application/json");
                 c.setRequestProperty("User-Agent", "XiaoMan/0.4 (Android)");
                 c.setDoOutput(true);

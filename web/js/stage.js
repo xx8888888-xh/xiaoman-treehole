@@ -17,21 +17,68 @@ const Stage = (() => {
   let resizeHandler = null;   // resize 监听引用，用于销毁
   const MOODS = { happy: "开心", sad: "有点难过", gentle: "温柔模式", surprised: "诶？", shy: "脸红了", neutral: "在听你说" };
 
-  function mount(container) {
-    // 懒加载 PIXI.Application：vendor 未就绪时不崩，降级只隐藏舞台
+  /* ---------- 渲染库按需加载（首屏 TTI 关键） ----------
+   * PIXI + Cubism 运行时约 900KB，解析会拖慢首屏可交互时间。
+   * 这里串行按需加载（顺序依赖：PIXI → CubismCore → live2d 插件），
+   * 输入框、历史、开场白先就位，舞台随后补上。 */
+  const VENDOR = [
+    "js/vendor/pixi.min.js",
+    "js/vendor/live2dcubismcore.min.js",
+    "js/vendor/pixi-live2d-cubism4.min.js",
+  ];
+  let vendorPromise = null;
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("加载失败: " + src));
+      document.head.appendChild(s);
+    });
+  }
+
+  function ensureVendor() {
+    if (!vendorPromise) {
+      vendorPromise = (async () => {
+        for (const src of VENDOR) await loadScript(src);
+      })();
+    }
+    return vendorPromise;
+  }
+
+  /** 渲染分辨率：安卓 WebView 上按 1x 渲染（MuMu 实测 2x 时仅 ~15fps） */
+  function pickResolution() {
+    const native = !!(window.AndroidTTS && window.AndroidTTS.available);
+    const dpr = window.devicePixelRatio || 1;
+    return native ? 1 : Math.min(1.5, dpr);
+  }
+
+  function showFallback(container, detail) {
+    const tip = document.createElement("div");
+    tip.className = "stage-fallback";
+    tip.textContent = "小满在打盹…（画面没能加载出来，聊天功能不受影响）";
+    container.appendChild(tip);
+    console.warn("Stage 降级:", detail);
+  }
+
+  async function mount(container) {
+    try {
+      await ensureVendor();
+    } catch (e) {
+      showFallback(container, e.message);
+      return;
+    }
     try {
       if (!window.PIXI) throw new Error("PIXI 未加载");
       app = new PIXI.Application({
-        backgroundAlpha: 0, autoDensity: true, resolution: Math.min(2, window.devicePixelRatio || 1)
+        backgroundAlpha: 0, autoDensity: true, resolution: pickResolution()
       });
+      // 30fps 上限：低端机/模拟器上省电且足够顺滑（Live2D 不是高帧率游戏）
+      if (app.ticker) app.ticker.maxFPS = 45;
       container.appendChild(app.view);
     } catch (e) {
-      console.warn("Stage 初始化失败，显示兜底占位:", e.message);
-      // 可见兜底：不再把舞台整块隐藏，给出明确提示；聊天主流程不受影响
-      const tip = document.createElement("div");
-      tip.className = "stage-fallback";
-      tip.textContent = "小满在打盹…（画面没能加载出来，聊天功能不受影响）";
-      container.appendChild(tip);
+      showFallback(container, e.message);
       return; // 降级：不加载模型、不绑定事件
     }
 

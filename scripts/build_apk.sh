@@ -7,10 +7,16 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ---- 版本统一定义（单一变量三处引用）----
-VER_CODE=4
-VER_NAME="0.4.0"
+# ---- 版本统一定义（单一变量三处引用；与 CHANGELOG / web 关于页一致）----
+VER_CODE=5
+VER_NAME="0.5.0"
 APK_BASE="xiaoman-treehole-v${VER_NAME//./}-debug"
+
+# ---- 发布物单一真源：打包前强制把 web/ 同步进 assets/www 并生成哈希清单 ----
+ASSETS_SCRIPT="$ROOT/scripts/build_assets.sh"
+[ -f "$ASSETS_SCRIPT" ] || { echo "❌ 缺少 $ASSETS_SCRIPT（发布物单一真源脚本，拒绝打包）" >&2; exit 1; }
+echo "[0/6] 同步 web → assets/www（唯一真源）+ 生成 ASSET_MANIFEST.json"
+bash "$ASSETS_SCRIPT"
 
 # ---- SDK 路径：强制要求 ANDROID_HOME，缺省不再用他机路径 ----
 : "${ANDROID_HOME:?请设置 ANDROID_HOME 环境变量（指向 Android SDK 根目录）}"
@@ -133,6 +139,14 @@ echo "[6/6] apksigner"
 "$BT/apksigner" sign --ks "$KS" --ks-pass "pass:$KS_PASS" \
   --out "$OUT/$APK_BASE.apk" "$OUT/app-aligned.apk"
 "$BT/apksigner" verify --print-certs "$OUT/$APK_BASE.apk" | head -2
+
+# ---- 打包后校验：APK 内 assets/www 必须与 ASSET_MANIFEST.json 逐文件一致 ----
+echo "[6.1] 校验 APK assets/www 与清单一致"
+VERIFY_PY="$ROOT/scripts/verify_manifest.py"
+[ -f "$VERIFY_PY" ] || { echo "❌ 缺少 $VERIFY_PY（无法校验 APK 发布物）" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "❌ 需要 python3 校验 APK 发布物" >&2; exit 1; }
+python3 "$VERIFY_PY" --apk "$OUT/$APK_BASE.apk"
+
 # 清理中间产物（防 CI 通配符误命中）
 rm -f "$OUT/app-unsigned.apk" "$OUT/app-aligned.apk"
 

@@ -30,7 +30,12 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   --radius: 12px;
   --font: -apple-system, "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+  /* 字号档位：1 = 标准；大/特大由 body 上的类覆盖（只放大文字，不改布局） */
+  --fs: 1;
 }
+
+body.fs-large { --fs: 1.15; }
+body.fs-xlarge { --fs: 1.3; }
 
 body.theme-dark {
   color-scheme: dark;
@@ -92,7 +97,7 @@ html, body { height: 100%; height: 100dvh; overflow: hidden; }
 
 body {
   font-family: var(--font);
-  font-size: 17px;
+  font-size: calc(17px * var(--fs));
   line-height: 1.65;
   color: var(--text);
   background: var(--bg);
@@ -109,7 +114,7 @@ body {
 
 /* ---------- 顶栏 ---------- */
 .topbar { position: relative; z-index: 5; display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 6px; }
-.brand { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 600; letter-spacing: 0.5px; color: var(--text); }
+.brand { display: flex; align-items: center; gap: 8px; font-size: calc(20px * var(--fs)); font-weight: 600; letter-spacing: 0.5px; color: var(--text); }
 .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
 .top-actions { display: flex; gap: 6px; }
 .icon-btn {
@@ -117,14 +122,14 @@ body {
   width: 44px; height: 44px; padding: 0;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--surface); color: var(--icon);
-  font-size: 16px; line-height: 1; cursor: pointer;
+  font-size: calc(16px * var(--fs)); line-height: 1; cursor: pointer;
 }
 
 /* ---------- Live2D 舞台 ---------- */
 #stage { position: relative; z-index: 2; flex: 0 0 40%; min-height: 240px; cursor: pointer; border-radius: var(--radius); }
 #stage canvas { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100% !important; height: 100% !important; }
-.stage-fallback { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; padding: 0 24px; font-size: 15px; line-height: 1.7; color: var(--text-2); text-align: left; }
-.stage-mood { position: absolute; top: 8px; right: 12px; font-size: 15px; line-height: 1.5; color: var(--text-2); background: var(--surface); border: 1px solid var(--line); padding: 3px 10px; border-radius: 999px; }
+.stage-fallback { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; padding: 0 24px; font-size: calc(15px * var(--fs)); line-height: 1.7; color: var(--text-2); text-align: left; }
+.stage-mood { position: absolute; top: 8px; right: 12px; font-size: calc(15px * var(--fs)); line-height: 1.5; color: var(--text-2); background: var(--surface); border: 1px solid var(--line); padding: 3px 10px; border-radius: 999px; }
 .stage-mood.pop { color: var(--text); }
 
 /* ---------- 对话区 ---------- */
@@ -136,13 +141,13 @@ body {
   flex-shrink: 0; width: 32px; height: 32px; border-radius: 10px;
   background: var(--surface); border: 1px solid var(--line);
   display: flex; align-items: center; justify-content: center;
-  color: var(--icon); font-size: 16px; font-weight: 600;
+  color: var(--icon); font-size: calc(16px * var(--fs)); font-weight: 600;
 }
-.bubble { max-width: 78%; padding: 10px 14px; font-size: 17px; line-height: 1.7; overflow-wrap: anywhere; border-radius: var(--radius); }
+.bubble { max-width: 78%; padding: 10px 14px; font-size: calc(17px * var(--fs)); line-height: 1.7; overflow-wrap: anywhere; border-radius: var(--radius); }
 .bubble.them { background: var(--bubble-them); border: 1px solid var(--line); color: var(--text); }
 .bubble.me { background: var(--bubble-me); border: 1px solid var(--line); color: var(--text); }
-.bubble .meta { display: block; margin-top: 4px; font-size: 15px; color: var(--text-2); }
-.bubble.system-tip { margin: 4px 0; padding: 6px 12px; max-width: 100%; background: transparent; border: 1px dashed var(--line); color: var(--text-2); font-size: 15px; text-align: left; border-radius: var(--radius); }
+.bubble .meta { display: block; margin-top: 4px; font-size: calc(15px * var(--fs)); color: var(--text-2); }
+.bubble.system-tip { margin: 4px 0; padding: 6px 12px; max-width: 100%; background: transparent; border: 1px dashed var(--line); color: var(--text-2); font-size: calc(15px * var(--fs)); text-align: left; border-radius: var(--radius); }
 
 /* 打字指示：静态文字，无内嵌点缀 */
 .bubble.typing { display: block; padding: 12px 14px; color: var(--text-2); }
@@ -151,7 +156,7 @@ body {
 .hook-bar { padding: 4px 12px 8px; }
 .hook-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 16px; line-height: 1.5; color: var(--text);
+  font-size: calc(16px * var(--fs)); line-height: 1.5; color: var(--text);
   background: var(--surface); border: 1px solid var(--line);
   padding: 8px 14px; border-radius: 999px; cursor: pointer;
 }
@@ -164,7 +169,7 @@ body {
 }
 #textInput {
   flex: 1; height: 46px; border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 0 14px; font-size: 17px; color: var(--text); background: var(--field);
+  padding: 0 14px; font-size: calc(17px * var(--fs)); color: var(--text); background: var(--field);
 }
 #textInput::placeholder { color: var(--text-3); }
 #textInput:focus-visible { border-color: var(--line-strong); }
@@ -199,75 +204,83 @@ body {
 .drawer.is-closing, .modal.is-closing { display: none; }
 
 .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--text); }
-.drawer-head h2 { font-size: 20px; font-weight: 600; }
+.drawer-head h2 { font-size: calc(20px * var(--fs)); font-weight: 600; }
 .drawer-head .icon-btn { width: 38px; height: 38px; border-radius: 8px; }
-.drawer-sub { margin-bottom: 14px; font-size: 15px; line-height: 1.7; color: var(--text-2); text-align: left; }
+.drawer-sub { margin-bottom: 14px; font-size: calc(15px * var(--fs)); line-height: 1.7; color: var(--text-2); text-align: left; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; min-height: 40px; }
 .chip {
   display: inline-flex; align-items: center; gap: 8px;
-  font-size: 16px; line-height: 1.5;
+  font-size: calc(16px * var(--fs)); line-height: 1.5;
   background: var(--surface); border: 1px solid var(--line);
   color: var(--text); padding: 8px 14px; border-radius: 999px;
 }
 .chip.row { width: 100%; justify-content: space-between; }
 .chip b { color: var(--text); font-weight: 600; }
 .chip.empty { border-style: dashed; color: var(--text-3); }
-.r-cancel { border: 0; background: none; color: var(--text); font-size: 16px; padding: 6px 8px; border-radius: 8px; line-height: 1; cursor: pointer; }
+.r-cancel { border: 0; background: none; color: var(--text); font-size: calc(16px * var(--fs)); padding: 6px 8px; border-radius: 8px; line-height: 1; cursor: pointer; }
 
 .ghost-btn {
   margin-top: 16px; width: 100%; height: 46px;
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: transparent; color: var(--text); font-size: 16px; cursor: pointer;
+  background: transparent; color: var(--text); font-size: calc(16px * var(--fs)); cursor: pointer;
 }
 .solid-btn {
   margin-top: 14px; width: 100%; height: 46px;
   border: 1px solid var(--line-strong); border-radius: var(--radius);
   background: var(--btn); color: var(--text);
-  font-size: 16px; font-weight: 600; letter-spacing: 0.5px; cursor: pointer;
+  font-size: calc(16px * var(--fs)); font-weight: 600; letter-spacing: 0.5px; cursor: pointer;
 }
 
 /* ---------- 友谊卡片 ---------- */
 #cardImg { display: block; width: 100%; border-radius: var(--radius); border: 1px solid var(--line); margin: 2px 0 0; }
-.card-mini { margin-top: 10px; font-size: 15px; line-height: 1.7; color: var(--text-3); text-align: left; }
+.card-mini { margin-top: 10px; font-size: calc(15px * var(--fs)); line-height: 1.7; color: var(--text-3); text-align: left; }
 
 /* ---------- 设置表单 ---------- */
 .field { display: block; margin-bottom: 14px; }
-.field > span { display: block; margin-bottom: 6px; font-size: 15px; color: var(--text-2); }
+.field > span { display: block; margin-bottom: 6px; font-size: calc(15px * var(--fs)); color: var(--text-2); }
 .field input, .field select {
   width: 100%; height: 46px; border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 0 12px; font-size: 16px; font-family: inherit;
+  padding: 0 12px; font-size: calc(16px * var(--fs)); font-family: inherit;
   background: var(--field); color: var(--text);
 }
 .field select { line-height: 1.4; }
 .field select option { background: var(--field); color: var(--text); }
 .field input::placeholder { color: var(--text-3); }
-.mini { font-size: 15px; line-height: 1.7; color: var(--text-2); text-align: left; }
+.mini { font-size: calc(15px * var(--fs)); line-height: 1.7; color: var(--text-2); text-align: left; }
 #cfgTestResult { margin: 10px 0 4px; }
 .float-actions { display: flex; flex-direction: column; }
 
-.about { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 15px; line-height: 1.7; color: var(--text); text-align: left; }
-.about .mini { margin-top: 6px; font-size: 15px; line-height: 1.7; color: var(--text-3); }
+.about { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); font-size: calc(15px * var(--fs)); line-height: 1.7; color: var(--text); text-align: left; }
+.about .mini { margin-top: 6px; font-size: calc(15px * var(--fs)); line-height: 1.7; color: var(--text-3); }
 
 /* ---------- 危机关怀卡片 ---------- */
 .care-card {
   max-width: 88%; padding: 14px;
   background: var(--bubble-them); border: 1px solid var(--line-strong);
-  border-radius: var(--radius); font-size: 17px; line-height: 1.7; color: var(--text);
+  border-radius: var(--radius); font-size: calc(17px * var(--fs)); line-height: 1.7; color: var(--text);
+  white-space: pre-line;
+}
+/* 高危档：急救号码优先，用更实的边框提示"这是急事"（无动画，守零动画硬约束） */
+.care-card.care-high { border-width: 2px; border-color: var(--text-2, #8A7A70); }
+/* 窗口化提示：只占一行、灰阶、无动画（守零动画硬约束） */
+.window-tip {
+  justify-content: center; font-size: calc(13px * var(--fs));
+  color: var(--text-2); opacity: .75; padding: 4px 0 8px; user-select: none;
 }
 .care-card .hotline {
   display: flex; align-items: center; gap: 8px; margin-top: 10px;
   padding: 8px 12px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius); font-size: 17px; font-weight: 600; color: var(--text);
+  border-radius: var(--radius); font-size: calc(17px * var(--fs)); font-weight: 600; color: var(--text);
 }
-.care-card .ai-boundary { margin-top: 6px; font-size: 15px; font-weight: 400; line-height: 1.6; color: var(--text-3); }
+.care-card .ai-boundary { margin-top: 6px; font-size: calc(15px * var(--fs)); font-weight: 400; line-height: 1.6; color: var(--text-3); }
 
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 80;
   max-width: calc(100% - 32px); padding: 10px 18px;
   background: var(--toast-bg); color: var(--toast-text);
-  border-radius: 999px; font-size: 16px; line-height: 1.6; text-align: left;
+  border-radius: 999px; font-size: calc(16px * var(--fs)); line-height: 1.6; text-align: left;
 }
 
 /* ---------- 降级提示（安静、可关闭） ---------- */
@@ -276,12 +289,12 @@ body {
   display: inline-flex; align-items: center; gap: 8px;
   max-width: calc(100% - 24px); padding: 6px 8px 6px 12px;
   background: var(--badge-bg); border: 1px solid var(--badge-line);
-  border-radius: var(--radius); font-size: 15px; line-height: 1.5;
+  border-radius: var(--radius); font-size: calc(15px * var(--fs)); line-height: 1.5;
 }
-#degradeText { font-size: 15px; color: var(--text); }
+#degradeText { font-size: calc(15px * var(--fs)); color: var(--text); }
 #degradeClose {
   border: 0; background: none; color: var(--icon);
-  font-size: 16px; line-height: 1; padding: 2px 6px; min-width: 28px; cursor: pointer;
+  font-size: calc(16px * var(--fs)); line-height: 1; padding: 2px 6px; min-width: 28px; cursor: pointer;
 }
 
 /* ---------- 桌面端适配 ---------- */
@@ -304,7 +317,46 @@ body {
 .drawer-empty {
   margin: 4px 0 14px; padding: 12px 14px;
   border: 1px dashed var(--line); border-radius: var(--radius);
-  font-size: 15px; line-height: 1.7; color: var(--text-2); text-align: left;
+  font-size: calc(15px * var(--fs)); line-height: 1.7; color: var(--text-2); text-align: left;
+}
+
+/* ---------- 429 / 断网排队提示（安静、可关闭，零动画） ---------- */
+.pending-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px; background: var(--surface); border-top: 1px solid var(--line);
+  color: var(--text-2); font-size: calc(15px * var(--fs)); line-height: 1.5; text-align: left;
+}
+.pending-btn {
+  margin-left: auto; min-height: 36px; padding: 6px 10px;
+  border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface-2); color: var(--text);
+  font-size: calc(15px * var(--fs)); cursor: pointer;
+}
+.pending-close {
+  border: 0; background: none; color: var(--icon); cursor: pointer;
+  font-size: calc(15px * var(--fs)); line-height: 1; padding: 6px; min-width: 36px; min-height: 36px;
+}
+
+/* ---------- 倾诉记录导出/导入 ---------- */
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.ghost-btn {
+  flex: 1 1 46%; min-height: 44px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text);
+  font-size: calc(15px * var(--fs)); cursor: pointer;
+}
+.ghost-btn:disabled { opacity: 0.6; cursor: default; }
+.backup-field .mini { margin-top: 8px; }
+
+/* ---------- 尊重系统"减少动态效果"偏好 ----------
+   本项目本身零动画；这里只做兜底声明，防止后续新增样式违背偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ---------- 悬浮挂件模式 ---------- */
@@ -328,7 +380,7 @@ body.widget-mode #stage {
   display: none; max-width: 240px; padding: 10px 12px;
   background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: var(--radius);
-  font-size: 16px; line-height: 1.6; text-align: left;
+  font-size: calc(16px * var(--fs)); line-height: 1.6; text-align: left;
   pointer-events: none;
 }
 #widgetBubble.show { display: block; }
@@ -342,5 +394,5 @@ body.float-mode #app { max-width: none; height: 100%; }
 body.float-mode #chatArea { flex: 1; }
 body.float-mode #chatScroll { padding: 6px 10px 4px; }
 body.float-mode .inputbar { padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px)); }
-body.float-mode .bubble { font-size: 17px; }
+body.float-mode .bubble { font-size: calc(17px * var(--fs)); }
 body.float-mode .float-hidden { display: none !important; }

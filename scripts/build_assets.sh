@@ -1,21 +1,69 @@
 #!/usr/bin/env bash
-# 把 web/ 注入 android assets/www。
-# 排除项（审计 android D22）：node_modules、npm 清单、测试音频 selftest、
-# 文档截图 docs/shots（非运行时资源）、模型回滚备份 *.orig（仅手术用）。
-set -e
-SRC="$(cd "$(dirname "$0")/../web" 2>/dev/null && pwd)" || { echo "❌ 目录不存在: $(dirname "$0")/../web" >&2; exit 1; }
-ASSETS_DIR="$(cd "$(dirname "$0")/.." && pwd)/android/app/src/main/assets"
-# assets/www 是生成物、不入库（见 .gitignore），所以目录可能不存在 → 先建
+# ============================================================
+# build_assets.sh · 发布物唯一真源
+#   web/ → android/app/src/main/assets/www（tar 同步，排除规则见 asset_excludes.sh）
+#   同时生成 android/app/src/main/assets/www/ASSET_MANIFEST.json：
+#     相对路径 + sha256 + 字节数 + 生成时间 + 源目录 git commit
+# build_apk.sh 打包前强制调用本脚本，打包后按清单校验 APK；
+# Dockerfile 只 COPY assets/www；compose web 容器启动前按清单校验。
+# ============================================================
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC="$ROOT/web"
+ASSETS_DIR="$ROOT/android/app/src/main/assets"
+DST="$ASSETS_DIR/www"
+[ -d "$SRC" ] || { echo "❌ 源目录不存在: $SRC" >&2; exit 1; }
+# shellcheck source=scripts/asset_excludes.sh
+. "$ROOT/scripts/asset_excludes.sh"
+
+# assets/www 是生成物、不入库（见 .gitignore），目录可能不存在 → 先建
 mkdir -p "$ASSETS_DIR"
-DST="$(cd "$ASSETS_DIR" && pwd)"
-EXCLUDES=(
-  --exclude=node_modules
-  --exclude=package.json
-  --exclude=package-lock.json
-  --exclude='assets/audio/selftest.*'
-  --exclude='docs/shots'
-  --exclude='*.orig'
-)
-rm -rf "$DST/www"; mkdir -p "$DST/www"
-cd "$SRC" && tar cf - "${EXCLUDES[@]}" . | (cd "$DST/www" && tar xf -)
-echo "ASSETS_SYNCED $(du -sh "$DST/www" | cut -f1)"
+rm -rf "$DST"; mkdir -p "$DST"
+( cd "$SRC" && tar cf - "${ASSET_TAR_EXCLUDES[@]}" . ) | ( cd "$DST" && tar xf - )
+
+# 源 commit：能拿到就写；web/ 有未提交改动时标记 dirty（发布物不完全等于任一提交）
+COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+DIRTY=false
+if [ -n "$COMMIT" ] && [ -n "$(git -C "$ROOT" status --porcelain -- web 2>/dev/null || true)" ]; then
+  DIRTY=true
+fi
+
+command -v python3 >/dev/null 2>&1 || { echo "❌ 需要 python3 生成/校验清单" >&2; exit 1; }
+python3 - "$DST" "$COMMIT" "$DIRTY" <<'PY'
+import datetime, hashlib, json, os, sys
+
+dst, commit, dirty = sys.argv[1], sys.argv[2], sys.argv[3] == "true"
+files, total = [], 0
+for root, dirs, names in os.walk(dst):
+    dirs.sort()
+    for name in sorted(names):
+        if name == "ASSET_MANIFEST.json":
+            continue
+        full = os.path.join(root, name)
+        rel = os.path.relpath(full, dst).replace(os.sep, "/")
+        digest = hashlib.sha256()
+        with open(full, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+        size = os.path.getsize(full)
+        files.append({"path": rel, "sha256": digest.hexdigest(), "bytes": size})
+        total += size
+files.sort(key=lambda e: e["path"])
+
+manifest = {
+    "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "source_dir": "web",
+    "source_commit": commit or None,
+    "source_dirty": dirty,
+    "file_count": len(files),
+    "total_bytes": total,
+    "files": files,
+}
+path = os.path.join(dst, "ASSET_MANIFEST.json")
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(manifest, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+print(f"ASSETS_MANIFEST files={len(files)} bytes={total} path={path}")
+PY
+
+echo "ASSETS_SYNCED $(du -sh "$DST" | cut -f1) -> $DST"

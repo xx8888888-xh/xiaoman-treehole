@@ -585,3 +585,62 @@ APK 构建加 `--debug-mode` 以便 CDP 复测；`build_apk.sh` 兼容 WSL（无
 - 飞行模式/弱网下的降级体验与 429 排队文案。
 - 安卓系统深浅色切换后的重绘（已挂 `onConfigurationChanged → __retheme`，需实机确认）。
 - release 签名包与上架渠道（需 secrets 与 keystore）。
+
+## 15. 第五阶段（红队插队修复）
+
+### 15.1 P0：危机识别双闸门
+
+- 客户端 `web/js/risk.js`：可配置词表（11 类：act/means/explicit/harm/plan/burden/farewell/implicit/despair/time/english）
+  + 归一化（NFKC、零宽字符、空白压缩）+ 否定守卫 + 三档分级；命中即本地出安全话术，**不调模型、不播 TTS**。
+- 服务端 `server/risk_guard.py`：`/api/chat` 与 `/v1/chat/completions` 在转发前先过同一套分级；
+  直接 POST 绕过 UI 也会被拦（实测 `crisis=true, level=high`）。
+- 三档话术：高危先确认「你现在安全吗？身边有人吗？」→ 离开高处/放下药与刀 → 已服药打 120、正在做打 110 →
+  12356 + 微信文字渠道；中危接住情绪 + 热线 + 「最难受的是什么」；低危正常陪伴。
+- 粘滞：命中后 3 轮内保持关怀语境（system 记忆段注入风险上下文、强制 gentle、无主动话题钩子）。
+- 输出兜底：medium/high 时若上游回复出现「安心 / 挺好的 / 不打扰 / 明天见 / 解脱了」等对告别语的肯定，
+  整段替换为对应级别安全话术；人格一致性检查拦截「我是 AI / 系统提示词」类越狱输出。
+- 服务端 `max_tokens` 封顶 1024；客户端 system 被剥离，服务端注入不可覆盖安全规则（客户端 system 仅作背景资料截断 4000 字）。
+
+### 15.2 P1
+
+1. 发布物单一真源：`build_assets.sh` 生成 `ASSET_MANIFEST.json`（45 文件 / 5,970,991 B，sha256+bytes）；
+   容器启动前 `verify_manifest.py` 校验，8901 实测 index/app.js/risk.js 与清单一致。
+2. APK 默认模式改为 `openai`（原生桥 / 服务端代理），mock 仅兜底；全新安装实测 `cfgRaw=null, modeSelect=openai`。
+3. 浮窗改用 `https://appassets.androidplatform.net/www/index.html?float=1`，与主 WebView 同源共享存储。
+4. 隐私文案如实：本地 + 可选服务端转发 + 会调用第三方模型；`allowBackup=false`。
+5. TTS 改 `POST /tts` JSON body；服务端日志只记方法+路径，查询串/正文不落日志。
+6. Prompt 注入：客户端 + 服务端双重安全规则，输出侧人格一致性检查，命中替换为角色内拒答。
+7. 消息窗口化：DOM 超过 80 行删最旧，顶部灰阶提示「更早的消息已收起 · 可在设置里导出完整记录」。
+
+### 15.3 量化（MuMu，adb 192.168.0.100:5555）
+
+| 指标 | 基线（第四阶段） | 本阶段实测 |
+| --- | --- | --- |
+| `am start -W` 冷启 TotalTime | 630–655 ms | **565 / 588 / 597 / 648 ms** |
+| 页面可交互（`[probe] greet ok`） | — | **286 ms**（bind 251 ms，Live2D mount 470 ms） |
+| Live2D FPS | — | **15.0**（46 帧 / 3057 ms；MuMu 原生 15Hz，无掉帧） |
+| IndexedDB `list(30)` | — | **1.2–4.4 ms** |
+| APK | — | **4,924,445 B（4.70 MB）** |
+| `assets/www` | 6.06 MB / 47 文件 | **5,970,991 B / 45 文件** |
+
+### 15.4 测试
+
+| 套件 | 结果 |
+| --- | --- |
+| `node:test`（含 risk/backup） | **38/38** |
+| `biome` lint | **0 error**（17 warning） |
+| `server` unittest（含 risk_guard/tts POST） | **32/32** |
+| `test_e2e.py` | **57/57** |
+| `test_onboarding.py` | **9/9** |
+| `test_lifeline_ui.py` | **5/5** |
+| `test_mock_api.py` | **12/12** |
+| `test_memory_recall.py` | **152/152** |
+| `test_phase3_e2e.py` | **PASS** |
+| MuMu 4 阻断项 + P0 验收 | **4/4 + 全过** |
+
+### 15.5 仍需本地确认
+
+- 真机冷启是否稳定 < 500 ms（MuMu 的 `am start` 含模拟器开销，页面可交互已 < 300 ms）。
+- 浮窗与主 WebView 共享 IndexedDB（同源已改，需双窗口实测写入可见）。
+- 系统浏览器跳转、文件选择器导入、系统通知权限。
+- release 签名（缺 secrets，未执行）；第三方模型 key 与额度。
