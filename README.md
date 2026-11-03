@@ -66,6 +66,7 @@ bash scripts/verify_stack.sh dev   # curl 三端口做一次冒烟
 ## 安全注意事项
 
 - Key 只从 **环境变量 / 系统凭据管理器** 读取；`.env` 已在 `.gitignore` 中，`.env.example` 只留空值。
+- **容器内读不到 Windows 凭据管理器**（Linux 没有 `CredRead`）。跑在 Docker 里时必须用 `.env` / `-e AI_API_KEY=…` **显式注入**，否则 OpenRouter 通道不可用、只会走 Kilo（免 Key）或降级到本地 mock。`scripts/dev_up.sh` 启动后会打印通道自检结果，缺 Key 时给 ⚠️ 提示。
 - 设置页输入的 Key **只存在当前页面内存**，刷新即失效，不写 `localStorage`、不进 IndexedDB。
 - 服务端 `/api/config` 只下发 mode/model/base/provider，`AI_API_KEY` 永不外泄。
 - CORS 默认白名单仅 `http://127.0.0.1:8901`（可用 `XIAOMAN_ALLOW_ORIGINS` 覆盖）。
