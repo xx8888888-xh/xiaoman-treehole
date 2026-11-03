@@ -14,6 +14,8 @@ mock_api.py · 内置对话服务（当前阶段由 AI 本人充当的"API"）
 小满人设：26岁新媒体运营，养橘猫团子，深夜树洞 + 轻伴侣。
 活人感规则与安全层话术来自 2026-10 的实测与盲测结论（docs 可查）。
 """
+import copy
+import hashlib
 import json
 import re
 import random
@@ -21,7 +23,13 @@ import time
 import logging
 import threading
 import os
+import urllib.parse
+from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib import error as urlerror
+from urllib import request as urlrequest
+
+import xm_config
 
 # ---------------- 日志配置 ----------------
 logging.basicConfig(
@@ -32,8 +40,25 @@ logging.basicConfig(
 logger = logging.getLogger("xiaoman-mock")
 
 # ---------------- 环境变量配置 ----------------
-BIND_HOST = os.environ.get("XIAOMAN_BIND_HOST", "0.0.0.0")
+# 默认仅本机回环；容器内由 compose 注入 0.0.0.0，再由端口映射回宿主机回环
+BIND_HOST = xm_config.BIND_HOST
+PORT = xm_config.MOCK_PORT
 MAX_BODY_SIZE = 64 * 1024  # 64KB
+
+# AI 接口：key 只从环境变量读，绝不写进代码/前端
+AI_MODE = (os.environ.get("AI_MODE") or "mock").strip().lower()
+AI_API_BASE = (os.environ.get("AI_API_BASE") or "").strip()
+AI_API_KEY = (os.environ.get("AI_API_KEY") or "").strip()
+# 默认保留 nvidia 免费模型（Kilo / OpenRouter 均可用；已确认未停服）
+AI_MODEL = (os.environ.get("AI_MODEL") or "nvidia/nemotron-3.5-lightning:free").strip()
+# 该模型默认开思维链，max_tokens < 512 会被 reasoning 吃光导致 content=null
+AI_MAX_TOKENS = 600
+TTS_BASE = (os.environ.get("TTS_BASE") or "http://127.0.0.1:8903").strip()
+TTS_VOICE = (os.environ.get("TTS_VOICE") or "zh-CN-XiaoyiNeural").strip()
+
+# 可选服务端落盘（聊天记录 + 会话记忆）；为空则纯内存
+DATA_DIR = (os.environ.get("XIAOMAN_DATA_DIR") or "").strip()
+UPSTREAM_TIMEOUT = 30
 
 # ---------------- 情绪词库 ----------------
 # 扩充危机关键词：增加同义词、拼音变体、常见表达
@@ -428,15 +453,110 @@ EMO_MAP = {
     "generic": ("neutral", None),
 }
 
+# ---------------- 可选落盘：会话 JSON（按 session_id 分文件） ----------------
+def _api_root(base):
+    """把 base 归一为不带 /v1 的根地址"""
+    base = (base or "").rstrip("/")
+    return base[:-3] if base.endswith("/v1") else base
+
+
+def _upstream_url(path):
+    return _api_root(AI_API_BASE) + path
+
+
+def provider_for(base):
+    """按 base_url 自动适配 provider：Kilo 免 key，其余走 Bearer key。"""
+    b = (base or "").lower()
+    if "api.kilo.ai" in b:
+        return "kilo"
+    if "openrouter.ai" in b:
+        return "openrouter"
+    return "openai"
+
+
+def _auth_headers():
+    provider = provider_for(AI_API_BASE)
+    headers = {"User-Agent": "xiaoman-treehole/1.0"}
+    if provider == "kilo":
+        return headers  # 免 key：随便一个 UA 即可
+    if AI_API_KEY:
+        headers["Authorization"] = f"Bearer {AI_API_KEY}"
+    return headers
+
+
+def _upstream_json(method, url, payload=None, timeout=UPSTREAM_TIMEOUT):
+    """请求 OpenAI 兼容上游；返回 (status, obj, err)。err 为 None 表示成功。"""
+    data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+    req = urlrequest.Request(url, data=data, method=method, headers={
+        "Content-Type": "application/json",
+        **_auth_headers(),
+    })
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read().decode("utf-8")), None
+    except urlerror.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8")[:300]
+        except Exception:
+            pass
+        return e.code, None, f"上游 HTTP {e.code} {detail}".strip()
+    except Exception as e:
+        return None, None, f"{type(e).__name__}: {e}"
+
+
+class _DiskStore:
+    """会话落盘（可选）：{data_dir}/{sid_hash}.json，原子写。"""
+    def __init__(self, root):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+
+    def _path(self, sid):
+        digest = hashlib.sha1(str(sid).encode()).hexdigest()[:16]
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid))[:24]
+        return self.root / f"{safe}-{digest}.json"
+
+    def load(self, sid):
+        p = self._path(sid)
+        try:
+            if p.exists():
+                return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("session load failed: %s", p, exc_info=True)
+        return None
+
+    def save(self, sid, data):
+        p = self._path(sid)
+        with self._lock:
+            tmp = p.with_suffix(".tmp")
+            try:
+                tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                tmp.replace(p)
+            except Exception:
+                logger.warning("session save failed: %s", p, exc_info=True)
+
+
+_DISK = _DiskStore(DATA_DIR) if DATA_DIR else None
+
+
 # ---------------- 会话状态（支持 session_id 隔离） ----------------
 class _State:
     """进程内会话状态：支持多会话隔离，带 TTL 清理"""
+    # 从落盘恢复的字段（消息列表由 persist_session 单独写入）
+    _RESTORE_KEYS = (
+        "last_topic", "memories", "crisis_count", "depress_count", "depress_esc",
+        "turns", "told_v", "memory_hits", "mem_extracted", "recall_count",
+        "recent_replies", "mem_aware_ts",
+    )
+
     def __init__(self):
         self._lock = threading.Lock()
         self._sessions = {}  # session_id -> {"last_topic": ..., "memories": {}, "crisis_count": 0, "turns": 0, "updated": time.time()}
         self._default_session = {"last_topic": None, "memories": {}, "crisis_count": 0, "turns": 0, "updated": time.time()}
         self._cleanup_interval = 300  # 5分钟清理一次
         self._last_cleanup = time.time()
+        self._loaded = set()  # 已尝试从磁盘恢复过的 session_id
 
     def _get_session(self, session_id):
         with self._lock:
@@ -450,9 +570,23 @@ class _State:
             if session_id is None:
                 return self._default_session
             if session_id not in self._sessions:
-                self._sessions[session_id] = {"last_topic": None, "memories": {}, "crisis_count": 0, "turns": 0, "updated": now}
-            self._sessions[session_id]["updated"] = now
-            return self._sessions[session_id]
+                self._sessions[session_id] = {"last_topic": None, "memories": {}, "crisis_count": 0,
+                                               "turns": 0, "updated": now}
+            sess = self._sessions[session_id]
+            if session_id not in self._loaded:
+                self._loaded.add(session_id)
+                if _DISK:
+                    disk = _DISK.load(session_id) or {}
+                    for key in self._RESTORE_KEYS:
+                        if key in disk:
+                            sess[key] = disk[key]
+            sess["updated"] = now
+            return sess
+
+    def snapshot(self, session_id):
+        """导出可 JSON 序列化的会话状态（落盘用，不含 updated）"""
+        sess = self._get_session(session_id)
+        return {k: copy.deepcopy(v) for k, v in sess.items() if k != "updated"}
 
     def get_last_topic(self, session_id):
         return self._get_session(session_id)["last_topic"]
@@ -507,6 +641,23 @@ class _State:
 
 
 _STATE = _State()
+
+
+def persist_session(session_id, messages):
+    """可选落盘：会话状态 + 最近 200 条消息（DATA_DIR 未配置时为空操作）"""
+    if not _DISK or not session_id:
+        return
+    snap = _STATE.snapshot(session_id)
+    snap["messages"] = list(messages)[-200:]
+    _DISK.save(session_id, snap)
+
+
+def load_history(session_id):
+    """读取落盘历史；未启用落盘返回空列表"""
+    if not _DISK or not session_id:
+        return []
+    return (_DISK.load(session_id) or {}).get("messages", [])
+
 
 # ---------------- 核心回复逻辑 ----------------
 def make_reply(messages, session_id=None):
@@ -646,12 +797,16 @@ class Handler(BaseHTTPRequestHandler):
         # 记录访问日志：时间、方法、路径、状态码
         logger.info("%s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
 
+    def _cors(self):
+        """CORS 白名单（默认仅 http://127.0.0.1:8901）；未命中不发 ACAO"""
+        for k, v in xm_config.cors_headers(self.headers.get("Origin")).items():
+            self.send_header(k, v)
+
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        # CORS：Origin 保留 *（安卓模拟器/真机需要），收敛 Headers/Methods 为实际使用集合
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors()
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
         self.send_header("Content-Length", str(len(body)))
@@ -663,59 +818,162 @@ class Handler(BaseHTTPRequestHandler):
         logger.error("HTTP %d: %s", code, message)
         self._json({"error": message}, code)
 
+    def _read_body(self):
+        """读取并校验请求体；返回 dict，失败时抛 ValueError(状态码)"""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            raise ValueError(400)
+        if length < 0 or length > MAX_BODY_SIZE:
+            raise ValueError(413)
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise ValueError(400)
+        if not isinstance(data, dict):
+            raise ValueError(400)
+        return data
+
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors()
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
         self.end_headers()
 
+    # ---------- 对话：内置 mock 协议 ----------
+    def _mock_completion(self, messages, session_id):
+        result = make_reply(messages, session_id)
+        content = json.dumps(result, ensure_ascii=False)
+        persist_session(session_id, messages)
+        # 模拟 200~600ms 真实网络+推理延迟
+        time.sleep(random.uniform(0.2, 0.6))
+        self._json({"id": "mock", "object": "chat.completion",
+                    "choices": [{"index": 0,
+                                 "message": {"role": "assistant", "content": content},
+                                 "finish_reason": "stop"}]})
+
+    # ---------- 对话：服务端代理真实 LLM（key 只留服务端） ----------
+    def _proxy_completion(self, data, session_id):
+        if not AI_API_BASE:
+            return self._error(503, "服务端未配置 AI_API_BASE")
+        if provider_for(AI_API_BASE) != "kilo" and not AI_API_KEY:
+            return self._error(503, "服务端未配置 AI_API_KEY（请用环境变量/凭据管理器注入）")
+        body = {
+            "model": data.get("model") or AI_MODEL,
+            "temperature": data.get("temperature", 0.85),
+            "max_tokens": max(int(data.get("max_tokens") or 0), AI_MAX_TOKENS),
+            "reasoning": {"enabled": False},   # 推理模型关思考，防 JSON 被挤掉
+            "messages": data.get("messages", []),
+        }
+        status, obj, err = _upstream_json("POST", _upstream_url("/v1/chat/completions"), body)
+        if status == 429:
+            # 免费池可能限流：退避重试一次
+            logger.warning("upstream 429，1.5s 后重试一次")
+            time.sleep(1.5)
+            status, obj, err = _upstream_json("POST", _upstream_url("/v1/chat/completions"), body)
+        if err:
+            kind = "limit" if status in (402, 429) else ("http" if status else "network")
+            code = status if status in (402, 429) else 502
+            logger.warning("upstream chat failed: %s", err)
+            return self._json({"error": err, "kind": kind, "status": status}, code)
+        try:
+            content = obj["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return self._json({"error": "上游响应缺少 choices[0].message.content", "kind": "http"}, 502)
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        persist_session(session_id, data.get("messages", []))
+        self._json({"content": content, "model": body["model"]})
+
     def do_POST(self):
         start = time.time()
-        # 路径归一化：rstrip("/")
         path = self.path.rstrip("/")
-        if path != "/v1/chat/completions":
+        if path not in ("/v1/chat/completions", "/api/chat"):
             return self._error(404, "not found")
         try:
-            length_str = self.headers.get("Content-Length", "0")
-            try:
-                length = int(length_str)
-            except ValueError:
-                return self._error(400, "invalid Content-Length")
-            if length < 0 or length > MAX_BODY_SIZE:
-                return self._error(413, "payload too large")
-            raw = self.rfile.read(length) if length > 0 else b"{}"
-            data = json.loads(raw)
+            data = self._read_body()
             messages = data.get("messages", [])
             # 从 Header 或 body 获取 session_id（可选，向后兼容）
             session_id = data.get("session_id") or self.headers.get("X-Session-ID")
-            result = make_reply(messages, session_id)
-            content = json.dumps(result, ensure_ascii=False)
-            # 模拟 200~600ms 真实网络+推理延迟
-            time.sleep(random.uniform(0.2, 0.6))
-            self._json({"id": "mock", "object": "chat.completion",
-                        "choices": [{"index": 0,
-                                     "message": {"role": "assistant", "content": content},
-                                     "finish_reason": "stop"}]})
-        except json.JSONDecodeError:
-            self._error(400, "invalid JSON")
-        except Exception as e:
+
+            if path == "/v1/chat/completions":
+                return self._mock_completion(messages, session_id)
+
+            mode = (data.get("mode") or AI_MODE).strip().lower()
+            if mode == "offline":
+                return self._json({"offline": True, "mode": "offline"})
+            if mode == "mock":
+                result = make_reply(messages, session_id)
+                persist_session(session_id, messages)
+                return self._json({"content": json.dumps(result, ensure_ascii=False), "mode": "mock"})
+            return self._proxy_completion(data, session_id)
+        except ValueError as e:
+            return self._error(getattr(e, "args", [400])[0] or 400, "invalid request")
+        except Exception:
             # 仅服务端日志记录异常细节，客户端返回通用错误
             logger.exception("Internal server error")
             self._error(500, "internal server error")
         finally:
-            logger.debug("POST /v1/chat/completions %dms", int((time.time() - start) * 1000))
+            logger.debug("POST %s %dms", path, int((time.time() - start) * 1000))
 
     def do_GET(self):
         start = time.time()
-        path = self.path.rstrip("/")
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
         if path == "/health":
-            self._json({"ok": True, "service": "xiaoman-mock"})
+            self._json({"ok": True, "service": "xiaoman-mock", "mode": AI_MODE,
+                        "persist": bool(DATA_DIR)})
+        elif path == "/api/config":
+            # 只回非敏感配置；API Key 永不下发
+            self._json({
+                "mode": AI_MODE,
+                "model": AI_MODEL,
+                "apiBase": _api_root(AI_API_BASE),
+                "provider": provider_for(AI_API_BASE),
+                "hasServerKey": bool(AI_API_KEY) or provider_for(AI_API_BASE) == "kilo",
+                "ttsBase": TTS_BASE,
+                "ttsVoice": TTS_VOICE,
+                "persist": bool(DATA_DIR),
+            })
+        elif path == "/api/models":
+            self._json(self._models_payload())
+        elif path == "/api/history":
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = (qs.get("session_id") or [None])[0]
+            self._json({"messages": load_history(sid), "persist": bool(DATA_DIR)})
         else:
             self._error(404, "not found")
         logger.debug("GET %s %dms", self.path, int((time.time() - start) * 1000))
 
+    @staticmethod
+    def _models_payload():
+        """测试连接用：返回可用模型列表或明确错误原因（key 不外泄）"""
+        if AI_MODE == "mock":
+            return {"ok": True, "mode": "mock", "models": ["xiaoman-mock"],
+                    "note": "内置 mock 模式，无需外部 Key"}
+        if AI_MODE == "offline":
+            return {"ok": True, "mode": "offline", "models": [],
+                    "note": "纯离线模式，不调用外部 API"}
+        if not AI_API_BASE:
+            return {"ok": False, "mode": "openai", "error": "AI_API_BASE 未配置"}
+        provider = provider_for(AI_API_BASE)
+        if provider != "kilo" and not AI_API_KEY:
+            return {"ok": False, "mode": "openai", "provider": provider,
+                    "error": "AI_API_KEY 未配置（请用环境变量/凭据管理器注入，勿写入代码）"}
+        status, obj, err = _upstream_json("GET", _upstream_url("/v1/models"), timeout=10)
+        if err:
+            return {"ok": False, "mode": "openai", "provider": provider,
+                    "status": status, "error": err}
+        ids = [m.get("id") for m in (obj or {}).get("data", [])
+               if isinstance(m, dict) and m.get("id")]
+        return {"ok": True, "mode": "openai", "provider": provider,
+                "models": ids[:80], "model": AI_MODEL,
+                "note": f"共 {len(ids)} 个可用模型"}
+
 
 if __name__ == "__main__":
-    print(f"小满 Mock API 就绪 → http://{BIND_HOST}:8902/v1/chat/completions (bind: {BIND_HOST})")
-    ThreadingHTTPServer((BIND_HOST, 8902), Handler).serve_forever()
+    print(f"小满 Mock API 就绪 → http://{BIND_HOST}:{PORT}/v1/chat/completions "
+          f"(bind: {BIND_HOST}, mode: {AI_MODE}, 落盘: {'开' if DATA_DIR else '关'})")
+    ThreadingHTTPServer((BIND_HOST, PORT), Handler).serve_forever()
