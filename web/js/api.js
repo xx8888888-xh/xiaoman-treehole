@@ -63,6 +63,8 @@ const API = (() => {
 你们就是普通朋友在微信上聊天——想说什么说什么，不用扮演倾听者，不用接住每一个情绪，不用每句话都关心对方。朋友之间也会分享自己的事、吐槽自己的破班、讲团子的蠢事。
 说话像发微信：短句、口语、经常一两条就完，绝不排比列点总结说教，不说"作为AI"，不堆emoji。
 用||把回复分成1-3条短消息，像连着发的微信。
+长度硬约束：每条不超过 30 个字，一次最多 3 条，总字数不超过 80 字。宁可短，不要长篇。
+跑题硬约束：只聊ta此刻的情绪和生活。ta如果问写代码/翻译/做题/查资料/正经咨询，用一句朋友话岔开或直说"这个我真不会"，绝不长篇解答。
 朋友该有的分寸自己拿捏：ta明显想聊就多聊两句，ta敷衍就别追着问。
 底线（仅此一条必须守住）：ta说"不想活/想死"这类话时，认真对待，温和建议心理援助热线12356，表示你一直在。
 输出严格JSON：{"reply":"…","emotion":"happy|sad|gentle|surprised|shy|neutral","motion":"Greeting|Nod|Shake|HappyJump|null","memory_updates":{},"reminders":null}
@@ -85,20 +87,52 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     const mem = (opts.memSection || "").trim();
     if (mem) parts.push(`【你记得的关于ta的事】\n${mem}\n（自然地用，别背诵，别一次全提）`);
     if (opts.now) parts.push(`【现在时间】${opts.now.toLocaleString("zh-CN", { weekday: "long", hour: "2-digit", minute: "2-digit" })}`);
+    if (opts.strictJson) parts.push("【输出要求】只输出一行合法 JSON，不要任何解释、不要 Markdown 代码块、不要前后缀。");
     return parts.join("\n\n");
   }
 
+  // 解析失败时的兜底话术（同时用于判定"这次回复需要重试"）
+  const FALLBACK_REPLY = "嗯……我好像走神了，你刚才说什么来着？";
+
+  /** 把模型给的杂文本按"一次重试 + 正则兜底"的顺序解析成结构化对象 */
   function parseStructured(text) {
-    // 容错解析：优先整体 JSON，失败则捞第一个 {...} 块，再失败按纯文本
-    try { return JSON.parse(text); } catch {}
-    const m = (text || "").match(/\{[\s\S]*\}/);
-    if (m) { try { return JSON.parse(m[0]); } catch {} }
-    // 兜底：过滤 null/"null"/空/截断等无效文本，给默认话术
-    const t = (text || "").trim();
-    if (!t || /^(null|undefined|\[\]|\{\})$/i.test(t)) {
-      return { reply: "嗯……我好像走神了，你刚才说什么来着？", emotion: "neutral", motion: null };
+    const raw = (text == null ? "" : String(text));
+    const cleaned = raw
+      .replace(/^\uFEFF/, "")
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    const tryParse = (s) => { try { return JSON.parse(s); } catch { return null; } };
+
+    let obj = tryParse(cleaned);
+    if (!obj) {
+      const block = cleaned.match(/\{[\s\S]*\}/);
+      if (block) obj = tryParse(block[0]);
     }
-    return { reply: t, emotion: "neutral", motion: null };
+    // 正则兜底：模型偶尔会截断或前后加说明，只捞 reply 字段
+    if (!obj) {
+      const m = cleaned.match(/"reply"\s*:\s*"((?:[^"\\]|\\.){0,600})"/);
+      if (m) {
+        let reply = m[1];
+        try { reply = JSON.parse('"' + reply + '"'); } catch { reply = reply.replace(/\\n/g, "\n").replace(/\\"/g, '"'); }
+        if (reply.trim()) obj = { reply: reply.trim(), emotion: "neutral", motion: null };
+      }
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+      const t = cleaned.replace(/^[\s"'`]+|[\s"'`]+$/g, "");
+      if (!t || /^(null|undefined|\[\]|\{\})$/i.test(t)) {
+        return { reply: FALLBACK_REPLY, emotion: "neutral", motion: null };
+      }
+      return { reply: t, emotion: "neutral", motion: null };
+    }
+    if (typeof obj.reply !== "string" || !obj.reply.trim()) {
+      obj.reply = FALLBACK_REPLY;
+    } else {
+      obj.reply = obj.reply.trim();
+    }
+    if (typeof obj.emotion !== "string" || !obj.emotion) obj.emotion = "neutral";
+    if (obj.motion === undefined) obj.motion = null;
+    return obj;
   }
 
   /** 统一 fetch 带超时 */
@@ -264,8 +298,18 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   }
 
   async function chatOpenAI(history, opts, cfg) {
-    if (cfg.apiKey) return chatDirect(history, opts, cfg);
-    return chatViaProxy(history, opts, cfg);
+    const call = () => (cfg.apiKey ? chatDirect(history, opts, cfg) : chatViaProxy(history, opts, cfg));
+    const first = await call();
+    if (first && first.reply && first.reply !== FALLBACK_REPLY) return first;
+    // 解析失败（空回复/走神兜底）：强约束"只输出 JSON"重试一次，仍失败保留首次结果
+    try {
+      const strictOpts = Object.assign({}, opts, { strictJson: true });
+      const second = cfg.apiKey ? chatDirect(history, strictOpts, cfg) : chatViaProxy(history, strictOpts, cfg);
+      if (second && second.reply && second.reply !== FALLBACK_REPLY) return second;
+    } catch (e) {
+      console.warn("结构化重试失败：", e.message);
+    }
+    return first;
   }
 
   async function chat(history, opts) {
@@ -357,3 +401,6 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     getApiKey, setApiKey, parseStructured
   };
 })();
+
+// 供 node:test 单测使用（浏览器里 module 不存在，不影响运行时）
+if (typeof module === "object" && module.exports) module.exports = API;
