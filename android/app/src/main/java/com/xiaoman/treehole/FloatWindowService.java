@@ -282,6 +282,8 @@ public class FloatWindowService extends Service {
             }
         });
         // 加载迷你模式入口（与主壳同源 asset 路径；?float=1 触发 web 端小屏布局+跳过 Live2D）
+        // 迷你窗同样挂原生 HTTP 桥：免 key 通道在 file:// 下也能用（Java 侧代发，无 CORS）
+        panelWeb.addJavascriptInterface(new NetBridge(panelWeb), "AndroidNet");
         panelWeb.loadUrl("file:///android_asset/www/index.html?float=1");
         // 注：迷你窗不挂 AndroidTTS 桥（主 WebView 独占 TTS 引擎）；web 端检测不到桥时
         // 自动降级 speechSynthesis，语音同样可用，主界面语音不受双实例影响

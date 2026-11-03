@@ -294,6 +294,32 @@ const App = (() => {
     clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), ms);
   }
 
+  // ---------- 外观（浅色/深色/跟随系统；用户可手动覆盖，不靠系统猜） ----------
+  const THEME_KEY = "xiaoman_theme";
+  function applyTheme(v) {
+    const mode = v === "light" || v === "dark" ? v : "auto";
+    document.body.classList.remove("theme-light", "theme-dark");
+    if (mode !== "auto") document.body.classList.add("theme-" + mode);
+    try { localStorage.setItem(THEME_KEY, mode); } catch (e) {}
+  }
+  applyTheme((() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })());
+  // 系统深浅色在 WebView 里切换时（Android 声明了 uiMode 不重建页面）由原生调用
+  window.__retheme = () => applyTheme((() => {
+    try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; }
+  })());
+
+  // ---------- 降级提示（安静、可关闭） ----------
+  // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。
+  function showDegrade(kind) {
+    try { if (sessionStorage.getItem("xiaoman_degrade_off") === "1") return; } catch (e) {}
+    const badge = $("degradeBadge");
+    if (!badge) return;
+    const txt = $("degradeText");
+    if (txt) txt.textContent = kind === "offline" ? "离线模式" : "本地模式";
+    badge.classList.remove("hidden");
+  }
+  window.__onDegrade = showDegrade;
+
   // ---------- 渲染 ----------
   function addMsg(text, who, opts = {}) {
     // [probe] 渲染探针（logcat tag=XiaoManWeb）：只记方向与长度，不落内容（CI 验证迷你窗聊天链路）
@@ -352,9 +378,9 @@ const App = (() => {
     box.innerHTML = "";
     const entries = Object.entries(mem);
     if (!entries.length) {
-      const empty = document.createElement("span");
-      empty.className = "chip empty";
-      empty.textContent = "还没有，聊着聊着就有了";
+      const empty = document.createElement("div");
+      empty.className = "drawer-empty";
+      empty.textContent = "小满还没记住什么。聊着聊着，称呼、人物、事情就会记在这里。";
       box.appendChild(empty);
     } else {
       for (const [k, v] of entries) {
@@ -685,7 +711,22 @@ const App = (() => {
   }
 
   // ---------- 开场 ----------
+  const GREET_KEY = "xiaoman_greet_at";       // 上次开场时间
+  const GREET_TAIL_KEY = "xiaoman_greet_tail"; // 上次开场的末条文案（用于内容去重）
   function greet() {
+    let lastGreet = 0, tail = "";
+    try {
+      lastGreet = Number(localStorage.getItem(GREET_KEY) || 0) || 0;
+      tail = localStorage.getItem(GREET_TAIL_KEY) || "";
+    } catch (e) {}
+    // 去重：如果恢复出来的最后一条就是上次开场的末条（说明用户只是刷新/重进、
+    // 中间没说过话），就不要再插一条开场——否则气泡会一次次累积。
+    // 有待补回复的消息时例外：必须告诉用户"话没丢"。
+    if (!loadPending().length && tail && Date.now() - lastGreet < 6 * 3600 * 1000) {
+      const rows = document.querySelectorAll("#messages .msg-row .bubble");
+      const lastBubble = rows.length ? rows[rows.length - 1].innerText.trim() : "";
+      if (lastBubble && lastBubble.endsWith(tail)) return;
+    }
     const mem = loadMem();
     const band = timeBand();
     const name = mem["昵称"] ? `${mem["昵称"]}，` : "";
@@ -733,6 +774,10 @@ const App = (() => {
         reply += `||对了，你之前跟我说的那几句话我都记着||刚才信号不太好没接上——你随便说句什么，我缓过来就回你`;
       }
     } catch (e) { /* 数据层异常不挡开场 */ }
+    try {
+      localStorage.setItem(GREET_KEY, String(Date.now()));
+      localStorage.setItem(GREET_TAIL_KEY, reply.split("||").pop());
+    } catch (e) {}
     setTimeout(() => {
       sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
     }, 900);
@@ -754,14 +799,11 @@ const App = (() => {
 
   function closePanel(el) {
     if (el.classList.contains("hidden")) return;
-    el.classList.add("is-closing");
-    // 等退出动画放完再真正隐藏（prefers-reduced-motion 下动画被压到极短，同样成立）
-    setTimeout(() => {
-      el.classList.add("hidden");
-      el.classList.remove("is-closing");
-      if (returnFocus && returnFocus.focus) returnFocus.focus();
-      returnFocus = null;
-    }, 200);
+    // 零动画：直接隐藏，不等待退场过渡
+    el.classList.add("hidden");
+    el.classList.remove("is-closing");
+    if (returnFocus && returnFocus.focus) returnFocus.focus();
+    returnFocus = null;
   }
 
   // Esc 关闭最上层；Tab 在面板内循环，避免焦点跑到背后的页面上
@@ -799,7 +841,11 @@ const App = (() => {
       // isComposing / keyCode 229：中文输入法候选确认回车，不算发送
       if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitText();
     });
-    $("micBtn").onclick = () => toast("语音输入接入中，先打字撩她吧");
+    $("micBtn") && ($("micBtn").onclick = () => toast("语音输入接入中，先打字撩她吧"));
+    $("degradeClose") && ($("degradeClose").onclick = () => {
+      $("degradeBadge").classList.add("hidden");
+      try { sessionStorage.setItem("xiaoman_degrade_off", "1"); } catch (e) {}
+    });
     $("memoryBtn").onclick = () => { renderMem(); openPanel($("memoryDrawer"), $("memoryBtn")); };
     $("memoryClose").onclick = () => closePanel($("memoryDrawer"));
     $("memoryDrawer").querySelector(".drawer-mask").onclick = () => closePanel($("memoryDrawer"));
@@ -828,6 +874,7 @@ const App = (() => {
       $("cfgTtsBase").value = cfg.ttsBase || "";
       $("cfgTts").value = cfg.tts || "server";
       $("cfgVoice").value = cfg.voice || "zh-CN-XiaoyiNeural";
+      $("cfgTheme").value = (() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })();
       $("cfgTestResult").textContent = "";
       openPanel($("settingsModal"), $("settingsBtn"));
     };
@@ -845,6 +892,11 @@ const App = (() => {
         });
         toast("已保存");
       });
+    });
+    // 外观切换即时生效（深色/浅色/跟随系统），不依赖 WebView 重绘时机
+    $("cfgTheme").addEventListener("change", () => {
+      applyTheme($("cfgTheme").value);
+      toast("外观已切换");
     });
     // Key 只进内存，不落 localStorage
     $("cfgApiKey").addEventListener("change", () => {

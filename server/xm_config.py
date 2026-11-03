@@ -22,9 +22,18 @@ BIND_HOST = (os.environ.get("XIAOMAN_BIND_HOST") or "127.0.0.1").strip()
 MOCK_PORT = _port("XIAOMAN_MOCK_PORT", 8902)
 TTS_PORT = _port("XIAOMAN_TTS_PORT", 8903)
 
-# 逗号分隔的 Origin 白名单；默认仅本地前端站点
+# 逗号分隔的 Origin 白名单。
+# 默认放行：本地前端站点、安卓 WebView（file:// 页面的 Origin 是字面量 "null"）、
+# 安卓 WebViewAssetLoader 同源域（https://appassets.androidplatform.net）。
+# 注意：安卓端已改为 https 同源加载，正常情况下不再产生 "null"；保留它是为了兼容
+# 旧 APK / 其他 file:// 壳（例如悬浮窗 WebView）与本地调试。
+_DEFAULT_ORIGINS = ",".join([
+    "http://127.0.0.1:8901",
+    "null",
+    "https://appassets.androidplatform.net",
+])
 ALLOW_ORIGINS = tuple(
-    o.strip() for o in (os.environ.get("XIAOMAN_ALLOW_ORIGINS") or "http://127.0.0.1:8901").split(",")
+    o.strip() for o in (os.environ.get("XIAOMAN_ALLOW_ORIGINS") or _DEFAULT_ORIGINS).split(",")
     if o.strip()
 )
 

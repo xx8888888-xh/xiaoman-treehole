@@ -10,7 +10,10 @@ x-common-env: &common-env
   AI_MODEL: ${AI_MODEL:-nvidia/nemotron-3.5-lightning:free}
   TTS_BASE: ${TTS_BASE:-http://127.0.0.1:8903}
   TTS_VOICE: ${TTS_VOICE:-zh-CN-XiaoyiNeural}
-  XIAOMAN_ALLOW_ORIGINS: ${XIAOMAN_ALLOW_ORIGINS:-http://127.0.0.1:8901}
+  # 安卓壳：file:// 页面 Origin 是字面量 "null"；WebViewAssetLoader 域是
+  # https://appassets.androidplatform.net。三者都必须在白名单里，否则 APK 内
+  # 拉模型 / 调代理一律被 CORS 拦。
+  XIAOMAN_ALLOW_ORIGINS: ${XIAOMAN_ALLOW_ORIGINS:-http://127.0.0.1:8901,null,https://appassets.androidplatform.net}
 
 x-labels: &labels
   com.dsh.project: treehole

@@ -150,9 +150,19 @@ class Handler(BaseHTTPRequestHandler):
         logger.info("%s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
 
     def _cors(self):
-        """CORS 白名单（默认仅 http://127.0.0.1:8901）；未命中不发 ACAO"""
+        """CORS 白名单；未命中不发 ACAO"""
         for k, v in xm_config.cors_headers(self.headers.get("Origin")).items():
             self.send_header(k, v)
+
+    def _cors_audio(self):
+        """音频响应：公开资源，直接放行任意 Origin。
+
+        安卓 WebView（file:// → Origin: null，或 https://appassets.androidplatform.net）
+        播放时前端会给 <audio> 设 crossOrigin="anonymous" 才能用 WebAudio 取音量包络；
+        没有 ACAO 头时浏览器会直接静音（不是播放失败，是"有画面无声"）。
+        """
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Accept-Ranges", "none")
 
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode()
@@ -211,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
             audio = asyncio.run(_get_or_generate_audio(text, voice))
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
-            self._cors()
+            self._cors_audio()
             self.send_header("Content-Length", str(len(audio)))
             self.end_headers()
             self.wfile.write(audio)

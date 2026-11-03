@@ -15,8 +15,19 @@ APK_BASE="xiaoman-treehole-v${VER_NAME//./}-debug"
 # ---- SDK 路径：强制要求 ANDROID_HOME，缺省不再用他机路径 ----
 : "${ANDROID_HOME:?请设置 ANDROID_HOME 环境变量（指向 Android SDK 根目录）}"
 SDK="$ANDROID_HOME"
-BT="$SDK/build-tools/34.0.0"
+# build-tools 自选：取版本最高且含**可执行** aapt2 的那个
+# （有的本地 SDK 目录里混进的是 Windows 的 aapt2.exe，WSL 下不可执行）
+BT=""
+for d in "$SDK"/build-tools/*; do
+  if [ -x "$d/aapt2" ]; then BT="$d"; fi
+done
+[ -n "$BT" ] || { echo "找不到可执行的 aapt2（ANDROID_HOME=$SDK）"; exit 1; }
+# platform jar：优先 android-34，其次任意已安装平台
 JAR="$SDK/platforms/android-34/android.jar"
+if [ ! -f "$JAR" ]; then
+  JAR="$(ls "$SDK"/platforms/*/android.jar 2>/dev/null | head -1)"
+fi
+[ -f "$JAR" ] || { echo "找不到 android.jar（ANDROID_HOME=$SDK）"; exit 1; }
 
 APP="$ROOT/android/app"
 MAIN="$APP/src/main"
@@ -36,12 +47,15 @@ echo "[1/6] aapt2 compile+link"
 "$BT/aapt2" compile --dir res -o "$WORK/res.zip"
 "$BT/aapt2" link -o "$WORK/base.apk" -I "$JAR" --manifest AndroidManifest.xml \
   -A "$MAIN/assets" --java "$WORK/gen" \
+  --debug-mode \
   --min-sdk-version 24 --target-sdk-version 34 \
   --version-code "$VER_CODE" --version-name "$VER_NAME" \
   "$WORK/res.zip"
 
 echo "[2/6] javac"
-find "$WORK/gen" "$MAIN/java" -name "*.java" > "$WORK/sources.txt"
+# @sources.txt 按空白切分，路径里不能有空格 → 统一写相对 MAIN 的路径
+find "$WORK/gen" "$MAIN/java" -name "*.java" -print0 \
+  | xargs -0 -I{} realpath --relative-to="$MAIN" {} > "$WORK/sources.txt"
 # 优先用系统 javac（GitHub runner/本地JDK均有），否则回落 ecj（沙箱JRE-only环境）
 if command -v javac >/dev/null 2>&1; then
   # 编译错误不应被过滤器隐藏：先跑 javac 拿真实退出码，再过滤回显 stderr（CI runner 可能无 rg）
@@ -93,13 +107,23 @@ find "$WORK/classes" -name "*.class" -print0 | xargs -0 "$BT/d8" --release --lib
 echo "[3.1] class files: $(find "$WORK/classes" -name '*.class' | wc -l), dex: $(ls -la "$WORK/dex" | tail -1)"
 # classes.dex 必须在 APK 根目录
 cp "$WORK/base.apk" "$OUT/app-unsigned.apk"
-cd "$WORK/dex" && zip -q -j "$OUT/app-unsigned.apk" classes.dex
+if command -v zip >/dev/null 2>&1; then
+  cd "$WORK/dex" && zip -q -j "$OUT/app-unsigned.apk" classes.dex
+else
+  # 无 zip 的精简环境（如某些 WSL 发行版）→ 用 Python 标准库追加，零额外依赖
+  python3 - "$OUT/app-unsigned.apk" "$WORK/dex/classes.dex" <<'PY'
+import sys, zipfile
+apk, dex = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(apk, "a", zipfile.ZIP_DEFLATED) as z:
+    z.write(dex, "classes.dex")
+PY
+fi
 
 echo "[4/6] zipalign"
 "$BT/zipalign" -f 4 "$OUT/app-unsigned.apk" "$OUT/app-aligned.apk"
 
 echo "[5/6] debug keystore"
-KS="$WORK/debug.keystore"
+KS="$ECJ_CACHE_DIR/debug.keystore"   # 放缓存目录：跨构建复用，签名稳定（否则每次 install -r 都要先卸载）
 KS_PASS="${KS_PASS:-xiaoman2026}"  # 仅 debug 用途，建议通过环境变量 KS_PASS 覆盖
 [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -alias xiaoman \
   -storepass "$KS_PASS" -keypass "$KS_PASS" -keyalg RSA -keysize 2048 \

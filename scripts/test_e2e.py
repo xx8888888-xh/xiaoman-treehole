@@ -472,9 +472,10 @@ async def main():
                 "() => { localStorage.setItem('xiaoman_pending', JSON.stringify("
                 "[{content:'上周说的搬家的事', at: Date.now()-86400000}])); location.reload(); }")
             await pg2.wait_for_selector("#textInput", state="visible", timeout=15000)
-            # greet 分条发送：等末条"信号不太好"出现（此时前序条已全部渲染）——
-            # 等首条会在 typing 队列中途返回，末条未出造成时序假 FAIL（06:51 轮实测）
-            greet_g = await wait_contains(pg2, "#messages", "信号不太好", timeout=20)
+            # greet 分条发送：等**本次开场特有**的末条"…没接上"出现。
+            # 注意不能等"信号不太好"——历史恢复里可能已有 g-1 的同名词，会在
+            # greet 渲染前就命中，造成时序假 FAIL（16:53 CI 轮实测）。
+            greet_g = await wait_contains(pg2, "#messages", "没接上", timeout=20)
             ok_g7 = "我都记着" in greet_g and "信号不太好" in greet_g
             print("⑦g-7 重访 greet 排队提示:", "PASS" if ok_g7 else f"FAIL {greet_g[-60:]!r}")
             check("⑦g-7 重访 greet 排队提示", ok_g7)

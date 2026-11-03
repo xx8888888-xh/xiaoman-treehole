@@ -135,13 +135,15 @@ const FriendCard = (() => {
     cv.width = W; cv.height = H;
     const ctx = cv.getContext("2d");
     const texts = [];
-    const label = (s, x, y, font, color, align) => {
+    const label = (s, x, y, font, color, align, maxW) => {
       s = String(s);
       texts.push(s);                                   // 账本：所有落卡文案
       ctx.font = font; ctx.fillStyle = color;
       ctx.textAlign = align || "center";
       ctx.textBaseline = "alphabetic";
-      ctx.fillText(s, x, y);
+      // maxWidth：canvas 会在超宽时横向压缩，避免长文案溢出卡片
+      if (maxW) ctx.fillText(s, x, y, maxW);
+      else ctx.fillText(s, x, y);
     };
 
     // 背景：奶油→樱粉渐变
@@ -206,7 +208,7 @@ const FriendCard = (() => {
       ctx.lineWidth = 2.5; ctx.strokeStyle = "rgba(247,168,184,0.5)"; ctx.stroke();
       label(c[0], gx + 190, gy + 42, "24px " + FONT, INK_L);
       const main = c[1] + (c[2] || "");
-      label(main, gx + 190, gy + 104, "bold 50px " + FONT, INK);
+      label(main, gx + 190, gy + 104, "bold 50px " + FONT, INK, "center", 336);
     });
 
     // 里程碑徽章（已达成的最大里程碑；无则不画）
@@ -226,9 +228,9 @@ const FriendCard = (() => {
     }
 
     // 尾部：固定文案池随机（非用户数据）+ 底注（加深保对比度）
-    label(TAILS[Math.floor(Math.random() * TAILS.length)], 450, 1108, "29px " + FONT, INK);
-    label("小满是 AI 朋友 · 聊天数据只存在你的手机上", 450, 1148, "20px " + FONT, INK);
-    label("小满树洞 · 开源", 450, 1178, "bold 20px " + FONT, PINK_D);
+    label(TAILS[Math.floor(Math.random() * TAILS.length)], 450, 1108, "29px " + FONT, INK, "center", 780);
+    label("小满是 AI 朋友 · 聊天数据只存在你的手机上", 450, 1148, "20px " + FONT, INK, "center", 800);
+    label("小满树洞 · 开源", 450, 1178, "bold 20px " + FONT, PINK_D, "center", 800);
 
     const url = cv.toDataURL("image/png");
     window.__cardTexts = texts;                        // 暴露账本供 E2E 脱敏审计

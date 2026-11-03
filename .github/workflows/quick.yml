@@ -32,11 +32,28 @@ jobs:
       - name: 语法编译检查（server + scripts）
         run: python -m compileall -q server scripts
 
-      - name: mock API 契约单测
-        run: python scripts/test_mock_api.py
+      - name: Python 单测（同一步内起 mock 服务）
+        # 关键：GitHub Actions 每个 step 结束会清理后台进程，不能"上一步起服务、
+        # 下一步跑测试"（会 0/8 Connection refused）。起服务、等待、测试、收尸放一起。
+        env:
+          AI_MODE: mock
+        run: |
+          python server/mock_api.py > /tmp/mock.log 2>&1 &
+          MPID=$!
+          trap 'kill $MPID 2>/dev/null || true' EXIT
+          ready=0
+          for i in $(seq 1 25); do
+            if curl -sf http://127.0.0.1:8902/health > /dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then echo "mock 启动失败"; tail -30 /tmp/mock.log; exit 1; fi
+          echo "mock ready"
+          python scripts/test_mock_api.py
+          python scripts/test_memory_recall.py
 
-      - name: 记忆召回单测（纯 stdlib，无需浏览器）
-        run: python scripts/test_memory_recall.py
+      - name: 失败时输出服务日志
+        if: failure()
+        run: tail -50 /tmp/mock.log || true
 
   js-fast:
     name: js-fast

@@ -13,15 +13,7 @@
 <body>
 <div id="app">
 
-  <!-- ============ 背景：手绘点缀层 ============ -->
-  <div class="bg-layer" aria-hidden="true">
-    <svg class="doodle cloud c1" viewBox="0 0 120 60"><path d="M20 45 Q10 45 10 35 Q10 26 20 26 Q22 14 35 14 Q46 14 49 23 Q52 18 60 18 Q72 18 73 29 Q84 28 85 37 Q85 45 75 45 Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-    <svg class="doodle cloud c2" viewBox="0 0 120 60"><path d="M20 45 Q10 45 10 35 Q10 26 20 26 Q22 14 35 14 Q46 14 49 23 Q52 18 60 18 Q72 18 73 29 Q84 28 85 37 Q85 45 75 45 Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-    <svg class="doodle star s1" viewBox="0 0 20 20"><path d="M10 1 L12.2 7.2 L19 7.6 L13.6 11.6 L15.6 18 L10 14.2 L4.4 18 L6.4 11.6 L1 7.6 L7.8 7.2 Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-    <svg class="doodle star s2" viewBox="0 0 20 20"><path d="M10 1 L12.2 7.2 L19 7.6 L13.6 11.6 L15.6 18 L10 14.2 L4.4 18 L6.4 11.6 L1 7.6 L7.8 7.2 Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-    <svg class="doodle sprout" viewBox="0 0 40 40"><path d="M20 36 Q20 24 20 16" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M20 20 Q10 20 8 10 Q18 10 20 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M20 16 Q28 14 30 6 Q22 7 20 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-    <span class="paw paw1"></span><span class="paw paw2"></span><span class="paw paw3"></span>
-  </div>
+  <!-- 背景点缀层已移除：装饰云朵/星星/爪印属于干扰元素，且带动画 -->
 
   <!-- ============ 顶栏 ============ -->
   <header class="topbar">
@@ -42,7 +34,6 @@
   <!-- ============ Live2D 舞台 ============ -->
   <div id="stage" tabindex="0" role="button" aria-label="和小满互动（回车或空格摸头）">
     <span class="stage-mood"><span id="moodText">在听你说</span></span>
-    <span class="stage-tip">点我一下试试 · 摸头有惊喜</span>
   </div>
 
   <!-- ============ 对话区 ============ -->
@@ -51,15 +42,12 @@
       <div id="messages" role="log" aria-live="polite" aria-relevant="additions">
         <div class="msg-row hidden" id="typingRow">
           <div class="avatar-mini">满</div>
-          <div class="bubble them typing"><span></span><span></span><span></span></div>
+          <div class="bubble them typing">正在想…</div>
         </div>
       </div>
     </div>
     <div class="hook-bar hidden" id="hookBar"></div>
     <div class="inputbar">
-      <button class="icon-btn mic" id="micBtn" aria-label="语音输入">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11 C5 15 8 18 12 18 C16 18 19 15 19 11"/><path d="M12 18 L12 21 M8.5 21 L15.5 21"/></svg>
-      </button>
       <input id="textInput" type="text" placeholder="跟小满说点什么…" aria-label="给小满发消息" enterkeyhint="send" autocomplete="off" maxlength="500">
       <button class="send-btn" id="sendBtn" aria-label="发送">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 L20 4 L14.5 20 L11.5 13.5 Z"/></svg>
@@ -115,6 +103,13 @@
       <label class="field"><span>语音服务地址</span>
         <input id="cfgTtsBase" type="url" inputmode="url" placeholder="http://127.0.0.1:8903">
       </label>
+      <label class="field"><span>外观</span>
+        <select id="cfgTheme">
+          <option value="auto">跟随系统</option>
+          <option value="light">浅色</option>
+          <option value="dark">深色</option>
+        </select>
+      </label>
       <button class="ghost-btn" id="cfgTestBtn">测试连接</button>
       <p class="mini" id="cfgTestResult" role="status" aria-live="polite"></p>
       <label class="field"><span>语音回复</span>
@@ -146,6 +141,12 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <!-- ============ 降级提示（安静、可关闭；仅在 AI 掉到本地引擎时出现） ============ -->
+  <div id="degradeBadge" class="degrade hidden" role="status">
+    <span id="degradeText">本地模式</span>
+    <button id="degradeClose" aria-label="关闭提示">✕</button>
+  </div>
 
   <!-- ============ P2-4 悬浮挂件气泡 ============ -->
   <div id="widgetBubble" role="status" aria-live="polite"></div>

@@ -13,10 +13,14 @@ import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.io.InputStream;
+import java.util.HashMap;
 import java.util.Locale;
 
 /**
@@ -27,6 +31,12 @@ import java.util.Locale;
  * - WebView 远程调试仅在 debug 包开启
  */
 public class MainActivity extends Activity {
+
+    /** WebViewAssetLoader 的零依赖等价实现：把 https://appassets… 映射到 assets/。
+     *  为什么不用 file://：file:// 页面的 Origin 是 "null"，模型 JSON / 贴图 XHR 会被
+     *  CORS 拦（Live2D 直接不渲染），且 http 子资源会被 mixed-content 拦。 */
+    private static final String ASSET_HOST = "appassets.androidplatform.net";
+    private static final String BASE_URL = "https://" + ASSET_HOST + "/www/index.html";
 
     private WebView webView;
     private TextToSpeech tts;
@@ -85,17 +95,16 @@ public class MainActivity extends Activity {
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setCacheMode(WebSettings.LOAD_DEFAULT);
         ws.setGeolocationEnabled(false);
+        // 页面是 https://appassets…，而本地 TTS/代理是 http://127.0.0.1：
+        // 不放开 mixed-content 的话音频会被静默拦下（"有字幕没声音"）
+        if (Build.VERSION.SDK_INT >= 21) {
+            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        }
 
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
-                Log.e("MainActivity", "WebView render process gone: " + detail);
-                recreateWebView();
-                return true;
-            }
-        });
+        webView.setWebViewClient(new AssetClient());
         webView.setWebChromeClient(newConsoleClient());
         webView.addJavascriptInterface(new Bridge(), "AndroidTTS");
+        webView.addJavascriptInterface(new NetBridge(webView), "AndroidNet");
 
         boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         if (isDebuggable) {
@@ -105,7 +114,7 @@ public class MainActivity extends Activity {
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
         } else {
-            webView.loadUrl("file:///android_asset/www/index.html");
+            webView.loadUrl(BASE_URL);
         }
         handleFloatIntent(getIntent());
     }
@@ -185,22 +194,81 @@ public class MainActivity extends Activity {
             ws.setMediaPlaybackRequiresUserGesture(false);
             ws.setCacheMode(WebSettings.LOAD_DEFAULT);
             ws.setGeolocationEnabled(false);
-            webView.setWebViewClient(new WebViewClient() {
-                @Override
-                public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
-                    Log.e("MainActivity", "WebView render process gone: " + detail);
-                    recreateWebView();
-                    return true;
-                }
-            });
+            if (Build.VERSION.SDK_INT >= 21) {
+                ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            }
+            webView.setWebViewClient(new AssetClient());
             webView.setWebChromeClient(newConsoleClient());
             webView.addJavascriptInterface(new Bridge(), "AndroidTTS");
+            webView.addJavascriptInterface(new NetBridge(webView), "AndroidNet");
             boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
             if (isDebuggable) {
                 WebView.setWebContentsDebuggingEnabled(true);
             }
-            webView.loadUrl("file:///android_asset/www/index.html");
+            webView.loadUrl(BASE_URL);
         });
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // 活动声明了 uiMode，系统深浅色切换不会重建页面；显式让前端重算外观
+        if (webView != null) {
+            webView.evaluateJavascript("window.__retheme && window.__retheme()", null);
+        }
+    }
+
+    /**
+     * 资源加载器：把 https://appassets.androidplatform.net/www/… 映射到 assets/www/…
+     * 纯 Java 实现（不引入 androidx.webkit），保持"零依赖、可手工构建"。
+     * 好处：页面是正常 https 同源，Live2D 的 model3.json / 贴图 XHR 不再被 CORS 拦。
+     */
+    class AssetClient extends WebViewClient {
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
+            Uri uri = req.getUrl();
+            if (uri == null || !ASSET_HOST.equals(uri.getHost())) return null;
+            String path = uri.getPath();
+            if (path == null || !path.startsWith("/www/")) return null;
+            String assetPath = path.substring(1);   // 去掉前导 / → "www/index.html"
+            // 目录穿越保护
+            if (assetPath.contains("..")) return null;
+            try {
+                InputStream in = getAssets().open(assetPath);
+                return new WebResourceResponse(mimeOf(assetPath), charsetOf(assetPath), in);
+            } catch (Exception e) {
+                Log.w("MainActivity", "asset miss: " + assetPath);
+                return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
+                        new HashMap<String, String>(), null);
+            }
+        }
+
+        @Override
+        public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+            Log.e("MainActivity", "WebView render process gone: " + detail);
+            recreateWebView();
+            return true;
+        }
+    }
+
+    private static String mimeOf(String p) {
+        String s = p.toLowerCase(Locale.ROOT);
+        if (s.endsWith(".html")) return "text/html";
+        if (s.endsWith(".js")) return "text/javascript";
+        if (s.endsWith(".css")) return "text/css";
+        if (s.endsWith(".json")) return "application/json";
+        if (s.endsWith(".png")) return "image/png";
+        if (s.endsWith(".jpg") || s.endsWith(".jpeg")) return "image/jpeg";
+        if (s.endsWith(".svg")) return "image/svg+xml";
+        if (s.endsWith(".mp3")) return "audio/mpeg";
+        if (s.endsWith(".wasm")) return "application/wasm";
+        return "application/octet-stream";
+    }
+
+    private static String charsetOf(String p) {
+        String s = p.toLowerCase(Locale.ROOT);
+        return (s.endsWith(".html") || s.endsWith(".js") || s.endsWith(".css")
+                || s.endsWith(".json")) ? "utf-8" : null;
     }
 
     /** JS 桥：系统 TTS */

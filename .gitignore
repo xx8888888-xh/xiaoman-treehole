@@ -36,5 +36,9 @@ data/
 .venv/
 .venv-win/
 
+# 安卓 assets/www 是 scripts/build_assets.sh 从 web/ 同步出来的生成物
+# （android-ci 每次构建前都会同步）。单一真源是 web/，不要提交这份副本。
+android/app/src/main/assets/www/
+
 # 系统
 .DS_Store

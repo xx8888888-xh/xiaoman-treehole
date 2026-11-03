@@ -186,6 +186,8 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   /** 读服务端 /api/config（非敏感：mode/model/apiBase/provider，不含 key） */
   async function serverConfig(force) {
     if (serverCfg && !force) return serverCfg;
+    // 安卓壳内没有本地服务：不发请求（避免首屏等 4s 超时）
+    if (nativeBridge()) { serverCfg = null; return null; }
     const cfg = loadCfg();
     try {
       const res = await fetchWithTimeout(`${mockBase(cfg)}/api/config`, {}, 4000);
@@ -212,6 +214,9 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
 
   /** Mock 模式：POST {mockBase}/v1/chat/completions */
   async function chatMock(history) {
+    // 安卓 WebView 里没有本地 8902 服务：直接走同进程离线规则引擎
+    // （否则每次都要等 15s 超时才发现不可达）
+    if (nativeBridge()) return MockEngine.reply(history);
     const cfg = loadCfg();
     const base = mockBase(cfg);
     let res;
@@ -297,7 +302,92 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     return parseStructured(content);
   }
 
+  /** 原生桥：安卓 WebView 无本地服务、且 Kilo 不回 CORS 头时，由 Java 侧代发请求。
+   *  约定：AndroidNet.chat(id, url, bodyJson) → 异步回调
+   *  window.__nativeChatDone(id, ok, status, base64Body) */
+  function nativeBridge() {
+    return (typeof window !== "undefined" && window.AndroidNet
+      && typeof window.AndroidNet.chat === "function") ? window.AndroidNet : null;
+  }
+
+  const nativeWaiters = {};
+  let nativeSeq = 0;
+  if (typeof window !== "undefined") {
+    window.__nativeChatDone = (id, ok, status, b64) => {
+      const w = nativeWaiters[id];
+      if (!w) return;
+      delete nativeWaiters[id];
+      clearTimeout(w.timer);
+      if (!ok) {
+        const statusNum = Number(status) || null;
+        w.reject(tagError(new Error(`native chat ${status || "fail"}`), statusNum));
+        return;
+      }
+      try {
+        // 后端返回 UTF-8 JSON 的 base64，前端解码避免 Java 侧转义地狱
+        const raw = decodeURIComponent(escape(atob(String(b64 || ""))));
+        w.resolve(raw);
+      } catch (e) {
+        w.reject(tagError(new Error("native chat 响应解码失败")));
+      }
+    };
+  }
+
+  function nativeChat(url, bodyObj) {
+    const bridge = nativeBridge();
+    if (!bridge) return Promise.reject(tagError(new Error("无原生桥"), null, "config"));
+    return new Promise((resolve, reject) => {
+      const id = `n${++nativeSeq}-${Date.now()}`;
+      const timer = setTimeout(() => {
+        delete nativeWaiters[id];
+        reject(tagError(new Error("native chat timeout"), null, "timeout"));
+      }, 60000);
+      nativeWaiters[id] = { resolve, reject, timer };
+      try {
+        bridge.chat(id, url, JSON.stringify(bodyObj));
+      } catch (e) {
+        clearTimeout(timer);
+        delete nativeWaiters[id];
+        reject(tagError(e));
+      }
+    });
+  }
+
+  /** 安卓免 key 通道：Java 侧直连 Kilo（无 Origin 头，绕过浏览器 CORS） */
+  async function chatNative(history, opts, cfg) {
+    const base = XMConfig.apiRoot(cfg.apiBase || "https://api.kilo.ai/api/gateway");
+    if (!base) throw tagError(new Error("apiBase 为空"), null, "config");
+    // reasoning 模型偶发 content=null（被思维链吃光）：强约束重试一次，不直接判死
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const body = {
+        model: cfg.model,
+        temperature: 0.85,
+        max_tokens: 600,
+        reasoning: { enabled: false },
+        messages: [{ role: "system", content: buildSystemPrompt(attempt ? Object.assign({}, opts, { strictJson: true }) : opts) }, ...toMessages(history)]
+      };
+      const raw = await nativeChat(`${base}/v1/chat/completions`, body);
+      let data = null;
+      try { data = JSON.parse(raw); } catch { throw tagError(new Error("原生通道返回非 JSON")); }
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : null;
+      if (content != null && content !== "") return parseStructured(content);
+      console.warn("原生通道 content 为空，重试:", attempt);
+    }
+    throw new Error("模型连续返回空 content");
+  }
+
+  /** 降级提示：供 UI 显示安静的"本地模式"标识（可关闭） */
+  function markDegraded(kind) {
+    try { if (typeof window !== "undefined" && window.__onDegrade) window.__onDegrade(kind); } catch {}
+  }
+
   async function chatOpenAI(history, opts, cfg) {
+    // 安卓无 key：优先原生直连（免 key Kilo）；失败再按原链路降级
+    if (!cfg.apiKey && nativeBridge()) {
+      try { return await chatNative(history, opts, cfg); }
+      catch (e) { console.warn("native 通道失败，转代理链路:", e.message); }
+    }
     const call = () => (cfg.apiKey ? chatDirect(history, opts, cfg) : chatViaProxy(history, opts, cfg));
     const first = await call();
     if (first && first.reply && first.reply !== FALLBACK_REPLY) return first;
@@ -320,6 +410,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       try { return await chatMock(history); }
       catch (e) {
         console.warn("mock 不可用，转离线引擎:", e.message);
+        markDegraded("offline");
         return MockEngine.reply(history);
       }
     }
@@ -335,9 +426,12 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
         }
       }
       console.warn("openai 失败，降级 mock:", e.message);
-      try { return await chatMock(history); }
-      catch (e2) {
+      try {
+        markDegraded("mock");
+        return await chatMock(history);
+      } catch (e2) {
         console.warn("mock 失败，降级离线引擎:", e2.message);
+        markDegraded("offline");
         return MockEngine.reply(history);
       }
     }
@@ -359,6 +453,9 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       return { ok: true, mode, models: [], note: "纯离线规则引擎可用（不联网）" };
     }
     if (mode === "mock") {
+      if (nativeBridge()) {
+        return { ok: true, mode, models: ["xiaoman-offline"], note: "安卓壳内使用离线规则引擎（无本地服务）" };
+      }
       try {
         const res = await fetchWithTimeout(`${mb}/health`, {}, 4000);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -45,7 +45,12 @@ const TTS = (() => {
    * @param onFail 播放失败（加载/解码/自动播放被拦）时回调 —— 由调用方决定降级
    */
   function playWithLipSync(url, onFrame, onEnd, onFail) {
-    const audio = new Audio(url);
+    // 关键：跨域音频若不带 CORS（crossOrigin），createMediaElementSource 会把输出
+    // 静音（analyser 全 0 采样）——表现为"有字幕没声音"。服务端 /tts 已回
+    // Access-Control-Allow-Origin: *，这里必须同步声明 anonymous。
+    const audio = new Audio();
+    audio.crossOrigin = "anonymous";
+    audio.src = url;
     if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
     currentAudio = audio;
     let ctx = null, analyser = null, srcNode = null, raf = 0, settled = false;
@@ -59,7 +64,7 @@ const TTS = (() => {
     };
 
     audio.onended = () => settle(false);
-    audio.onerror = () => settle(true);   // 真败因（404/解码失败）走降级，不静默
+    audio.onerror = () => settle(true);   // 真败因（404/解码失败/服务端无 CORS）走降级
 
     audio.play().then(() => {
       try {
@@ -71,10 +76,19 @@ const TTS = (() => {
         analyser.fftSize = 256;
         srcNode.connect(analyser); analyser.connect(ctx.destination);
         const buf = new Uint8Array(analyser.frequencyBinCount);
+        let zeroFrames = 0;
         (function loop() {
           analyser.getByteFrequencyData(buf);
           let sum = 0; for (let i = 2; i < 40; i++) sum += buf[i];
           const level = Math.min(1, sum / (38 * 160));   // 0~1 音量包络
+          // AudioContext 被自动播放策略挂起时 analyser 会永远 0 采样：此时不能干等，
+          // 转交给舞台的随机口型兜底（-1），但**不拆音频图**（拆了会真静音）
+          zeroFrames = level === 0 ? zeroFrames + 1 : 0;
+          if (zeroFrames > 45) {
+            onFrame && onFrame(-1);
+            raf = 0;
+            return;
+          }
           onFrame && onFrame(level);
           raf = requestAnimationFrame(loop);
         })();
@@ -83,6 +97,25 @@ const TTS = (() => {
         onFrame && onFrame(-1);
       }
     }).catch(() => settle(true));
+  }
+
+  /** 纯播放（不接 WebAudio）：CORS 拿不到时仍保证"有声音"，只是没有口型同步 */
+  function playPlain(url, onFrame, onEnd, onFail) {
+    const audio = new Audio(url);
+    if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
+    currentAudio = audio;
+    let settled = false;
+    const settle = (failed) => {
+      if (settled) return;
+      settled = true;
+      if (currentAudio === audio) currentAudio = null;
+      onFrame && onFrame(0);
+      if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
+    };
+    audio.onended = () => settle(false);
+    audio.onerror = () => settle(true);
+    onFrame && onFrame(-1);   // 没有真实包络 → 走舞台的随机口型兜底
+    audio.play().catch(() => settle(true));
   }
 
   /** 浏览器 SpeechSynthesis（离线兜底） */
@@ -135,10 +168,14 @@ const TTS = (() => {
     if (mode === "server") {
       const base = (cfg.ttsBase || "http://127.0.0.1:8903").replace(/\/$/, "");
       const url = `${base}/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(cfg.voice || "zh-CN-XiaoyiNeural")}`;
-      // server 路失败（服务挂/超时/解码失败）→ 显式降级 browser，避免静默无声
+      // server 路失败（服务挂/超时/解码失败/跨域被拦）→ 先尝试无口型的纯播放，
+      // 再降级 browser，绝不静默无声
       playWithLipSync(url, onFrame, onEnd, () => {
-        console.warn("server tts 失败，降级 browser");
-        speakBrowser(text, onFrame, onEnd);
+        console.warn("server tts 口型链路失败，尝试纯播放");
+        playPlain(url, onFrame, onEnd, () => {
+          console.warn("server tts 纯播放失败，降级 browser");
+          speakBrowser(text, onFrame, onEnd);
+        });
       });
       return;
     }
