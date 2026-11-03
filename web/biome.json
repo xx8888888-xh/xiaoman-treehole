@@ -1,0 +1,45 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+  "files": {
+    "includes": ["js/**/*.js", "tests/**/*.js", "!js/vendor/**"]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "off"
+      }
+    }
+  },
+  "javascript": {
+    "globals": [
+      "window",
+      "document",
+      "localStorage",
+      "indexedDB",
+      "IDBKeyRange",
+      "fetch",
+      "AbortController",
+      "console",
+      "setTimeout",
+      "clearTimeout",
+      "ChatStore",
+      "API",
+      "XMConfig",
+      "MockEngine",
+      "Stage",
+      "MemoryStore",
+      "Reminders",
+      "Stats",
+      "FriendCard",
+      "Heartbeat",
+      "Widget",
+      "FloatMode",
+      "AndroidTTS"
+    ]
+  }
+}
