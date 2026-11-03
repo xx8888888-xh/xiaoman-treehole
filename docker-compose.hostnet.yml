@@ -1,0 +1,17 @@
+# 可选覆盖：容器无外网出口（如本机 WSL 的 docker bridge 被防火墙拦掉 DNS/TCP）时使用。
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up -d --build
+# 效果：mock / tts 改用 host 网络（直接复刻宿主机出网能力），仍只绑 127.0.0.1；
+#       web 保持 bridge + 端口映射。三个端口在宿主机上的可见性不变。
+services:
+  mock:
+    network_mode: host
+    ports: !reset []
+    environment:
+      XIAOMAN_BIND_HOST: 127.0.0.1
+
+  tts:
+    network_mode: host
+    ports: !reset []
+    environment:
+      XIAOMAN_BIND_HOST: 127.0.0.1
