@@ -10,6 +10,13 @@ AI 陪伴 / 情感倾诉小应用：静态前端（Live2D 小满）+ 本地对�
 docker compose up -d --build      # 或在 WSL: docker compose -f ~/treehole-stack/compose/docker-compose.yml up -d --build
 ```
 
+> 如果所在环境的 Docker 容器**没有外网出口**（本机 WSL 的 bridge 被防火墙拦掉 DNS/TCP，表现为 App 只能降级到本地 mock），
+> 叠加 host 网络覆盖即可（mock/tts 直接复刻宿主机出网能力，仍只绑回环）：
+>
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up -d --build
+> ```
+
 三个服务全部映射到 **宿主机回环**：
 
 | 端口 | 服务 | 说明 |

@@ -336,6 +336,9 @@ treehole/
 - 新增 `scripts/verify_stack.sh [dev|docker]`：curl 三端口 + 健康字段 + CORS 断言，失败 exit 1。
 - 容器保留未清理：`docker ps -a --filter label=com.dsh.project=treehole`。
 - 环境注意：本机 WSL2 的 `dockerd` 随最后一个 WSL 会话退出而停，需要保活会话；WSL 内监听 `127.0.0.1` 的端口可从 Windows 访问（与早期结论相反，实测通过）。
+- 本机 docker bridge **无外网出口**（容器内 DNS/TCP 到外网全部超时，实测 `64.239.123.65:443` / `8.8.8.8:53` 均 FAIL），
+  容器版只能降级到本地 mock。因此额外提供 `docker-compose.hostnet.yml`（mock/tts 改 host 网络、仍绑 `127.0.0.1`），
+  叠加后容器内可直连 Kilo，三端口对宿主机可见性不变；标准环境仍用基础 compose。
 
 ### 12.5 测试基线（mock 模式，Windows `.venv-win`）
 
