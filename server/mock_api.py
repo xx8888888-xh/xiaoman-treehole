@@ -30,6 +30,7 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 import xm_config
+import credentials
 
 # ---------------- 日志配置 ----------------
 logging.basicConfig(
@@ -45,10 +46,10 @@ BIND_HOST = xm_config.BIND_HOST
 PORT = xm_config.MOCK_PORT
 MAX_BODY_SIZE = 64 * 1024  # 64KB
 
-# AI 接口：key 只从环境变量读，绝不写进代码/前端
+# AI 接口：key 只从环境变量 / Windows 凭据管理器读，绝不写进代码/前端
 AI_MODE = (os.environ.get("AI_MODE") or "mock").strip().lower()
 AI_API_BASE = (os.environ.get("AI_API_BASE") or "").strip()
-AI_API_KEY = (os.environ.get("AI_API_KEY") or "").strip()
+AI_API_KEY = credentials.api_key()
 # 默认保留 nvidia 免费模型（Kilo / OpenRouter 均可用；已确认未停服）
 AI_MODEL = (os.environ.get("AI_MODEL") or "nvidia/nemotron-3.5-lightning:free").strip()
 # 该模型默认开思维链，max_tokens < 512 会被 reasoning 吃光导致 content=null

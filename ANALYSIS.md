@@ -451,3 +451,17 @@ treehole/
 4. **不提交**：`.gitignore` 覆盖 `.env`；提交前用 `git status` 复核，未包含任何真实凭据。
 5. **不裸奔**：CORS 白名单 + 回环绑定；对外暴露需自行加反代与鉴权。
 6. **日志脱敏**：上游错误只记录状态码与 message，不打印 Authorization 头。
+7. **凭据管理器读取（`server/credentials.py`）**：`AI_API_KEY` 留空时，Windows 下用
+   `CredRead`（`advapi32` P/Invoke，PowerShell 内嵌 C#）读取通用凭据，默认 Target 为
+   Freebuff BYOK 写入的 `com.freebuff.byok.v1/connection:…`，可用 `AI_KEY_CREDENTIAL_TARGET` 覆盖。
+   值只存在于进程内存（`_Secret` 的 `repr()` 返回 `<redacted>`），自检脚本只输出 `has_key`/`length`。
+   **容器内（Linux）没有凭据管理器，走环境变量注入**，这是容器化部署的既定边界。
+
+### 13.7 OpenRouter 兜底通道实测（真实 key，来自凭据管理器）
+
+- 配置：`AI_API_BASE=https://openrouter.ai/api/v1`、`AI_MODEL=nvidia/nemotron-3.5-lightning:free`、
+  `AI_API_KEY` 留空（运行时读取凭据）。
+- `GET /api/config` → `provider=openrouter`、`hasServerKey=true`。
+- `POST /api/chat` → **2.68s**，返回 41 字有效回复（非 null）：
+  > 「哪怕只有短短几分钟，也请记得起身走动一下，伸展一下身体，让疲惫的双脚稍微松一口气。」
+- 结论：兜底通道可用；因免费额度 50 次/天，仅在 Kilo 失败时使用。

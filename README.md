@@ -41,14 +41,15 @@ bash scripts/verify_stack.sh dev   # curl 三端口做一次冒烟
 |------|------|
 | `AI_MODE` | `openai`（走真实模型）/ `mock`（本地规则引擎）/ `offline`（纯离线，不联网） |
 | `AI_API_BASE` | OpenAI 兼容地址，如 `https://api.kilo.ai/api/gateway` |
-| `AI_API_KEY` | 仅 `openrouter` / 自建网关需要；**Kilo 免 Key** |
+| `AI_API_KEY` | 仅 `openrouter` / 自建网关需要；**Kilo 免 Key**。留空时 Windows 下自动从凭据管理器读取 |
+| `AI_KEY_CREDENTIAL_TARGET` | 读取通用凭据的 Target 名（默认 Freebuff BYOK 写入的那条），可选 |
 | `AI_MODEL` | 默认 `nvidia/nemotron-3.5-lightning:free` |
 | `TTS_BASE` / `TTS_VOICE` | 语音服务地址与音色 |
 
 两条预置通道：
 
 - **主通道（免 Key）**：`AI_API_BASE=https://api.kilo.ai/api/gateway`，`AI_API_KEY` 留空。
-- **备选通道（兜底）**：`AI_API_BASE=https://openrouter.ai/api/v1`，Key 运行时从环境变量 / Windows 凭据管理器注入。
+- **备选通道（兜底）**：`AI_API_BASE=https://openrouter.ai/api/v1`，Key 运行时从环境变量 / Windows 凭据管理器注入（`AI_API_KEY` 留空即走凭据管理器，见 `server/credentials.py`）。
 
 模型默认开启思维链，因此请求固定 `max_tokens >= 512`（实际 600）并带 `reasoning: {"enabled": false}`，避免 `content` 被 reasoning 吃空返回 `null`。
 
