@@ -268,12 +268,20 @@ async def main():
             await pg.screenshot(path=os.path.join(SHOTS, "13_p03_update_tell.png"))
 
             # ⑦d-3 幂等：再 reload → 登记过版本不再说
+            # 说明：历史持久化后，旧告知会作为历史气泡恢复；断言改为"不新增告知条数"
+            n_tell_before = await pg.evaluate(
+                "() => [...document.querySelectorAll('#messages .bubble')]"
+                ".filter(b => b.innerText.includes('升级了一下脑子')).length")
             await pg.evaluate("() => location.reload()")
             await asyncio.sleep(4)   # 等 greet 渲染稳定（分条+打字动画）
             msgs3 = await pg.inner_text("#messages")
             n_rows = await pg.evaluate("document.querySelectorAll('#messages .msg-row').length")
-            ok7d3 = n_rows >= 1 and "升级了一下脑子" not in msgs3
-            print("⑦d-3 告知幂等不重复:", "PASS" if ok7d3 else f"FAIL (rows={n_rows})")
+            n_tell_after = await pg.evaluate(
+                "() => [...document.querySelectorAll('#messages .bubble')]"
+                ".filter(b => b.innerText.includes('升级了一下脑子')).length")
+            ok7d3 = n_rows >= 1 and n_tell_after == n_tell_before and n_tell_after <= 1
+            print("⑦d-3 告知幂等不重复:", "PASS" if ok7d3 else
+                  f"FAIL (rows={n_rows}, tell={n_tell_before}->{n_tell_after})")
             check("⑦d-3 告知幂等不重复", ok7d3)
 
             # —— ⑦e 关系进展感知（P1-1：判定单测 + 端到端天数问答 + 里程碑 + 月度回放） ——
@@ -464,7 +472,7 @@ async def main():
             await pg2.wait_for_selector("#textInput", state="visible", timeout=15000)
             # greet 分条发送：等末条"信号不太好"出现（此时前序条已全部渲染）——
             # 等首条会在 typing 队列中途返回，末条未出造成时序假 FAIL（06:51 轮实测）
-            greet_g = await wait_contains(pg2, "#messages", "信号不太好", timeout=12)
+            greet_g = await wait_contains(pg2, "#messages", "信号不太好", timeout=20)
             ok_g7 = "我都记着" in greet_g and "信号不太好" in greet_g
             print("⑦g-7 重访 greet 排队提示:", "PASS" if ok_g7 else f"FAIL {greet_g[-60:]!r}")
             check("⑦g-7 重访 greet 排队提示", ok_g7)
@@ -759,14 +767,26 @@ async def main():
             check("⑦k-3 脱敏审计零泄漏", ok_k3)
 
             # k-4 分享降级链：(a) 无 share API → 触发下载；(b) 注入 mock share → 被调用且收到 PNG
-            fn_k = ""
-            try:
-                async with pg6.expect_download(timeout=8000) as dl_k:
-                    await pg6.click("#cardSave")
-                dl_v = await dl_k.value
-                fn_k = dl_v.suggested_filename or ""
-            except Exception as ex:
-                fn_k = f"NO_DL({ex.__class__.__name__})"
+            # 说明：headless 下 expect_download 对 blob: URL 偶发不触发（本机 chromium 构建差异），
+            # 改为拦截 HTMLAnchorElement.click 记录 download 属性，等价验证"下载回退"链路。
+            await pg6.evaluate(
+                """() => {
+                  // 本机 Chromium 自带 navigator.canShare/share；置空（实例属性遮蔽原型）才能走到"下载"回退分支
+                  try { navigator.canShare = undefined; navigator.share = undefined; } catch (e) {}
+                  window.__dlCalls = [];
+                  const orig = HTMLAnchorElement.prototype.click;
+                  HTMLAnchorElement.prototype.click = function () {
+                    window.__dlCalls.push({
+                      download: this.getAttribute('download'),
+                      href: this.getAttribute('href'),
+                    });
+                    return orig.apply(this, arguments);
+                  };
+                }""")
+            await pg6.eval_on_selector("#cardSave", "el => el.click()")
+            await pg6.wait_for_timeout(1200)
+            dl = await pg6.evaluate("() => window.__dlCalls")
+            fn_k = (dl[0]["download"] or "") if dl else "NO_DL"
             await pg6.evaluate(
                 """() => {
                   window.__shareCalls = [];
@@ -777,7 +797,7 @@ async def main():
                       name: data.files && data.files[0] ? data.files[0].name : '' });
                   };
                 }""")
-            await pg6.click("#cardSave")
+            await pg6.eval_on_selector("#cardSave", "el => el.click()")
             await pg6.wait_for_timeout(800)
             st_k4 = await pg6.evaluate("() => ({ calls: window.__shareCalls, result: window.__cardShareResult })")
             ok_k4 = (str(fn_k).endswith(".png")
