@@ -69,7 +69,10 @@ bash scripts/verify_stack.sh dev   # curl 三端口做一次冒烟
 - **容器内读不到 Windows 凭据管理器**（Linux 没有 `CredRead`）。跑在 Docker 里时必须用 `.env` / `-e AI_API_KEY=…` **显式注入**，否则 OpenRouter 通道不可用、只会走 Kilo（免 Key）或降级到本地 mock。`scripts/dev_up.sh` 启动后会打印通道自检结果，缺 Key 时给 ⚠️ 提示。
 - 设置页输入的 Key **只存在当前页面内存**，刷新即失效，不写 `localStorage`、不进 IndexedDB。
 - 服务端 `/api/config` 只下发 mode/model/base/provider，`AI_API_KEY` 永不外泄。
-- CORS 默认白名单仅 `http://127.0.0.1:8901`（可用 `XIAOMAN_ALLOW_ORIGINS` 覆盖）。
+- CORS 默认白名单：`http://127.0.0.1:8901`（网页前端）、字面量 `null`（旧 `file://` 壳 / 悬浮窗）、
+  `https://appassets.androidplatform.net`（APK 的 WebViewAssetLoader 同源域）；可用
+  `XIAOMAN_ALLOW_ORIGINS` 覆盖。音频接口 `/tts` 是公开资源，固定回 `Access-Control-Allow-Origin: *`
+  （跨域 `<audio>` + WebAudio 取音量包络所必需；无此头浏览器会把音频静音）。
 
 ## 测试
 
