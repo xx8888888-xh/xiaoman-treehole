@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-11-05 · 功能落实收官（feat/feature-completeness，基线 61384a0）
+
+> 用户令：「里面的功能都要落实实现，并且让人使用顺滑」「像一个正规的大软件」。先盘点再补齐，盘点表见 `docs/FEATURE_MATRIX.md`。
+
+### 盘点 → 结论
+- 承诺功能 **43 项**：审计时 已实现 24 / 半实现 7 / 只有 UI 无逻辑 2 / 完全缺失 10
+- 本轮补齐 **13**、补强 **2**，遗留 **5**（提醒/统计未进备份、单条消息删除编辑、统计清空入口、APK 重打包与真机有声、中危热线文案）
+
+### 改动（按用户优先级）
+1. **设置真实生效**：`tts.js` provider 链改为跟随设置（server→[server,native,browser]、browser→[browser,native]、off→[none]），不再固定 native 优先；`config.js` 新增 `describeTts()` / `voiceApplies()`，UI 提示与实际链路共用同一判定，设置页显示「实际发声后端」；`heartbeatOn` 补默认值 + 开关（之前逻辑有、无 UI）；`allowFreePersonal` 补开关。服务端语音缺失时提示「已自动用本机语音」，音色仅服务端生效。
+2. **提醒闭环**：`reminders.js` 新增 `update/markDone/pending/history/clearDone/fmtFull`，id 防同毫秒碰撞；`app.js` 新增提醒表单（新建/编辑/取消/删除待办/已完成历史/一键清空），真实写 `xiaoman_reminders_v1`。
+3. **打卡/统计**：`stats.js` 新增 `perDay` + 本地日切 `dayKey()`、`daily(n)` 补零、`streak()`；`app.js` 新增小本本 UI（4 指标 + 7 天柱），修 UTC 偏移导致的日界错误；跨刷新保留。
+4. **首次使用**：新增空状态卡 + 三个快捷入口（随便说/定个提醒/看小本本），发出第一条用户消息后自动收起。
+5. **错误边界**：新增 `web/js/errors.js`（429/401/403/404/5xx/断网/超时/坏 JSON/quota/IDB/未知 → 人话 title+hint+是否可重试）；新增顶部 `#noticeBar`（可重试按钮）；localStorage 满、IndexedDB 不可用时均有可操作提示，不白屏。
+
+### 验证（全部实跑）
+- `node --test tests/*.test.js` → **166/166 pass**（基线 139 + 新增 27；含"开关→行为"断言：`describeTts` 与 `TTS.chain` 对齐、`routePlan` 全组合、心跳开关真停/真发、provider 链跟随设置）
+- `npx biome check .` → **0 error**
+- `python scripts/verify_assets.py` → **PASS**（55 files / 7,325,185 bytes；用与 `asset_excludes.sh` 同口径的临时发布副本，因 `android/**` 禁改）
+- `scripts/test_appearance.py` → **22/22 PASS**；`scripts/test_e2e.py` → **60/60**
+- 新增 `scripts/test_feature_loop.py` → **43/43 PASS**（空状态/提醒 CRUD/统计柱/跨会话/设置开关/429 入队/500 降级/存储满/IDB 缺失/零 JS 错误）
+- 测试栈：9021 静态 / 9022 mock / 9023 TTS(provider=none)，headless + `--mute-audio`，全静音，避开 8901-8903
+
+**触及**：web/js/{config,api,tts,reminders,stats,errors(app 新增),heartbeat,app}.js、web/index.html、web/css/style.css、web/tests/{settings_behavior,reminders,stats,errors,tts_provider}.test.js、scripts/test_feature_loop.py、docs/FEATURE_MATRIX.md、README.md、docs/PROJECT_STATE.md、docs/DEVLOG.md（本条）
+
 ## 2026-10-18 · 18:0x UI 打磨包六审四修（VLM 审查低严重度项收口 + float 疑案告破）
 
 > 用户令：收掉打磨项。VLM 首轮 6 条低严重度意见逐项落实：**4 修 1 改判 1 误报**。
