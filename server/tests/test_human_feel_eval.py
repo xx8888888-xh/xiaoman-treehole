@@ -236,8 +236,12 @@ class HumanFeelEvalTest(unittest.TestCase):
                     lines.append("  [%s/%s] %s" % (cat, cid, f))
         print("\n".join(lines))
 
-        # 回归门槛：模板层现状 ≥75%；提示词/记忆链路改动不得让通过率再掉。
-        self.assertGreaterEqual(rate, 0.75, "\n".join(lines))
+        # 回归门槛：W11 第三轮验收线 98%（84 条里至多错 1 条）；
+        # 沉默/追问两类必须 ≥5/6（提前点名，避免整体分数掩盖单类塌陷）。
+        self.assertGreaterEqual(rate, 0.98, "\n".join(lines))
+        for cat in ("沉默", "追问"):
+            stat = by_cat.get(cat, {"passed": 0, "total": 0})
+            self.assertGreaterEqual(stat["passed"], 5, "\n".join(lines))
 
 
 if __name__ == "__main__":
