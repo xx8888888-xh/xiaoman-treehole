@@ -31,6 +31,9 @@ const Stage = (() => {
     "js/vendor/pixi-live2d-cubism4.min.js",
   ];
   let vendorPromise = null;
+  let host = null;            // 舞台容器：加载占位/失败重试都要用
+  let wanderTimer = null;     // 视线漫游计时器：零动画时必须真正停掉
+  let freezeTimer = null;     // 零动画的"渲染几帧后定格"计时器
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -58,15 +61,52 @@ const Stage = (() => {
     return native ? 1 : Math.min(1.5, dpr);
   }
 
+  const FALLBACK_TEXT = "小满在打盹…（画面没能加载出来，聊天功能不受影响）";
+
+  /** 清空占位/失败层：重试与成功加载时都先走这里，避免叠加两套提示 */
+  function clearStageNotes(container) {
+    container.classList.remove("is-fallback");
+    container.querySelectorAll(".stage-note, .stage-fallback").forEach(el => el.remove());
+  }
+
+  function showNote(container) {
+    clearStageNotes(container);
+    const note = document.createElement("div");
+    note.className = "stage-note";
+    note.setAttribute("role", "status");
+    note.setAttribute("aria-live", "polite");
+    note.textContent = "小满在打盹…";
+    container.appendChild(note);
+  }
+
   function showFallback(container, detail) {
+    clearStageNotes(container);
     const tip = document.createElement("div");
     tip.className = "stage-fallback";
-    tip.textContent = "小满在打盹…（画面没能加载出来，聊天功能不受影响）";
+    tip.setAttribute("role", "status");
+    const msg = document.createElement("div");
+    msg.className = "stage-fallback-text";
+    msg.textContent = FALLBACK_TEXT;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "stage-retry";
+    retry.textContent = "重试";
+    retry.setAttribute("aria-label", "重新加载小满画面");
+    retry.onclick = () => {
+      // 脚本/模型任一环节失败都可能留下半初始化状态；整页重载最可靠。
+      // 对话与外观都在本地存储里，重载不会丢历史。
+      window.location.reload();
+    };
+    tip.appendChild(msg);
+    tip.appendChild(retry);
     container.appendChild(tip);
+    container.classList.add("is-fallback");
     console.warn("Stage 降级:", detail);
   }
 
   async function mount(container) {
+    host = container;
+    showNote(container);
     try {
       await ensureVendor();
     } catch (e) {
@@ -95,7 +135,7 @@ const Stage = (() => {
       else fit(w, h);
     };
     window.addEventListener("resize", resizeHandler);
-    loadModel(() => resizeHandler());
+    loadModel();
   }
 
   function fit(w, h) {
@@ -140,9 +180,33 @@ const Stage = (() => {
     }
   }
 
-  function loadModel(done) {
+  function startWander() {
+    stopWander();
+    if (!model || !motionEnabled) return;
+    wanderTimer = setTimeout(() => {
+      wanderTimer = null;
+      if (!model || !motionEnabled) return;
+      try {
+        const c = model.internalModel.coreModel;
+        const gx = (Math.random() - 0.5) * 0.9, gy = (Math.random() - 0.5) * 0.5;
+        c.setParameterValueById("ParamEyeBallX", gx);
+        c.setParameterValueById("ParamEyeBallY", gy);
+        c.setParameterValueById("ParamAngleX", gx * 12);
+        c.setParameterValueById("ParamAngleY", gy * 10);
+      } catch (e) {}
+      startWander();
+    }, 3000 + Math.random() * 3000);
+  }
+
+  function stopWander() {
+    if (wanderTimer) clearTimeout(wanderTimer);
+    wanderTimer = null;
+  }
+
+  function loadModel() {
     PIXI.live2d.Live2DModel.from("assets/models/hiyori/Hiyori.model3.json").then(m => {
       model = m;
+      if (!app) return;
       app.stage.addChild(m);
 
       // 点击命中（HitAreas 在 model3.json 中定义：Head / Body）
@@ -168,23 +232,22 @@ const Stage = (() => {
           if (lipHold > 0) lipHold--;
         } catch (e) {}
       });
-      // 视线漫游：每 3~6 秒瞟一眼别处
-      (function wander() {
-        setTimeout(() => {
-          if (!model) return;
-          const c = core();
-          const gx = (Math.random() - 0.5) * 0.9, gy = (Math.random() - 0.5) * 0.5;
-          try {
-            c.setParameterValueById("ParamEyeBallX", gx);
-            c.setParameterValueById("ParamEyeBallY", gy);
-            c.setParameterValueById("ParamAngleX", gx * 12);
-            c.setParameterValueById("ParamAngleY", gy * 10);
-          } catch (e) {}
-          wander();
-        }, 3000 + Math.random() * 3000);
-      })();
-      done && done();
-    }).catch(err => console.error("Live2D 加载失败:", err));
+      // 占位撤掉，只在真正有画面后；零动画模式先让纹理/矩阵渲染几帧再定格首帧
+      if (host) clearStageNotes(host);
+      if (!motionEnabled) {
+        freezeTimer = setTimeout(() => {
+          freezeTimer = null;
+          if (!app) return;
+          app.ticker.stop();
+          try { app.render(); } catch (e) {}
+        }, 600);
+      }
+      startWander();
+      if (resizeHandler) resizeHandler();
+    }).catch(err => {
+      console.error("Live2D 加载失败:", err);
+      if (host) showFallback(host, err && err.message);
+    });
   }
 
   function setEmotion(name) {
@@ -214,6 +277,9 @@ const Stage = (() => {
 
   /** 销毁舞台：清理 resize 监听、PIXI ticker、模型资源 */
   function unmount() {
+    stopWander();
+    if (freezeTimer) clearTimeout(freezeTimer);
+    freezeTimer = null;
     if (resizeHandler) {
       window.removeEventListener("resize", resizeHandler);
       resizeHandler = null;
@@ -231,13 +297,17 @@ const Stage = (() => {
     try { model.motion(group, undefined, 2); } catch (e) {}
   }
 
-  /** 动画开关：关 → 停 ticker 并渲染最后一帧；开 → 恢复 ticker 与呼吸/眨眼 */
+  /** 动画开关：关 → 停 ticker/漫游并渲染最后一帧；开 → 恢复 ticker 与呼吸/眨眼 */
   function setMotionEnabled(on) {
     motionEnabled = !!on;
     if (!app || !app.ticker) return;
     if (motionEnabled) {
       app.ticker.start();
+      startWander();
     } else {
+      stopWander();
+      if (freezeTimer) clearTimeout(freezeTimer);
+      freezeTimer = null;
       app.ticker.stop();
       try { app.render(); } catch (e) {}
     }

@@ -159,8 +159,8 @@ async def main():
             # （CI 的 dev_up 已设 AI_MODE=mock；本地容器若为 openai 也能复现）
             await pg.evaluate(
                 "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
-                "{mode:'mock', mockBase:'http://127.0.0.1:8902', tts:'server', "
-                "voice:'zh-CN-XiaoyiNeural', ttsRate:'normal'}))")
+                "{mode:'mock', mockBase:'http://127.0.0.1:%d', tts:'off', "
+                "voice:'zh-CN-XiaoyiNeural', ttsRate:'normal'}))" % MOCK_PORT)
             await pg.reload(wait_until="domcontentloaded")
             await pg.wait_for_selector("#textInput", state="visible", timeout=15000)
             print("① 页面加载:", await pg.title())
@@ -228,10 +228,10 @@ async def main():
 
             # —— ⑤b 语速档位：provider=none 时三档都必须是同一 503 JSON（不静默 200） ——
             rate_audio = await pg.evaluate("""
-              async () => {
+              async (origin) => {
                 const out = {};
                 for (const r of ['slow', 'normal', 'fast']) {
-                  const res = await fetch('http://127.0.0.1:8903/tts?text=' + encodeURIComponent('我在听')
+                  const res = await fetch('http://' + origin + '/tts?text=' + encodeURIComponent('我在听')
                     + '&voice=zh-CN-XiaoyiNeural&rate=' + r);
                   if (res.ok) {
                     out[r] = {status: res.status, bytes: (await res.arrayBuffer()).byteLength};
@@ -243,7 +243,7 @@ async def main():
                 }
                 return out;
               }
-            """)
+            """, TTS_ORIGIN)
             if audio.get("provider") == "none":
                 ok_rate = all(v["status"] == 503
                               and v.get("body") == {"error": "tts_provider_unavailable",
@@ -951,7 +951,8 @@ async def main():
             ctx7 = await b.new_context(viewport={"width": 340, "height": 460})   # FloatWindowService 迷你窗物理尺寸
             # w4 后全新安装默认走在线模型；本用例只验证迷你窗布局与聊天链路，显式固定 mock
             await ctx7.add_init_script(
-                "() => localStorage.setItem('xiaoman_cfg', JSON.stringify({mode:'mock', mockBase:'http://127.0.0.1:8902'}))")
+                "() => localStorage.setItem('xiaoman_cfg', JSON.stringify({mode:'mock', mockBase:'http://127.0.0.1:%d'}))"
+                % MOCK_PORT)
             pg7 = await ctx7.new_page()
             err_l = []
             pg7.on("pageerror", lambda e: err_l.append(str(e)))

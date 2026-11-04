@@ -57,11 +57,19 @@ const ChatPager = (() => {
     if (scroll) {
       if (typeof scroll.addEventListener === "function") {
         scroll.addEventListener("scroll", onScroll, { passive: true });
+        scroll.addEventListener("scroll", syncFade, { passive: true });
       } else {
         scroll.onscroll = onScroll;
       }
+      syncFade();
     }
     syncBars();
+  }
+
+  /** 滚动时给对话区加 is-scrolled：顶部渐隐层只在有历史内容被裁切时出现 */
+  function syncFade() {
+    if (!scroll || !scroll.parentElement) return;
+    scroll.parentElement.classList.toggle("is-scrolled", (scroll.scrollTop || 0) > 4);
   }
 
   /** 是否贴着底部（没有布局信息时按 true 处理，保持旧行为） */
@@ -85,7 +93,7 @@ const ChatPager = (() => {
     rendered = [];
     const end = Math.min(total, start + VIEW);
     for (let i = start; i < end; i++) {
-      const node = build(recs[i], i);
+      const node = build(recs[i], i, i > 0 ? recs[i - 1] : null);
       host.insertBefore(node, typing);
       rendered.push(node);
     }
@@ -166,8 +174,9 @@ const ChatPager = (() => {
     if (!handle || !handle.rec) return false;
     handle.rec.spoken = true;
     if (!handle.el || handle.el.parentElement !== host) return true;
-    const fresh = build(handle.rec);
     const i = rendered.indexOf(handle.el);
+    const abs = start + (i >= 0 ? i : 0);
+    const fresh = build(handle.rec, abs, abs > 0 ? recs[abs - 1] : null);
     host.replaceChild(fresh, handle.el);
     if (i >= 0) rendered[i] = fresh;
     handle.el = fresh;

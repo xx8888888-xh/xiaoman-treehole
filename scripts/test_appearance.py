@@ -105,7 +105,7 @@ async def main():
               and st["iconTransition"] in ("0s", "0.00001s"), str(st["iconTransition"]))
         r, g, b = [int(x) for x in st["iconColor"].replace("rgb(", "").replace(")", "").split(",")[:3]]
         check("极简图标为灰阶", abs(r - g) <= 4 and abs(g - b) <= 4, st["iconColor"])
-        check("极简字号：正文 17px", abs(st["bodyFontPx"] - 17) < 0.5, str(st["bodyFontPx"]))
+        check("极简字号：正文 18px", abs(st["bodyFontPx"] - 18) < 0.5, str(st["bodyFontPx"]))
         check("极简三个开关初始值", st["swFont"] is True and st["swMotion"] is False and st["swIcons"] is True)
         base_font = st["bodyFontPx"]
 
@@ -136,8 +136,8 @@ async def main():
         await pg.click("#apFont")
         await pg.wait_for_timeout(150)
         st = await state(pg)
-        check("切大字号 → custom 且正文 17px", st["preset"] == "custom" and st["font"] == "large"
-              and abs(st["bodyFontPx"] - 17) < 0.5, str(st["bodyFontPx"]))
+        check("切大字号 → custom 且正文 18px", st["preset"] == "custom" and st["font"] == "large"
+              and abs(st["bodyFontPx"] - 18) < 0.5, str(st["bodyFontPx"]))
         await pg.click("#apIcons")
         await pg.wait_for_timeout(100)
         st = await state(pg)

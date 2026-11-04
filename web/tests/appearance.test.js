@@ -31,23 +31,28 @@ function contrast(a, b) {
 }
 function varsOf(block) {
   const out = {};
-  const re = /--([\w-]+)\s*:\s*(#[0-9A-Fa-f]{6})\s*;/g;
+  const re = /--([\w-]+)\s*:\s*(#[0-9A-Fa-f]{6}|var\(--[\w-]+\))\s*;/g;
   let m = re.exec(block);
   while (m) {
     out[m[1]] = m[2];
     m = re.exec(block);
   }
+  // 一层层解 var(--x) 别名（如 --icon-accent: var(--accent)）
+  for (let pass = 0; pass < 4; pass++) {
+    for (const key of Object.keys(out)) {
+      const ref = out[key].match(/^var\(--([\w-]+)\)$/);
+      if (ref && out[ref[1]]) out[key] = out[ref[1]];
+    }
+  }
   return out;
 }
 const ROOT_VARS = varsOf(CSS.match(/:root\s*\{([\s\S]*?)\}/)[1]);
 const DARK_VARS = varsOf(CSS.match(/body\.theme-dark\s*\{([\s\S]*?)\}/)[1]);
-const DARK_SYS_VARS = varsOf(
-  CSS.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{[\s\S]*?body:not\(\.theme-light\)\s*\{([\s\S]*?)\}/)[1],
-);
 const AA_PAIRS = [
   ["text", "bg"], ["text-2", "bg"], ["text-3", "bg"], ["icon", "bg"],
   ["icon-accent", "surface-2"], ["text", "panel"], ["text", "bubble-them"],
-  ["text", "bubble-me"], ["text", "field"], ["text", "btn"],
+  ["text", "bubble-me"], ["text", "field"], ["text-2", "surface-2"],
+  ["text-3", "panel"], ["text-3", "field"], ["text-3", "surface"], ["text-3", "surface-2"], ["accent-ink", "accent"],
   ["toast-text", "toast-bg"],
 ];
 
@@ -190,8 +195,9 @@ test("仅极简模式命中零动画，默认/生动只允许 120–200ms 状态
   }
   assert.match(CSS, /html\[data-motion="on"\]/);
 
-  // 三种预设都不许循环装饰动画 / 自动播放
-  assert.doesNotMatch(CSS, /@keyframes/);
+  // 三种预设都不许循环装饰动画 / 自动播放；只允许一次性面板入场
+  const keyframes = [...CSS.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]).sort();
+  assert.deepEqual(keyframes, ["modal-in", "panel-in"], "只允许抽屉/弹层的一次性入场");
   assert.doesNotMatch(CSS, /animation-iteration-count\s*:\s*infinite/);
   assert.doesNotMatch(CSS, /\bautoplay\b/i);
   assert.doesNotMatch(HTML, /<audio\b/i);
@@ -199,11 +205,12 @@ test("仅极简模式命中零动画，默认/生动只允许 120–200ms 状态
 });
 
 /* ---------- 8. 字号与设置页结构 ---------- */
-test("大字号即 17/15/20px，标准字号 16px；旧 xlarge 已移除", () => {
+test("大字号 18px / 标准字号 16px；字号只经由 --text-body 一处生效", () => {
   assert.match(CSS, /--fs:\s*1;/);
-  assert.match(CSS, /html\[data-font="normal"\]\s*\{\s*--fs:\s*0\.94117647;/);
+  assert.match(CSS, /--text-body:\s*calc\(16px \* var\(--fs\)\)/);
+  assert.match(CSS, /html\[data-font="large"\]\s*\{\s*--fs:\s*1\.125;/);
   assert.doesNotMatch(CSS, /data-font="xlarge"/);
-  assert.match(CSS, /body\s*\{[^}]*font-size:\s*calc\(17px \* var\(--fs\)\)/);
+  assert.match(CSS, /body\s*\{[^}]*font-size:\s*var\(--text-body\)/);
 });
 
 test("设置页外观区块：三预设 + 三个独立开关，appearance.js 先于样式表", () => {
@@ -222,13 +229,22 @@ test("设置页外观区块：三预设 + 三个独立开关，appearance.js 先
 });
 
 /* ---------- 9. 对比度 AA + 焦点环 ---------- */
+test("暗色只有一份变量块：JS 解析 auto，CSS 只认 body.theme-dark", () => {
+  assert.match(CSS, /body\.theme-dark\s*\{/, "缺少深色变量块");
+  assert.doesNotMatch(CSS, /@media\s*\(prefers-color-scheme:\s*dark\)/,
+    "不得再复制一份 @media 深色变量（auto 由 app.js 解析成 class）");
+  assert.match(HTML, /body\.theme-dark|theme-dark/, "首帧脚本需写 theme-dark/light");
+});
+
 test("所有预设与明暗主题正文对比度达 AA（≥4.5:1）", () => {
-  for (const [label, vars] of [["浅色", ROOT_VARS], ["深色(手动)", DARK_VARS], ["深色(跟随系统)", DARK_SYS_VARS]]) {
+  for (const [label, vars] of [["浅色", ROOT_VARS], ["深色", DARK_VARS]]) {
     for (const [fg, bg] of AA_PAIRS) {
       assert.ok(vars[fg] && vars[bg], `${label} 缺少变量 --${fg} / --${bg}`);
       const ratio = contrast(vars[fg], vars[bg]);
       assert.ok(ratio >= 4.5, `${label} --${fg} on --${bg} = ${ratio.toFixed(2)}:1 < 4.5`);
     }
+    // 第三级文字在底色上必须 ≥4.5（任务硬指标）
+    assert.ok(contrast(vars["text-3"], vars["bg"]) >= 4.5);
     // 生动模式的彩色图标同样要过 AA
     assert.ok(contrast(vars["icon-accent"], vars["surface-2"]) >= 4.5);
     assert.ok(contrast(vars["icon-accent"], vars["bg"]) >= 4.5);
