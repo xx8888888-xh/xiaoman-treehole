@@ -220,6 +220,15 @@ MEM_PATTERNS = [
         r"(?:\s*(?:叫|名字?叫|取名叫|取名)\s*([一-龥A-Za-z]{1,4})(?=[，。！？,.!?\s\d]|$))?"),
     ),
     ("在忙", re.compile(r"(我在|正在)\s*(加班|赶稿|开会|搬家|复习|写论文)")),
+    # W11：睡眠/身体状态单列（"失眠"不再要求转写成"大事"才能被回提）
+    ("状态", re.compile(r"(失眠|睡不着|熬夜|焦虑|头疼|感冒|低烧|胃疼)")),
+    # W11：家人/室友的姓名提取（此前只有昵称/老板，且值会被谓语词污染）
+    ("家人", re.compile(
+        r"(我(?:的)?(?:妈|爸|母亲|父亲|老妈|老爸|姐姐|姐|妹妹|妹|哥哥|哥|弟弟|弟"
+        r"|女儿|儿子))"
+        r"\s*(?:叫|名叫|名字叫|是)\s*([一-龥A-Za-z]{1,4})")),
+    ("室友", re.compile(
+        r"(?:我的?)?(?:室友|舍友|同屋)\s*(?:叫|名叫|名字叫|是)\s*([一-龥A-Za-z]{1,4})")),
     ("大事", re.compile(
         r"((?:下周|下个月|下学期|明天|后天|这?周五|这?周六|这?周日|月底|年底|马上|快)\s*"
         r"(?:要|得|准备|打算)?\s*"
@@ -293,6 +302,9 @@ BOSS_CUT = set(
     "今昨前早上午晚夜凌晨周月年天时分秒就才又再被让叫说问要骂催找发给改加请带"
     "忙活完没不太很太点对跟和像是心情脾气折作搞整烦惹凶")
 BOSS_EN_RE = re.compile(r"^[A-Z][a-zA-Z]{1,11}$")
+# W11：关系词与姓名之间的连接词（"我们老板叫张三"→"张三"）先剥离，
+# 否则"叫"会被当成谓语垃圾截断成空，回退成基词"老板"（值=键）
+BOSS_CONNECT_RE = re.compile(r"^(?:叫|是|姓|名叫|名字叫|大名)\s*")
 
 def _boss_cut(v):
     """姓名后谓语截断：'王总今天骂我'→'王总'（第2字起遇谓语字即断，姓首字不动）"""
@@ -324,6 +336,12 @@ def extract_memory(text, old):
             elif key == "宠物":
                 # P3-1：优先宠物名（group3"年糕"），无名字回退基词泛指（"猫"）
                 val = (m.group(3) or m.group(2) or "").strip()
+            elif key == "室友":
+                val = (m.group(1) or "").strip()
+            elif key == "家人":
+                val = (m.group(2) or "").strip()
+            elif key == "状态":
+                val = (m.group(1) or "").strip()
             else:
                 val = (m.group(2) or m.group(1) or "").strip()
             # P0-2 对齐：所有键统一尾缀清洗（与前端 cleanName 同源同表）——
@@ -335,6 +353,8 @@ def extract_memory(text, old):
             if key == "老板":
                 # P0-2 遗留守卫 II：谓语截断 + 姓名可信度。垃圾（"又骂我"）→
                 # 转基词占位（g2 恒为 老板/领导/上司）；可信姓名（"王总"）保持
+                # W11：先剥连接词（叫/是/姓），否则"叫张三"会被当谓语整段截掉
+                val = BOSS_CONNECT_RE.sub("", val).strip()
                 val = _boss_cut(val)
                 if not _boss_name_ok(val):
                     val = m.group(2) or "老板"
@@ -362,8 +382,9 @@ ONBOARD_EVENT_TURNS = 8  # 大事引导最晚轮次
 # insomnia/happy → 大事：熬夜累/开心话题常与备考赶稿等大事相关（设计定稿口径）
 RECALL_MAP = {
     "work": ["老板", "在忙"],
-    "insomnia": ["大事"],
+    "insomnia": ["状态", "大事"],
     "happy": ["大事"],
+    "family": ["家人"],
 }
 PET_TOPIC_RE = re.compile(r"(猫|狗|兔|团子|宠物|毛孩|铲屎)")
 # 怎么提：值零加工直填模板（记忆原文原样嵌入——不张冠李戴的结构性保证）
@@ -372,6 +393,8 @@ RECALL_TEMPLATES = {
     "宠物": "你家{v}呢？今天乖不乖",
     "老板": "{v}今天没又折腾你吧",
     "在忙": "你之前说在{v}，现在缓过来了吗",
+    "状态": "你上次说{v}——这两天好些了吗？",
+    "家人": "{v}最近还老念叨你吧？",
 }
 RECALL_EXTRACT_GAP = 3  # 闸门0：提取后至少隔 3 轮才可回提（"你上次说"须指向足够久之前，防复读感）
 RECALL_COOLDOWN = 6    # 闸门1：同记忆两次回提间隔 ≥6 轮（"从未被引用"视为通过）
@@ -398,18 +421,32 @@ MEM_AWARE_POOL = {
     "在忙": [
         "{v}还没忙完呀？||悠着点，别把自己耗干了",
     ],
+    "状态": [
+        "又是{v}？||这两天是不是一直没缓过来",
+        "{v}还缠着你呢……||有我在，慢慢说",
+    ],
+    "家人": [
+        "{v}今天又念叨你了吧||说说，我听着",
+    ],
+    "室友": [
+        "{v}又整什么活了||说吧，我听着",
+    ],
 }
 MEM_AWARE_COOLDOWN = 3  # 同键记忆感知间隔轮数
 
-def _match_memory_value(memories, user_text, sess):
+def _match_memory_value(memories, user_text, sess, mem_updates=None):
     """用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ (键, 值) 或 None。
-    同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。"""
+    同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
+    W11：本轮刚写入的键跳过感知——"刚记下"就复述会显得像在炫耀记忆，
+    且会白烧一次冷却；从下一轮起才可命中。"""
     if not memories or not user_text:
         return None
     turn = sess.get("turns", 0)
     hits = sess.setdefault("mem_aware_ts", {})
     for k, v in memories.items():
         if not v or len(v) < 2 or k == "昵称":
+            continue
+        if mem_updates and k in mem_updates:
             continue
         if k == "宠物" and _pet_generic(v):
             continue
@@ -492,8 +529,10 @@ TOPIC = {
         "一个人待着也有一个人的好处，起码外卖不用分||……但要说不想有人陪，那是假的。说吧，我在",
     ],
     "insomnia": [
-        "又是累的一天吧||饭还是要吃的，哪怕泡个面。躺下之前把手机放远一点，就远二十厘米，试试",
-        "失眠多久了？是睡不着，还是睡着了老醒||要是老这样，明天抽十分钟晒晒太阳，亲测比咖啡管用",
+        "又是累的一天吧||饭还是要吃的，哪怕泡个面。今晚别撑了，能早就早点躺",
+        "失眠这个我熟，越想睡越清醒||别跟自己较劲，睡不着就躺着听我说会儿",
+        "凌晨的脑子最不听劝||你现在是睡不着，还是不敢闭眼？",
+        "黑眼圈都快熬成勋章了||说说，是心里有事，还是身体在闹",
     ],
     "family": ["家里的事最磨人，说不开又躲不掉||……慢慢说，我先听"],
     "money": ["钱的事最具体也最烦人||先别慌，说说是哪一环出问题了，我帮你捋捋"],
@@ -525,6 +564,171 @@ HOOKS = {
     "happy": "这个事值得记账，我帮你记着，年底盘点一下你今年攒了多少开心",
     "generic": "对了，你最近睡得还行吗",
 }
+# ---------------- W11 轻量模板插值：具体细节回声 ----------------
+# 没填 key 时 mock 是用户的默认通道，固定语料池只会"然后呢/说说细节"，
+# 用户说的具体东西（橘猫/关东煮/三点）全被丢掉。这里做**保守**抽取：
+# 只认高置信度实体，一次只回最强的一类；抽不出/不确定就返回 None 落回话题池。
+# 宁可通用，也不拼荒唐句（"差一点就迟到"不得抽出时间"一点"、"猫粮"不得当宠物）。
+NUM_CHARS = "零一二三四五六七八九十两\\d"
+ACTION_RE = re.compile(
+    r"(不吃饭|不吃东西|不想吃|不睡觉|睡不着|吐了|拉肚子|拆家|掉毛|"
+    r"打喷嚏|没精神|不让人抱|乱叫|咬人|生病了)")
+# 负向守卫：猫粮/猫砂/猫抓板/狗窝是物品，不是宠物本体
+ANIMAL_RE = re.compile(
+    r"((?:橘|黑|白|狸花|布偶|英短|小|大|胖|土|花)?(?:猫|狗|兔)子?"
+    r"|金毛|柯基|泰迪|哈士奇|边牧)"
+    r"(?!粮|砂|抓板|玩具|窝|毛)")
+FOOD_RE = re.compile(
+    r"(关东煮|糖醋排骨|火锅|奶茶|泡面|烧烤|煎饼|牛肉面|饺子|包子|蛋糕|"
+    r"雪糕|西瓜|外卖|咖啡|炸鸡|螺蛳粉|麻辣烫|小龙虾)")
+BODY_RE = re.compile(
+    r"(头疼|胃疼|肚子疼|腰疼|嗓子疼|牙疼|眼睛疼|发烧|感冒|低烧|过敏|落枕)")
+WEATHER_RE = re.compile(
+    r"(下雨|下[^，。！？\s]{0,4}雨|暴雨|大雨|下雪|下[^，。！？\s]{0,4}雪|暴雪|"
+    r"降温|刮风|闷热|雾霾|打雷|打[^，。！？\s]{0,3}雷|台风)")
+WORK_RE = re.compile(r"(需求|会议|周报|报告|代码|简历|预算|合同|排期|方案|PPT)")
+PLACE_RE = re.compile(r"(地铁|公交|便利店|超市|咖啡店|医院|学校|公司|办公室|公园)")
+# 时间只认两种高置信形态：带时间前缀的"X点"，或"X点才/就+动词"；
+# 裸"X点"（三点头/一点点/三点水）一律不抽
+POINT_PREFIX_RE = re.compile(
+    r"(?:凌晨|半夜|昨晚|昨天|今晚|今天|上周)\s*([%s]{1,3})\s*点" % NUM_CHARS)
+POINT_VERB_RE = re.compile(
+    r"([%s]{1,3})\s*点\s*(?:才|就)\s*(?:睡|醒|起|到|回|下班|上班)" % NUM_CHARS)
+GUESS_RE = re.compile(r"(你猜猜?|猜猜看|猜一下)")
+# 用户在拒绝建议时，"方案/分析"是吐槽对象，不是工作实体——回声会撞上"不给建议"的底线
+REFUSAL_RE = re.compile(
+    r"(?:不用|不要|不需要|别|少来|少给)(?:给我?|跟我?)?"
+    r"(?:方案|建议|步骤|分析|道理|鸡汤|大道理)"
+    r"|说句人话|说人话|别劝我|不用劝我")
+
+ANIMAL_ACTION_TEMPLATES = [
+    "{v}{a}？是突然这样还是已经两天了",
+    "{a}……{v}这是怎么了，之前不这样吧",
+    "先别慌，{v}{a}这事，今天才开始的？",
+    "它又{a}了？{v}这几天一直这样吗",
+    "听到{v}{a}我心里也一紧，现在缓点没",
+]
+ANIMAL_TEMPLATES = [
+    "{v}？今天又怎么了",
+    "说说{v}吧，它最近乖不乖",
+    "你家{v}啊……它现在在干嘛",
+    "{v}又整什么活了",
+    "一想到{v}我就想笑，它今天又干嘛了",
+]
+DETAIL_TEMPLATES = {
+    "food": [
+        "{v}？听着就馋了，是买的还是自己做的",
+        "{v}……我这会儿也有点想吃",
+        "哪家的{v}，好吃吗",
+        "又是{v}？你最近是不是就好这口",
+        "{v}这东西，我能连吃三天",
+    ],
+    "body": [
+        "{v}？多久了，一直硬扛着？",
+        "{v}这事真不能忽视，现在好点没",
+        "又是{v}……今天比昨天轻点吗",
+        "{v}啊，那可太难受了",
+        "你这{v}是老毛病还是新添的",
+    ],
+    "weather": [
+        "{v}……今天这天气真够呛",
+        "{v}？你出门带伞了吗",
+        "这种{v}天，最适合窝着不动",
+        "碰上{v}，我只想缩回被窝",
+        "{v}啊……窗户关好没",
+    ],
+    "time": [
+        "{v}……这样多久了",
+        "{v}？这也太晚了",
+        "又是{v}，你这觉欠得有点多",
+        "{v}才睡？第二天怎么撑住的",
+        "{v}这个点，我听着都困了",
+    ],
+    "work": [
+        "{v}这事还没完呢？",
+        "{v}最磨人，说说是哪一步卡住",
+        "又是{v}……你这几天净跟它耗了",
+        "{v}？先说，卡在哪儿了",
+        "{v}堆成这样，换谁都得炸",
+    ],
+    "place": [
+        "{v}上？那会儿人多不多",
+        "{v}……今天路上顺吗",
+        "又是在{v}，累不累",
+        "{v}这会儿还挤吗",
+        "{v}那种地方，待久了确实闷",
+    ],
+}
+GUESS_TEMPLATES = [
+    "不猜，你自己说||我最烦猜了",
+    "我猜不到，你直接交代吧",
+    "让我猜？那我猜你憋着笑||猜对没",
+    "你先说，猜错了多尴尬",
+    "我懒得猜，你说嘛",
+]
+GUESS_TIME_TEMPLATES = [
+    "我不猜，你说||几点？",
+    "不猜，你自己交代||到底几点",
+    "猜这个没意义，你直接说几点",
+    "我猜……算了不猜，你说",
+    "几点？你说，我不猜",
+]
+
+
+def extract_detail(text):
+    """保守抽取一个最强实体；返回 dict 或 None（抽不出就落回话题池）。
+
+    优先级：追问 > 动物 > 食物 > 身体 > 天气 > 时间 > 工作物 > 地点。
+    只回一个类别，避免"猫+关东煮+地铁"混着回造成重点漂移。
+    """
+    text = text or ""
+    if not text:
+        return None
+    if REFUSAL_RE.search(text):
+        return None
+    if GUESS_RE.search(text):
+        focus = "time" if ("几点" in text or ("点" in text and "睡" in text)) else "generic"
+        return {"kind": "guess", "focus": focus}
+    m = ANIMAL_RE.search(text)
+    if m:
+        a = ACTION_RE.search(text)
+        return {"kind": "animal", "v": m.group(1), "a": a.group(1) if a else ""}
+    for kind, pat in (("food", FOOD_RE), ("body", BODY_RE)):
+        m = pat.search(text)
+        if m:
+            return {"kind": kind, "v": m.group(1)}
+    m = WEATHER_RE.search(text)
+    if m:
+        # "下了好大的雨/打了半天雷"归一成短词，避免把整句塞进回复
+        raw = m.group(1)
+        v = "下雨" if "雨" in raw else ("下雪" if "雪" in raw else
+             ("打雷" if "雷" in raw else raw))
+        return {"kind": "weather", "v": v}
+    m = POINT_PREFIX_RE.search(text) or POINT_VERB_RE.search(text)
+    if m:
+        return {"kind": "time", "v": m.group(1) + "点"}
+    for kind, pat in (("work", WORK_RE), ("place", PLACE_RE)):
+        m = pat.search(text)
+        if m:
+            return {"kind": kind, "v": m.group(1)}
+    return None
+
+
+def detail_pool(text):
+    """实体 → 占位符模板池；抽不出返回 None（调用方继续用话题池）。"""
+    d = extract_detail(text)
+    if not d:
+        return None
+    kind = d["kind"]
+    if kind == "guess":
+        pool = GUESS_TIME_TEMPLATES if d["focus"] == "time" else GUESS_TEMPLATES
+        return list(pool)
+    if kind == "animal":
+        tmpl = ANIMAL_ACTION_TEMPLATES if d.get("a") else ANIMAL_TEMPLATES
+        return [t.replace("{v}", d["v"]).replace("{a}", d.get("a", "")) for t in tmpl]
+    return [t.replace("{v}", d["v"]) for t in DETAIL_TEMPLATES[kind]]
+
+
 EMO_MAP = {
     "work": ("gentle", "Nod"), "love": ("sad", "Nod"), "lonely": ("gentle", None),
     "insomnia": ("gentle", None), "family": ("gentle", None), "money": ("surprised", None),
@@ -532,6 +736,45 @@ EMO_MAP = {
     "happy": ("happy", "HappyJump"), "greet": ("gentle", "Greeting"),
     "generic": ("neutral", None),
 }
+
+# ---------------- W11 沉默轮：极短输入不追问 ----------------
+# 判定：去掉标点/空白/表情后为空（"……""🙂"），或命中语气/停滞白名单，
+# 或 ≤2 字的单字回应（"嗯""哦""累"）。注意不把"我最近失眠"这类有信息量的
+# 短句误判为沉默——不按"≤6 字"一刀切，只认白名单与 ≤2 字。
+SILENT_POOL = ["嗯。", "在。", "我在这儿", "……", "我在呢", "慢慢来，不急"]
+SILENT_MAX_INPUT_CHARS = 2
+SILENT_WORDS = {
+    "嗯", "嗯嗯", "哦", "噢", "啊", "唉", "诶", "累", "困", "随便", "算了",
+    "好吧", "行吧", "没事", "没什么", "不想说", "不想讲", "不想说话",
+    "不知道", "不知道说什么", "沉默",
+}
+_SILENT_STRIP_RE = re.compile(
+    r"[\s，。！？、；：,.!?;:\"'“”‘’（）()~～—\-_…·]+")
+_SILENT_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]+")
+_SILENT_QUESTION_RE = re.compile(r"[?？]|吗|呢")
+
+
+def is_silent_input(text):
+    """极短/无内容输入判定（用户明显沉默时不要追问）。"""
+    text = text or ""
+    core = _SILENT_EMOJI_RE.sub("", _SILENT_STRIP_RE.sub("", text))
+    if not core:
+        return True
+    if _SILENT_QUESTION_RE.search(text):
+        return False
+    return core in SILENT_WORDS or len(core) <= SILENT_MAX_INPUT_CHARS
+
+
+def _silent_reply(session_id):
+    """短回应 + 近 2 轮去重，避免连回两个“嗯。”。"""
+    sess = _STATE.get_session(session_id)
+    recent = sess.setdefault("recent_replies", [])
+    pool = [p for p in SILENT_POOL if p not in recent[-2:]] or SILENT_POOL
+    reply = random.choice(pool)
+    recent.append(reply)
+    if len(recent) > 4:
+        del recent[0]
+    return reply
 
 # ---------------- 可选落盘：会话 JSON（按 session_id 分文件） ----------------
 def _api_root(base):
@@ -900,6 +1143,12 @@ def make_reply(messages, session_id=None):
                 "memory_updates": {}, "hook": None, "crisis": False}
 
     topic = topic_of(user_text)
+    # W11 沉默轮早退：用户只发"……/嗯/累/随便"时不追问、不丢引导 hook，
+    # 只回 1-5 字短句（"在。""我在这儿"），保留轮次计数让后续引导节奏不乱。
+    if topic != "greet" and is_silent_input(user_text):
+        _STATE.next_turn(session_id)
+        return {"reply": _silent_reply(session_id), "emotion": "gentle",
+                "motion": None, "memory_updates": {}, "hook": None, "crisis": False}
     # 从会话状态读取旧记忆
     old_memories = _STATE.get_memories(session_id)
     mem_updates = extract_memory(user_text, old_memories)
@@ -915,24 +1164,43 @@ def make_reply(messages, session_id=None):
     # P3-1 体检复跑发现：greet 开场引用文本含记忆值（"你家年糕最近乖不乖"）会
     # 误烧记忆感知冷却（引用≠用户主动提，不该计入）→ greet 轮跳过记忆感知，
     # greet 池+开场引用自身已保证不冷场
-    mem_aware = None if topic == "greet" else _match_memory_value(memories_now, user_text, sess)
+    # W11：传 mem_updates——本轮刚写入的键不参与感知（写入轮烧冷却=白烧，且复述=炫耀）
+    mem_aware = None if topic == "greet" else _match_memory_value(
+        memories_now, user_text, sess, mem_updates)
     if mem_aware:
         k_aware, v_aware = mem_aware
         aware_pool = [t.replace("{v}", v_aware) for t in MEM_AWARE_POOL.get(k_aware, [])]
         if aware_pool:
             pool = aware_pool  # topic 保持原值（last_topic/@CTX/EMO_MAP 不受影响）
-    # P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行
+    # W11 轻量插值：用户提到具体实体（橘猫/关东煮/三点/周报）→ 用占位符模板回声。
+    # mem_aware 优先（存过的记忆比新细节更"像人"）；抽不出实体就落回话题池。
+    if not mem_aware and topic != "greet":
+        echo_pool = detail_pool(user_text)
+        if echo_pool:
+            pool = echo_pool
+    # P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行。
+    # W11：再加"开头 4 字不复读"与"整段会话内优先不重样"——5 条同实体的插值
+    # 模板若只做近 2 轮去重，5 次同一句输入只能出 3 种，听感仍是复读机。
     recent = sess.setdefault("recent_replies", [])
-    reply = None
-    for _ in range(len(pool)):
-        cand = random.choice(pool)
-        if cand not in recent[-2:]:
-            reply = cand
-            break
-    if reply is None:
-        reply = random.choice(pool)
+    prev_open = recent[-1][:4] if recent else ""
+
+    def _pick(avoid, avoid_open):
+        for _ in range(len(pool) * 2):
+            cand = random.choice(pool)
+            if cand in avoid:
+                continue
+            if avoid_open and len(cand) >= 4 and cand[:4] == prev_open:
+                continue
+            return cand
+        return None
+
+    # 三级降级：会话内没用过 → 近 2 轮没用过 → 至少不逐字复读上轮
+    reply = (_pick(set(recent), True)
+             or _pick(set(recent[-2:]), True)
+             or _pick(set(recent[-1:]), False)
+             or random.choice(pool))
     recent.append(reply)
-    if len(recent) > 4:
+    if len(recent) > 8:
         del recent[0]
     # @CTX：上下文感知——上一轮若刚聊过负面话题，把回复模板绑到该语境
     if reply.startswith("@CTX|"):
@@ -966,16 +1234,18 @@ def make_reply(messages, session_id=None):
         for k in ("大事", "宠物"):
             if k in memories and sess.setdefault("memory_hits", {}).get(k) is None:
                 _STATE.mark_recall(session_id, k, turn)
-    if "昵称" not in memories and turn <= ONBOARD_NAME_TURNS:
+    # W11 hook 优先级重排：主动回提（用户提到存过的记忆）> 固定引导 > 常规随机。
+    # 原顺序（引导 > 回提）会让前 4/8 轮的新手引导抢走本该"被记住"的时刻——
+    # 用户刚提完记忆却听到"还不知道怎么称呼你"，真人感直接崩。回提一旦命中就让位。
+    hook, hit_key = _pick_recall(memories, mem_updates, topic, user_text, sess, turn)
+    if hook is not None:
+        _STATE.mark_recall(session_id, hit_key, turn)
+    elif "昵称" not in memories and turn <= ONBOARD_NAME_TURNS:
         hook = ONBOARD_NAME_HOOK
     elif "大事" not in memories and turn <= ONBOARD_EVENT_TURNS:
         hook = ONBOARD_EVENT_HOOK
     else:
-        hook, hit_key = _pick_recall(memories, mem_updates, topic, user_text, sess, turn)
-        if hook is not None:
-            _STATE.mark_recall(session_id, hit_key, turn)
-        else:
-            hook = HOOKS.get(topic) if random.random() < 0.55 else None
+        hook = HOOKS.get(topic) if random.random() < 0.55 else None
     return {"reply": reply, "emotion": emo, "motion": motion,
             "memory_updates": mem_updates, "hook": hook, "crisis": False}
 
