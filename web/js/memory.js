@@ -66,14 +66,15 @@ const MemoryStore = (() => {
     k = k || 5;
     const q = (query || "").toLowerCase();
     const now = Date.now();
+    // 查询分词只算一次：原来放在 map 里，200 条记忆会重复 200 次正则+Set 构造
+    const qTokens = new Set(q.match(/[一-龥a-z0-9]{2,}/g) || []);
+    const grams = [];
+    for (const seg of (q.match(/[一-龥]+/g) || []))
+      for (let i = 0; i < seg.length - 1; i++) grams.push(seg.slice(i, i + 2)); // 重叠滑窗！
     const scored = load().map(m => {
       let s = 0;
       const text = m.text.toLowerCase();
       // 关键词重合：整词 + 中文2-gram滑窗（中文无分词，滑窗最可靠）
-      const qTokens = new Set(q.match(/[一-龥a-z0-9]{2,}/g) || []);
-      const grams = [];
-      for (const seg of (q.match(/[一-龥]+/g) || []))
-        for (let i = 0; i < seg.length - 1; i++) grams.push(seg.slice(i, i + 2)); // 重叠滑窗！
       for (const w of qTokens) if (text.includes(w)) s += 2.5;
       for (const g of grams) if (text.includes(g)) s += 1.2;
       // 时间衰减：7天内满血，之后约 3%/天（≈21%/周），下限 0.2

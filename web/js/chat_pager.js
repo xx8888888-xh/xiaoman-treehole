@@ -89,16 +89,22 @@ const ChatPager = (() => {
     const total = recs.length;
     if (total <= VIEW) start = 0;
     else start = Math.max(0, Math.min(start, total - VIEW));
-    const h0 = scroll ? scroll.scrollHeight : 0;
-    const y0 = scroll ? scroll.scrollTop : 0;
+    // 高度差回填只在翻页(keep)时需要；bottom 直接滚底，省一次强制布局读取
+    const keep = !!scroll && anchor === "keep";
+    const h0 = keep ? scroll.scrollHeight : 0;
+    const y0 = keep ? scroll.scrollTop : 0;
     for (const node of rendered) if (node.parentElement === host) host.removeChild(node);
     rendered = [];
     const end = Math.min(total, start + VIEW);
+    // 整页重建走 DocumentFragment：一次插入一个片段，减少逐条插入引发的样式/布局计算
+    const frag = doc && typeof doc.createDocumentFragment === "function"
+      ? doc.createDocumentFragment() : null;
     for (let i = start; i < end; i++) {
       const node = build(recs[i], i, i > 0 ? recs[i - 1] : null);
-      host.insertBefore(node, typing);
+      if (frag) frag.appendChild(node); else host.insertBefore(node, typing);
       rendered.push(node);
     }
+    if (frag) host.insertBefore(frag, typing);
     host.insertBefore(bottomBar, typing);   // 底栏始终排在最后一行之后
     syncBars();
     if (!scroll) return;
@@ -130,6 +136,22 @@ const ChatPager = (() => {
     const handle = { rec, el: null };
     recs.push(rec);
     if (nearBottom()) {
+      const total = recs.length;
+      // 增量滑窗：窗口已满且只需前移 1 行时，只删首行/建末行（原来整页重建 14 行）
+      if (total > VIEW && rendered.length === VIEW && start === total - VIEW - 1) {
+        const first = rendered[0];
+        if (first && first.parentElement === host) host.removeChild(first);
+        rendered.shift();
+        start = total - VIEW;
+        const node = build(recs[total - 1], total - 1, recs[total - 2]);
+        host.insertBefore(node, typing);
+        rendered.push(node);
+        host.insertBefore(bottomBar, typing);
+        syncBars();
+        if (scroll) scroll.scrollTop = scroll.scrollHeight;
+        handle.el = node;
+        return handle;
+      }
       start = Math.max(0, recs.length - VIEW);
       render("bottom");
       handle.el = rendered[rendered.length - 1] || null;
