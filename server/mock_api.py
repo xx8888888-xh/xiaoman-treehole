@@ -564,6 +564,171 @@ HOOKS = {
     "happy": "这个事值得记账，我帮你记着，年底盘点一下你今年攒了多少开心",
     "generic": "对了，你最近睡得还行吗",
 }
+# ---------------- W11 轻量模板插值：具体细节回声 ----------------
+# 没填 key 时 mock 是用户的默认通道，固定语料池只会"然后呢/说说细节"，
+# 用户说的具体东西（橘猫/关东煮/三点）全被丢掉。这里做**保守**抽取：
+# 只认高置信度实体，一次只回最强的一类；抽不出/不确定就返回 None 落回话题池。
+# 宁可通用，也不拼荒唐句（"差一点就迟到"不得抽出时间"一点"、"猫粮"不得当宠物）。
+NUM_CHARS = "零一二三四五六七八九十两\\d"
+ACTION_RE = re.compile(
+    r"(不吃饭|不吃东西|不想吃|不睡觉|睡不着|吐了|拉肚子|拆家|掉毛|"
+    r"打喷嚏|没精神|不让人抱|乱叫|咬人|生病了)")
+# 负向守卫：猫粮/猫砂/猫抓板/狗窝是物品，不是宠物本体
+ANIMAL_RE = re.compile(
+    r"((?:橘|黑|白|狸花|布偶|英短|小|大|胖|土|花)?(?:猫|狗|兔)子?"
+    r"|金毛|柯基|泰迪|哈士奇|边牧)"
+    r"(?!粮|砂|抓板|玩具|窝|毛)")
+FOOD_RE = re.compile(
+    r"(关东煮|糖醋排骨|火锅|奶茶|泡面|烧烤|煎饼|牛肉面|饺子|包子|蛋糕|"
+    r"雪糕|西瓜|外卖|咖啡|炸鸡|螺蛳粉|麻辣烫|小龙虾)")
+BODY_RE = re.compile(
+    r"(头疼|胃疼|肚子疼|腰疼|嗓子疼|牙疼|眼睛疼|发烧|感冒|低烧|过敏|落枕)")
+WEATHER_RE = re.compile(
+    r"(下雨|下[^，。！？\s]{0,4}雨|暴雨|大雨|下雪|下[^，。！？\s]{0,4}雪|暴雪|"
+    r"降温|刮风|闷热|雾霾|打雷|打[^，。！？\s]{0,3}雷|台风)")
+WORK_RE = re.compile(r"(需求|会议|周报|报告|代码|简历|预算|合同|排期|方案|PPT)")
+PLACE_RE = re.compile(r"(地铁|公交|便利店|超市|咖啡店|医院|学校|公司|办公室|公园)")
+# 时间只认两种高置信形态：带时间前缀的"X点"，或"X点才/就+动词"；
+# 裸"X点"（三点头/一点点/三点水）一律不抽
+POINT_PREFIX_RE = re.compile(
+    r"(?:凌晨|半夜|昨晚|昨天|今晚|今天|上周)\s*([%s]{1,3})\s*点" % NUM_CHARS)
+POINT_VERB_RE = re.compile(
+    r"([%s]{1,3})\s*点\s*(?:才|就)\s*(?:睡|醒|起|到|回|下班|上班)" % NUM_CHARS)
+GUESS_RE = re.compile(r"(你猜猜?|猜猜看|猜一下)")
+# 用户在拒绝建议时，"方案/分析"是吐槽对象，不是工作实体——回声会撞上"不给建议"的底线
+REFUSAL_RE = re.compile(
+    r"(?:不用|不要|不需要|别|少来|少给)(?:给我?|跟我?)?"
+    r"(?:方案|建议|步骤|分析|道理|鸡汤|大道理)"
+    r"|说句人话|说人话|别劝我|不用劝我")
+
+ANIMAL_ACTION_TEMPLATES = [
+    "{v}{a}？是突然这样还是已经两天了",
+    "{a}……{v}这是怎么了，之前不这样吧",
+    "先别慌，{v}{a}这事，今天才开始的？",
+    "它又{a}了？{v}这几天一直这样吗",
+    "听到{v}{a}我心里也一紧，现在缓点没",
+]
+ANIMAL_TEMPLATES = [
+    "{v}？今天又怎么了",
+    "说说{v}吧，它最近乖不乖",
+    "你家{v}啊……它现在在干嘛",
+    "{v}又整什么活了",
+    "一想到{v}我就想笑，它今天又干嘛了",
+]
+DETAIL_TEMPLATES = {
+    "food": [
+        "{v}？听着就馋了，是买的还是自己做的",
+        "{v}……我这会儿也有点想吃",
+        "哪家的{v}，好吃吗",
+        "又是{v}？你最近是不是就好这口",
+        "{v}这东西，我能连吃三天",
+    ],
+    "body": [
+        "{v}？多久了，一直硬扛着？",
+        "{v}这事真不能忽视，现在好点没",
+        "又是{v}……今天比昨天轻点吗",
+        "{v}啊，那可太难受了",
+        "你这{v}是老毛病还是新添的",
+    ],
+    "weather": [
+        "{v}……今天这天气真够呛",
+        "{v}？你出门带伞了吗",
+        "这种{v}天，最适合窝着不动",
+        "碰上{v}，我只想缩回被窝",
+        "{v}啊……窗户关好没",
+    ],
+    "time": [
+        "{v}……这样多久了",
+        "{v}？这也太晚了",
+        "又是{v}，你这觉欠得有点多",
+        "{v}才睡？第二天怎么撑住的",
+        "{v}这个点，我听着都困了",
+    ],
+    "work": [
+        "{v}这事还没完呢？",
+        "{v}最磨人，说说是哪一步卡住",
+        "又是{v}……你这几天净跟它耗了",
+        "{v}？先说，卡在哪儿了",
+        "{v}堆成这样，换谁都得炸",
+    ],
+    "place": [
+        "{v}上？那会儿人多不多",
+        "{v}……今天路上顺吗",
+        "又是在{v}，累不累",
+        "{v}这会儿还挤吗",
+        "{v}那种地方，待久了确实闷",
+    ],
+}
+GUESS_TEMPLATES = [
+    "不猜，你自己说||我最烦猜了",
+    "我猜不到，你直接交代吧",
+    "让我猜？那我猜你憋着笑||猜对没",
+    "你先说，猜错了多尴尬",
+    "我懒得猜，你说嘛",
+]
+GUESS_TIME_TEMPLATES = [
+    "我不猜，你说||几点？",
+    "不猜，你自己交代||到底几点",
+    "猜这个没意义，你直接说几点",
+    "我猜……算了不猜，你说",
+    "几点？你说，我不猜",
+]
+
+
+def extract_detail(text):
+    """保守抽取一个最强实体；返回 dict 或 None（抽不出就落回话题池）。
+
+    优先级：追问 > 动物 > 食物 > 身体 > 天气 > 时间 > 工作物 > 地点。
+    只回一个类别，避免"猫+关东煮+地铁"混着回造成重点漂移。
+    """
+    text = text or ""
+    if not text:
+        return None
+    if REFUSAL_RE.search(text):
+        return None
+    if GUESS_RE.search(text):
+        focus = "time" if ("几点" in text or ("点" in text and "睡" in text)) else "generic"
+        return {"kind": "guess", "focus": focus}
+    m = ANIMAL_RE.search(text)
+    if m:
+        a = ACTION_RE.search(text)
+        return {"kind": "animal", "v": m.group(1), "a": a.group(1) if a else ""}
+    for kind, pat in (("food", FOOD_RE), ("body", BODY_RE)):
+        m = pat.search(text)
+        if m:
+            return {"kind": kind, "v": m.group(1)}
+    m = WEATHER_RE.search(text)
+    if m:
+        # "下了好大的雨/打了半天雷"归一成短词，避免把整句塞进回复
+        raw = m.group(1)
+        v = "下雨" if "雨" in raw else ("下雪" if "雪" in raw else
+             ("打雷" if "雷" in raw else raw))
+        return {"kind": "weather", "v": v}
+    m = POINT_PREFIX_RE.search(text) or POINT_VERB_RE.search(text)
+    if m:
+        return {"kind": "time", "v": m.group(1) + "点"}
+    for kind, pat in (("work", WORK_RE), ("place", PLACE_RE)):
+        m = pat.search(text)
+        if m:
+            return {"kind": kind, "v": m.group(1)}
+    return None
+
+
+def detail_pool(text):
+    """实体 → 占位符模板池；抽不出返回 None（调用方继续用话题池）。"""
+    d = extract_detail(text)
+    if not d:
+        return None
+    kind = d["kind"]
+    if kind == "guess":
+        pool = GUESS_TIME_TEMPLATES if d["focus"] == "time" else GUESS_TEMPLATES
+        return list(pool)
+    if kind == "animal":
+        tmpl = ANIMAL_ACTION_TEMPLATES if d.get("a") else ANIMAL_TEMPLATES
+        return [t.replace("{v}", d["v"]).replace("{a}", d.get("a", "")) for t in tmpl]
+    return [t.replace("{v}", d["v"]) for t in DETAIL_TEMPLATES[kind]]
+
+
 EMO_MAP = {
     "work": ("gentle", "Nod"), "love": ("sad", "Nod"), "lonely": ("gentle", None),
     "insomnia": ("gentle", None), "family": ("gentle", None), "money": ("surprised", None),
@@ -1007,18 +1172,35 @@ def make_reply(messages, session_id=None):
         aware_pool = [t.replace("{v}", v_aware) for t in MEM_AWARE_POOL.get(k_aware, [])]
         if aware_pool:
             pool = aware_pool  # topic 保持原值（last_topic/@CTX/EMO_MAP 不受影响）
-    # P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行
+    # W11 轻量插值：用户提到具体实体（橘猫/关东煮/三点/周报）→ 用占位符模板回声。
+    # mem_aware 优先（存过的记忆比新细节更"像人"）；抽不出实体就落回话题池。
+    if not mem_aware and topic != "greet":
+        echo_pool = detail_pool(user_text)
+        if echo_pool:
+            pool = echo_pool
+    # P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行。
+    # W11：再加"开头 4 字不复读"与"整段会话内优先不重样"——5 条同实体的插值
+    # 模板若只做近 2 轮去重，5 次同一句输入只能出 3 种，听感仍是复读机。
     recent = sess.setdefault("recent_replies", [])
-    reply = None
-    for _ in range(len(pool)):
-        cand = random.choice(pool)
-        if cand not in recent[-2:]:
-            reply = cand
-            break
-    if reply is None:
-        reply = random.choice(pool)
+    prev_open = recent[-1][:4] if recent else ""
+
+    def _pick(avoid, avoid_open):
+        for _ in range(len(pool) * 2):
+            cand = random.choice(pool)
+            if cand in avoid:
+                continue
+            if avoid_open and len(cand) >= 4 and cand[:4] == prev_open:
+                continue
+            return cand
+        return None
+
+    # 三级降级：会话内没用过 → 近 2 轮没用过 → 至少不逐字复读上轮
+    reply = (_pick(set(recent), True)
+             or _pick(set(recent[-2:]), True)
+             or _pick(set(recent[-1:]), False)
+             or random.choice(pool))
     recent.append(reply)
-    if len(recent) > 4:
+    if len(recent) > 8:
         del recent[0]
     # @CTX：上下文感知——上一轮若刚聊过负面话题，把回复模板绑到该语境
     if reply.startswith("@CTX|"):
