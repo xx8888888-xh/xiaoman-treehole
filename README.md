@@ -22,7 +22,7 @@ cd web && python -m http.server 8901
 
 ```bash
 bash scripts/build_assets.sh       # 先同步 web/ → android/.../assets/www 并生成哈希清单（唯一真源）
-docker compose up -d --build      # 或在 WSL: docker compose -f ~/treehole-stack/compose/docker-compose.yml up -d --build
+docker compose up -d --build      # 必须在仓库根目录执行：web 与 assets/www 用相对路径只读挂载
 ```
 
 > 如果所在环境的 Docker 容器**没有外网出口**（本机 WSL 的 bridge 被防火墙拦掉 DNS/TCP，表现为 App 只能降级到本地 mock），
