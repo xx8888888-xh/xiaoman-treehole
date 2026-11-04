@@ -424,15 +424,19 @@ MEM_AWARE_POOL = {
 }
 MEM_AWARE_COOLDOWN = 3  # 同键记忆感知间隔轮数
 
-def _match_memory_value(memories, user_text, sess):
+def _match_memory_value(memories, user_text, sess, mem_updates=None):
     """用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ (键, 值) 或 None。
-    同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。"""
+    同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
+    W11：本轮刚写入的键跳过感知——"刚记下"就复述会显得像在炫耀记忆，
+    且会白烧一次冷却；从下一轮起才可命中。"""
     if not memories or not user_text:
         return None
     turn = sess.get("turns", 0)
     hits = sess.setdefault("mem_aware_ts", {})
     for k, v in memories.items():
         if not v or len(v) < 2 or k == "昵称":
+            continue
+        if mem_updates and k in mem_updates:
             continue
         if k == "宠物" and _pet_generic(v):
             continue
@@ -983,7 +987,9 @@ def make_reply(messages, session_id=None):
     # P3-1 体检复跑发现：greet 开场引用文本含记忆值（"你家年糕最近乖不乖"）会
     # 误烧记忆感知冷却（引用≠用户主动提，不该计入）→ greet 轮跳过记忆感知，
     # greet 池+开场引用自身已保证不冷场
-    mem_aware = None if topic == "greet" else _match_memory_value(memories_now, user_text, sess)
+    # W11：传 mem_updates——本轮刚写入的键不参与感知（写入轮烧冷却=白烧，且复述=炫耀）
+    mem_aware = None if topic == "greet" else _match_memory_value(
+        memories_now, user_text, sess, mem_updates)
     if mem_aware:
         k_aware, v_aware = mem_aware
         aware_pool = [t.replace("{v}", v_aware) for t in MEM_AWARE_POOL.get(k_aware, [])]
