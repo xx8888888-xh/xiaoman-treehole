@@ -426,17 +426,36 @@ const App = (() => {
 
   // ---------- 外观（浅色/深色/跟随系统；用户可手动覆盖，不靠系统猜） ----------
   const THEME_KEY = "xiaoman_theme";
-  function applyTheme(v) {
-    const mode = v === "light" || v === "dark" ? v : "auto";
+  const THEME_COLOR = { light: "#F7F4EF", dark: "#151416" };
+  const themeMql = typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  let themeMode = "auto";
+  /** auto 在这里解析成明确的 light/dark：CSS 只认 body 上的 class（不再复制暗色变量块） */
+  function paintTheme() {
+    const dark = themeMode === "dark"
+      || (themeMode === "auto" && !!themeMql && themeMql.matches);
     document.body.classList.remove("theme-light", "theme-dark");
-    if (mode !== "auto") document.body.classList.add("theme-" + mode);
-    try { localStorage.setItem(THEME_KEY, mode); } catch (e) {}
+    document.body.classList.add(dark ? "theme-dark" : "theme-light");
+    const meta = $("metaTheme");
+    if (meta) meta.setAttribute("content", dark ? THEME_COLOR.dark : THEME_COLOR.light);
   }
-  applyTheme((() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })());
+  function applyTheme(v, persist) {
+    themeMode = v === "light" || v === "dark" ? v : "auto";
+    paintTheme();
+    if (persist !== false) {
+      try { localStorage.setItem(THEME_KEY, themeMode); } catch (e) {}
+    }
+  }
+  applyTheme((() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })(), false);
+  if (themeMql) {
+    const onSystemTheme = () => { if (themeMode === "auto") paintTheme(); };
+    if (typeof themeMql.addEventListener === "function") themeMql.addEventListener("change", onSystemTheme);
+    else if (typeof themeMql.addListener === "function") themeMql.addListener(onSystemTheme);
+  }
   // 系统深浅色在 WebView 里切换时（Android 声明了 uiMode 不重建页面）由原生调用
   window.__retheme = () => applyTheme((() => {
     try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; }
-  })());
+  })(), false);
   // 外观自检/自动化入口（只读当前值；切换请用 Appearance.setPreset/setSwitch）
   window.__appearance = () => (window.Appearance ? Appearance.get() : null);
 
@@ -467,6 +486,10 @@ const App = (() => {
     $("apFont").checked = p.font === "large";
     $("apMotion").checked = p.motion;
     $("apIcons").checked = p.iconsGray;
+    ["apFont", "apMotion", "apIcons"].forEach(id => {
+      const el = $(id);
+      if (el) el.setAttribute("aria-checked", String(!!el.checked));
+    });
     $("apHint").textContent = appearanceHint(p);
   }
 
@@ -521,12 +544,16 @@ const App = (() => {
   // ---------- 渲染 ----------
   // 长会话分页交给 ChatPager（chat_pager.js）：DOM 只保留当前页 + 缓冲，
   // 这里只负责「一条记录 → 一个节点」的构造，重建时可重放（含语音标记）。
-  function buildRow(rec) {
+  function buildRow(rec, i, prev) {
     const text = rec.text;
     const who = rec.who;
     const opts = rec.opts || {};
+    // 同组 = 连续同一说话人且都不是系统提示/危机卡：只影响间距与头像显隐
+    const sameGroup = !!(prev && prev.who === who
+      && !(prev.opts && (prev.opts.tip || prev.opts.crisis))
+      && !(opts.tip || opts.crisis));
     const row = document.createElement("div");
-    row.className = `msg-row ${who}`;
+    row.className = `msg-row ${who}${sameGroup ? " same-group" : ""}`;
     if (opts.crisis) {
       const card = document.createElement("div");
       card.className = "care-card" + (opts.level === "high" ? " care-high" : "");
@@ -551,10 +578,12 @@ const App = (() => {
       bubble.textContent = text;
       row.appendChild(bubble);
     } else {
-      if (who === "them") {
+      // 头像只在同组首条出现，续条不再重复 32px 方块
+      if (who === "them" && !sameGroup) {
         const av = document.createElement("div");
         av.className = "avatar-mini";
         av.textContent = "满";
+        av.setAttribute("aria-hidden", "true");
         row.appendChild(av);
       }
       const bubble = document.createElement("div");
@@ -563,7 +592,7 @@ const App = (() => {
       if (opts.voice || rec.spoken) {
         const meta = document.createElement("span");
         meta.className = "meta";
-        meta.textContent = "🔊 语音已播";
+        meta.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 9 L8 9 L12 5 L12 19 L8 15 L4 15 Z"/><path d="M16 8 A6 6 0 0 1 16 16"/></svg><span>语音已播</span>';
         bubble.appendChild(meta);
       }
       row.appendChild(bubble);
@@ -791,7 +820,7 @@ const App = (() => {
         await sendSplit({ reply: "（信号飘走了…你还在吗？||你说的我记下了，缓过来我找补回来）", emotion: "neutral", motion: null }, text);
       }
     });
-    busy = false; $("sendBtn").disabled = false;
+    busy = false; syncComposer();
     armIdle();
   }
 
@@ -961,7 +990,9 @@ const App = (() => {
     // 中间没说过话），就不要再插一条开场——否则气泡会一次次累积。
     // 有待补回复的消息时例外：必须告诉用户"话没丢"。
     if (!loadPending().length && tail && Date.now() - lastGreet < 6 * 3600 * 1000) {
-      const rows = document.querySelectorAll("#messages .msg-row .bubble");
+      // 隐藏的打字指示/系统提示不算"最后一条"，否则会误判成没说过话而重复开场
+      const rows = Array.from(document.querySelectorAll("#messages .msg-row:not(.hidden) .bubble"))
+        .filter(b => !b.classList.contains("typing"));
       const lastBubble = rows.length ? rows[rows.length - 1].innerText.trim() : "";
       if (lastBubble && lastBubble.endsWith(tail)) return;
     }
@@ -1064,6 +1095,21 @@ const App = (() => {
   }
 
   // ---------- 绑定 ----------
+  /** 输入栏状态：随内容自动长高（44→132）、空内容禁用发送、接近上限显示计数 */
+  function syncComposer() {
+    const input = $("textInput");
+    if (!input) return;
+    const len = input.value.length;
+    const btn = $("sendBtn");
+    if (btn) btn.disabled = busy || !input.value.trim();
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight || 44, 132) + "px";
+    const cc = $("charCount");
+    if (cc) {
+      cc.hidden = len < 400;
+      cc.textContent = len ? len + "/500" : "";
+    }
+  }
   function bind() {
     // 统一提交入口：busy 时不吞字（保留输入并提示），避开 IME 合成态误发送
     function submitText() {
@@ -1072,13 +1118,19 @@ const App = (() => {
       if (!v.trim()) return;
       if (busy) { toast("等我把这句说完嘛"); return; }
       input.value = "";
+      syncComposer();
       send(v);
     }
     $("sendBtn").onclick = submitText;
     $("textInput").addEventListener("keydown", e => {
-      // isComposing / keyCode 229：中文输入法候选确认回车，不算发送
-      if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitText();
+      // isComposing / keyCode 229：中文输入法候选确认回车，不算发送；Shift+Enter 换行
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
+        submitText();
+      }
     });
+    $("textInput").addEventListener("input", syncComposer);
+    syncComposer();
     $("micBtn") && ($("micBtn").onclick = () => toast("语音输入接入中，先打字撩她吧"));
     $("degradeClose") && ($("degradeClose").onclick = () => {
       $("degradeBadge").classList.add("hidden");
