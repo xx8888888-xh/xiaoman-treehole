@@ -533,6 +533,45 @@ EMO_MAP = {
     "generic": ("neutral", None),
 }
 
+# ---------------- W11 沉默轮：极短输入不追问 ----------------
+# 判定：去掉标点/空白/表情后为空（"……""🙂"），或命中语气/停滞白名单，
+# 或 ≤2 字的单字回应（"嗯""哦""累"）。注意不把"我最近失眠"这类有信息量的
+# 短句误判为沉默——不按"≤6 字"一刀切，只认白名单与 ≤2 字。
+SILENT_POOL = ["嗯。", "在。", "我在这儿", "……", "我在呢", "慢慢来，不急"]
+SILENT_MAX_INPUT_CHARS = 2
+SILENT_WORDS = {
+    "嗯", "嗯嗯", "哦", "噢", "啊", "唉", "诶", "累", "困", "随便", "算了",
+    "好吧", "行吧", "没事", "没什么", "不想说", "不想讲", "不想说话",
+    "不知道", "不知道说什么", "沉默",
+}
+_SILENT_STRIP_RE = re.compile(
+    r"[\s，。！？、；：,.!?;:\"'“”‘’（）()~～—\-_…·]+")
+_SILENT_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]+")
+_SILENT_QUESTION_RE = re.compile(r"[?？]|吗|呢")
+
+
+def is_silent_input(text):
+    """极短/无内容输入判定（用户明显沉默时不要追问）。"""
+    text = text or ""
+    core = _SILENT_EMOJI_RE.sub("", _SILENT_STRIP_RE.sub("", text))
+    if not core:
+        return True
+    if _SILENT_QUESTION_RE.search(text):
+        return False
+    return core in SILENT_WORDS or len(core) <= SILENT_MAX_INPUT_CHARS
+
+
+def _silent_reply(session_id):
+    """短回应 + 近 2 轮去重，避免连回两个“嗯。”。"""
+    sess = _STATE.get_session(session_id)
+    recent = sess.setdefault("recent_replies", [])
+    pool = [p for p in SILENT_POOL if p not in recent[-2:]] or SILENT_POOL
+    reply = random.choice(pool)
+    recent.append(reply)
+    if len(recent) > 4:
+        del recent[0]
+    return reply
+
 # ---------------- 可选落盘：会话 JSON（按 session_id 分文件） ----------------
 def _api_root(base):
     """把 base 归一为不带 /v1 的根地址"""
@@ -900,6 +939,12 @@ def make_reply(messages, session_id=None):
                 "memory_updates": {}, "hook": None, "crisis": False}
 
     topic = topic_of(user_text)
+    # W11 沉默轮早退：用户只发"……/嗯/累/随便"时不追问、不丢引导 hook，
+    # 只回 1-5 字短句（"在。""我在这儿"），保留轮次计数让后续引导节奏不乱。
+    if topic != "greet" and is_silent_input(user_text):
+        _STATE.next_turn(session_id)
+        return {"reply": _silent_reply(session_id), "emotion": "gentle",
+                "motion": None, "memory_updates": {}, "hook": None, "crisis": False}
     # 从会话状态读取旧记忆
     old_memories = _STATE.get_memories(session_id)
     mem_updates = extract_memory(user_text, old_memories)
