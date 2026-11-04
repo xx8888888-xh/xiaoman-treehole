@@ -80,4 +80,6 @@ android {
 }
 
 dependencies {
+    // 提醒调度/权限分支的纯逻辑单元测试（无 Robolectric 依赖，保证离线可跑）
+    testImplementation("junit:junit:4.13.2")
 }

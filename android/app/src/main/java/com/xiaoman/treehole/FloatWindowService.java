@@ -6,12 +6,16 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.provider.Settings;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -19,7 +23,6 @@ import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -33,10 +36,12 @@ import android.widget.TextView;
  *  - 悬浮球：60dp 圆形「满」字，全屏可拖动（跟随手指），单击（位移<20px）展开迷你窗
  *  - 迷你窗：标题栏（收起/关闭）+ WebView（index.html?float=1 迷你模式，复用全部对话引擎）
  *  - 迷你窗内：可正常输入/发送/收语音，回复实时渲染（web 端 float-mode 小屏布局）
- *  - 收起按钮：迷你窗收回悬浮球（WebView 实例保留，再点秒开）
+ *  - 收起按钮：迷你窗收回悬浮球。**收起 = 真暂停**：页面定时器（心跳/提醒轮询/打字机）
+ *    全部冻结，15 秒后销毁 WebView 释放内存；再点按需重建（历史在 IndexedDB，会话不丢）
  *  - 关闭按钮：移除浮层并停掉前台服务
  * 权限：SYSTEM_ALERT_WINDOW 特殊权限，由 MainActivity 桥引导用户到系统设置页授权。
  * FGS：API 34 起必须声明 specialUse 类型（Manifest 已配 PROPERTY_SPECIAL_USE_FGS_SUBTYPE）。
+ * 前台服务最小化：静默、低优先级、无常驻动画；只有"悬浮球存在"这一件事需要保活。
  */
 public class FloatWindowService extends Service {
 
@@ -47,6 +52,14 @@ public class FloatWindowService extends Service {
     private static final int NOTIF_ID = 42;
     private static final int BALL_SIZE_DP = 60;
     private static final int TAP_SLOP_PX = 20;   // 位移小于此值视为点击（而非拖动）
+    private static final long PANEL_DESTROY_DELAY_MS = 15_000L;
+
+    /** 迷你窗是否展开（与 MainActivity.activityVisible 一起决定"是否有界面可见"） */
+    private static volatile boolean panelVisible = false;
+
+    static boolean isPanelVisible() {
+        return panelVisible;
+    }
 
     private WindowManager wm;
     private View ball;
@@ -56,6 +69,8 @@ public class FloatWindowService extends Service {
     private WindowManager.LayoutParams panelParams;
     private boolean panelShown = false;
     private int screenW;   // 拖动松手贴边吸附用
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private Runnable destroyTask;
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
@@ -82,15 +97,18 @@ public class FloatWindowService extends Service {
         return START_STICKY;
     }
 
-    // ---------------- 前台通知 ----------------
+    // ---------------- 前台通知（最小化） ----------------
 
     private void startForegroundNotify() {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "小满悬浮窗",
-                    NotificationManager.IMPORTANCE_MIN);
+                    NotificationManager.IMPORTANCE_MIN);      // 最低优先级：不响、不横幅、无角标
             ch.setDescription("悬浮球与迷你对话窗的后台保活通知");
             ch.setShowBadge(false);
+            ch.setSound(null, null);
+            ch.enableVibration(false);
+            ch.enableLights(false);
             nm.createNotificationChannel(ch);
         }
         PendingIntent pi = PendingIntent.getActivity(this, 0,
@@ -99,13 +117,15 @@ public class FloatWindowService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
-        Notification notif = b
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+        b.setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("小满在身边")
                 .setContentText("点按回到小满树洞")
                 .setContentIntent(pi)
                 .setOngoing(true)
-                .build();
+                .setShowWhen(false)
+                .setOnlyAlertOnce(true);
+        // 渠道已是 IMPORTANCE_MIN 且无声音/振动；不再额外设 setSilent（API 26 以下无此方法）
+        Notification notif = b.build();
         // API 34 起必须带 FGS 类型参数；Manifest 已声明 specialUse
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, notif,
@@ -127,7 +147,7 @@ public class FloatWindowService extends Service {
         tv.setContentDescription("小满悬浮球");   // TalkBack 无障碍：双击展开迷你对话窗
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.OVAL);
-        bg.setColor(Color.parseColor("#F7A8B8")); // 品牌粉
+        bg.setColor(themeColor(R.color.ball_bg, "#F7A8B8")); // 品牌粉（深色模式由资源给出）
         bg.setStroke(dp(2), Color.WHITE);
         tv.setBackground(bg);
 
@@ -210,15 +230,18 @@ public class FloatWindowService extends Service {
 
     private void expandPanel() {
         if (panelShown) return;
-        if (panel == null) buildPanel();
+        if (panel == null) buildPanel();          // 上次收起后已销毁 → 现场重建
+        cancelDestroy();
         try {
             wm.addView(panel, panelParams);
             panelShown = true;
+            panelVisible = true;
             // 迷你窗需要接收输入（弹键盘）：去掉 NOT_FOCUSABLE
             panelParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
             wm.updateViewLayout(panel, panelParams);
             // 球先藏起来，避免压在面板角上
             ball.setVisibility(View.GONE);
+            PageLifecycle.onHostResume(panelWeb);   // 页面计时器按剩余时长重新武装
         } catch (WindowManager.BadTokenException e) {
             stopSelf();
         }
@@ -228,10 +251,41 @@ public class FloatWindowService extends Service {
         if (!panelShown || panel == null) return;
         try { wm.removeView(panel); } catch (Exception ignored) {}
         panelShown = false;
+        panelVisible = false;
+        // 收起 = 真暂停：心跳/提醒轮询/打字机全部停表，随后销毁 WebView 释放内存
+        PageLifecycle.onHostPause(panelWeb);
+        // 唯一可见界面收起后，到期提醒必须改走系统通知（否则页面停表后再没人投递）
+        ReminderAlarmScheduler.reschedule(this);
+        scheduleDestroy();
         // 收起后必须恢复 NOT_FOCUSABLE，否则悬浮球会挡住全屏触摸
         if (ball != null && ball.getParent() != null) {
             ball.setVisibility(View.VISIBLE);
             try { wm.updateViewLayout(ball, ballParams); } catch (Exception ignored) {}
+        }
+    }
+
+    /** 收起 15 秒后销毁第二个 WebView（内存 -60~120MB）；期间再展开可秒开 */
+    private void scheduleDestroy() {
+        if (panelWeb == null) return;
+        cancelDestroy();
+        destroyTask = () -> {
+            destroyTask = null;
+            if (panelShown || panelWeb == null) return;
+            try {
+                panelWeb.loadUrl("about:blank");
+                panelWeb.destroy();
+            } catch (Exception ignored) { }
+            panelWeb = null;
+            panel = null;
+            Log.d("FloatWindow", "panel webview released");
+        };
+        ui.postDelayed(destroyTask, PANEL_DESTROY_DELAY_MS);
+    }
+
+    private void cancelDestroy() {
+        if (destroyTask != null) {
+            ui.removeCallbacks(destroyTask);
+            destroyTask = null;
         }
     }
 
@@ -243,8 +297,8 @@ public class FloatWindowService extends Service {
         panel.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(18));
-        bg.setColor(Color.parseColor("#FFF9F2")); // 主题奶油色
-        bg.setStroke(dp(1), Color.parseColor("#F7A8B8"));
+        bg.setColor(themeColor(R.color.panel_bg, "#FFF9F2"));
+        bg.setStroke(dp(1), themeColor(R.color.panel_stroke, "#F7A8B8"));
         panel.setBackground(bg);
         panel.setElevation(dp(6));
 
@@ -256,7 +310,7 @@ public class FloatWindowService extends Service {
 
         TextView title = new TextView(this);
         title.setText("小满树洞 · 迷你窗");
-        title.setTextColor(Color.parseColor("#5B4A43"));
+        title.setTextColor(themeColor(R.color.panel_text, "#5B4A43"));
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
@@ -267,20 +321,7 @@ public class FloatWindowService extends Service {
 
         // ---- WebView：float=1 迷你模式（复用全部对话/记忆/提醒引擎） ----
         panelWeb = new WebView(this);
-        WebSettings ws = panelWeb.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        ws.setMediaPlaybackRequiresUserGesture(false);
-        // 与主壳完全一致的加载策略：https 同源 + 本地 http 子资源（TTS/代理）放行
-        ws.setAllowFileAccess(true);
-        ws.setAllowFileAccessFromFileURLs(false);
-        ws.setAllowUniversalAccessFromFileURLs(false);
-        ws.setAllowContentAccess(false);
-        ws.setCacheMode(WebSettings.LOAD_DEFAULT);
-        ws.setGeolocationEnabled(false);
-        if (Build.VERSION.SDK_INT >= 21) {
-            ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        }
+        WebShell.configureSettings(panelWeb, this);
         // 与 MainActivity 共用同一套 asset 映射与导航守卫：同 Origin 才能共享 localStorage/IndexedDB
         panelWeb.setWebViewClient(new WebViewClient() {
             @Override
@@ -308,10 +349,12 @@ public class FloatWindowService extends Service {
         // 旧实现用 file:///android_asset/www/index.html —— file:// 的 Origin 为 "null"，
         // localStorage/IndexedDB 与主界面分裂，悬浮窗里看不到主界面的记忆/历史。
         panelWeb.addJavascriptInterface(new NetBridge(panelWeb), "AndroidNet");
+        // 提醒镜像同样从迷你窗同步（两边同 Origin，写的是同一份 localStorage）
+        panelWeb.addJavascriptInterface(new AndroidHostBridge(this, null), AndroidHostBridge.NAME);
         panelWeb.loadUrl(MainActivity.BASE_URL + "?float=1");
         // 注：迷你窗不挂 AndroidTTS 桥（主 WebView 独占 TTS 引擎）；web 端检测不到桥时
         // 自动降级 speechSynthesis，语音同样可用，主界面语音不受双实例影响
-        panelWeb.setBackgroundColor(Color.parseColor("#FFF9F2"));
+        try { panelWeb.setBackgroundColor(themeColor(R.color.panel_bg, "#FFF9F2")); } catch (Exception ignored) { }
         LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
         panel.addView(bar, new LinearLayout.LayoutParams(
@@ -330,16 +373,16 @@ public class FloatWindowService extends Service {
         Button b = new Button(this);
         b.setText(text);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        b.setTextColor(Color.parseColor("#5B4A43"));
+        b.setTextColor(themeColor(R.color.panel_text, "#5B4A43"));
         b.setAllCaps(false);
         b.setMinWidth(dp(56));
         b.setMinimumWidth(dp(56));
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
+        b.setMinHeight(dp(44));                 // 触控热区 44dp（原 36 偏小，易误触）
+        b.setMinimumHeight(dp(44));
         b.setPadding(dp(10), dp(4), dp(10), dp(4));
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(14));
-        bg.setColor(Color.parseColor("#FFE3E9"));
+        bg.setColor(themeColor(R.color.panel_btn_bg, "#FFE3E9"));
         b.setBackground(bg);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -364,11 +407,32 @@ public class FloatWindowService extends Service {
         return (int) (getResources().getDisplayMetrics().heightPixels * pct);
     }
 
+    /** 取主题色（深色模式走 values-night），失败时回退硬编码值 */
+    private int themeColor(int resId, String fallback) {
+        try { return getColor(resId); } catch (Exception ignored) { }
+        try { return Color.parseColor(fallback); } catch (Exception e) { return Color.GRAY; }
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        screenW = getResources().getDisplayMetrics().widthPixels;
+        if (panelParams != null && panelShown) {
+            // 横竖屏切换：迷你窗按新屏幕重算尺寸，避免超出屏幕/被刘海裁切
+            panelParams.width = Math.min(screenWidthPct(0.92f), dp(340));
+            panelParams.height = Math.min(screenHeightPct(0.62f), dp(460));
+            try { wm.updateViewLayout(panel, panelParams); } catch (Exception ignored) {}
+        }
+        WebShell.applyFontScale(panelWeb, this);
+    }
+
     @Override
     public void onDestroy() {
+        cancelDestroy();
+        panelVisible = false;
         if (panelWeb != null) {
-            panelWeb.loadUrl("about:blank");
-            panelWeb.destroy();
+            try { panelWeb.loadUrl("about:blank"); } catch (Exception ignored) { }
+            try { panelWeb.destroy(); } catch (Exception ignored) { }
             panelWeb = null;
         }
         if (panel != null && panel.getParent() != null) {

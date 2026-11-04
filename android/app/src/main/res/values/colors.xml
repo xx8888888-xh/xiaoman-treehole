@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 浅色（默认）：与原品牌色一致，未改动观感 -->
+    <color name="window_bg">#FFF9F2</color>
+    <color name="ball_bg">#F7A8B8</color>
+    <color name="panel_bg">#FFF9F2</color>
+    <color name="panel_stroke">#F7A8B8</color>
+    <color name="panel_text">#5B4A43</color>
+    <color name="panel_btn_bg">#FFE3E9</color>
+</resources>

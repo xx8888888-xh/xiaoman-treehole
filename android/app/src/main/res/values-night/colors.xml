@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色：夜里打开不再是一片刺眼奶油色；对比度按 WCAG AA 校正 -->
+    <color name="window_bg">#1C1917</color>
+    <color name="ball_bg">#B4778A</color>
+    <color name="panel_bg">#232019</color>
+    <color name="panel_stroke">#6B5560</color>
+    <color name="panel_text">#EDE4DC</color>
+    <color name="panel_btn_bg">#332B2B</color>
+</resources>

@@ -153,6 +153,43 @@ test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰
   assert.equal(canceled >= 1, true);
 });
 
+test("tts=off：不出声，且不得把气泡标成「语音已播」（状态与文案一致）", async () => {
+  // 回归用例：AVD 上 provider=off 时气泡仍显示「🔊 语音已播」。
+  // 标记由 onEnd 写入（app.js: ChatPager.markVoice），所以 off 分支必须不回调 onEnd。
+  const calls = [];
+  const win = fakeWin({
+    AndroidTTS: { available: () => true, speakRate: () => { calls.push("played"); return true; }, stop: () => {} },
+    speechSynthesis: { speak: () => calls.push("browser"), cancel: () => {} },
+    SpeechSynthesisUtterance: function (t) { this.text = t; }
+  });
+  const engine = makeEngine(win, { tts: "off" });
+  const bubble = { spoken: false };            // 模拟一条消息记录
+  let ended = 0;
+  const res = await engine.speak("这句不该出声", () => {},
+    () => { ended++; bubble.spoken = true; });
+  assert.deepEqual(res, { spoke: false, provider: "off" }, "off 如实返回，不伪装成 none");
+  assert.equal(calls.length, 0, "任何 provider 都不该被调用");
+  assert.equal(ended, 0, "onEnd 不得回调");
+  assert.equal(bubble.spoken, false, "界面不得出现「🔊 语音已播」");
+  assert.equal(engine.provider({ tts: "off" }), "off", "设置页应显示 off 而非 none");
+  assert.equal(engine.available({ tts: "off" }), false);
+});
+
+test("真实页面：API 是全局 const（不在 window 上）时，状态也必须读到配置", () => {
+  // 回归：api.js 的 API 是顶层 const，浏览器里 window.API 恒为 undefined。
+  // 只查 W.API 会让真机 provider 永远是 none，与设置页选的 tts 不一致。
+  const saved = globalThis.API;
+  globalThis.API = { loadCfg: () => ({ tts: "off" }) };
+  const engine = TTS._create(fakeWin());   // 刻意不注入 win.API，模拟真实浏览器
+  try {
+    assert.equal(engine.provider(), "off", "设置页显示 off 而不是 none");
+    assert.equal(engine.available(), false);
+    assert.deepEqual(engine.chain(), ["none"]);
+  } finally {
+    if (saved === undefined) delete globalThis.API; else globalThis.API = saved;
+  }
+});
+
 test("stop 幂等、空文本不发声但 onEnd 必到", async () => {
   const engine = makeEngine(fakeWin(), {});
   assert.doesNotThrow(() => { engine.stop(); engine.stop(); });
