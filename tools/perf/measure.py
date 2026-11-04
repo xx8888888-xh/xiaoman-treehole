@@ -271,9 +271,32 @@ async def measure_rounds(browser, rounds=200):
         "pager": s1["pager"],
         "nodesMetric": s1["Nodes"],
         "nodesStart": s0["Nodes"],
+        "scriptDurationDelta": round((s1["ScriptDuration"] or 0) - (s0["ScriptDuration"] or 0), 3),
+        "taskDurationDelta": round((s1["TaskDuration"] or 0) - (s0["TaskDuration"] or 0), 3),
     }
     await ctx.close()
     return result
+
+
+async def measure_micro(browser):
+    """微基准：连续 push 300 条（真实 buildRow），测窗口推进的单次成本。"""
+    ctx, page = await new_page(browser, CFG_OFFLINE)
+    await page.goto(BASE, wait_until="domcontentloaded")
+    await asyncio.sleep(1.5)
+    runs = []
+    for _ in range(3):
+        runs.append(await page.evaluate(
+            """() => {
+                const t0 = performance.now();
+                for (let i = 0; i < 300; i++) {
+                    window.ChatPager.push({text: '微基准消息#' + i + '，用来测量窗口推进成本', who: i % 2 ? 'me' : 'them'});
+                }
+                return performance.now() - t0;
+            }"""))
+    await ctx.close()
+    return {"push300Ms": [round(x, 2) for x in runs],
+            "push300MinMs": round(min(runs), 2),
+            "perPushUs": round(min(runs) * 1000 / 300, 1)}
 
 
 async def seed_history(page, n=300):
@@ -311,17 +334,16 @@ async def measure_scroll(browser, n=300):
             requestAnimationFrame(loop);
         }""")
     t0 = await page.evaluate("performance.now()")
-    # 上下滚动 10 个来回：顶部触发 loader 翻页，底部回最新
-    # 窗口只有 14 行时容器可能不足以产生原生滚动（scrollTop 恒为 0），
-    # 因此同时显式调用 older() 走同一条「窗口重建 + 回填」热路径。
-    for i in range(10):
-        await page.evaluate("document.getElementById('chatScroll').scrollTop = 0")
-        await asyncio.sleep(0.15)
+    # 窗口仅 14 行时容器常常不可滚（scrollTop 恒 0），因此显式 older() 走同一条
+    # 「翻页取数 + 整窗重建 + scrollTop 回填」热路径：24 页覆盖全部 300 条历史。
+    box = await page.evaluate(
+        """() => { const s = document.getElementById('chatScroll');
+                   return {h: s.scrollHeight, c: s.clientHeight, t: s.scrollTop}; }""")
+    for i in range(24):
         await page.evaluate("window.ChatPager.older()")
-        await asyncio.sleep(0.25)
-        await page.evaluate(
-            "const s=document.getElementById('chatScroll'); s.scrollTop = s.scrollHeight")
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.2)
+    await page.evaluate("window.ChatPager.jumpLatest()")
+    await asyncio.sleep(0.2)
     frames = await page.evaluate("window.__frames")
     perf = await page.evaluate("window.__perf")
     t1 = await page.evaluate("performance.now()")
@@ -333,6 +355,7 @@ async def measure_scroll(browser, n=300):
     stats = await page.evaluate("window.ChatPager.stats()")
     result = {
         "historySeeded": n,
+        "scrollBox": box,
         "frames": len(frames),
         "durationSec": round(dur / 1000, 2),
         "fps": fps,
@@ -410,7 +433,7 @@ async def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--rounds", type=int, default=200)
     args = ap.parse_args()
-    only = set(args.only.split(",")) if args.only else {"load", "rounds", "scroll", "power"}
+    only = set(args.only.split(",")) if args.only else {"load", "rounds", "scroll", "power", "micro"}
     out = {"base": BASE, "mock": MOCK,
            "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S")}
     async with async_playwright() as pw:
@@ -435,6 +458,10 @@ async def main():
                 t = time.time()
                 out["power"] = await measure_power(browser)
                 print(f"[power] done {time.time() - t:.1f}s", flush=True)
+            if "micro" in only:
+                t = time.time()
+                out["micro"] = await measure_micro(browser)
+                print(f"[micro] done {time.time() - t:.1f}s", flush=True)
         finally:
             await browser.close()
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
