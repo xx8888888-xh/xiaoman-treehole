@@ -191,7 +191,7 @@
       </div>
       <div class="about">
         <p>小满树洞 v0.5 · 开源软件（MIT）</p>
-        <p class="mini">渲染: PixiJS + pixi-live2d-display (MIT) · 模型: Hiyori（Live2D 免费素材，经结构化改造）· 语音: 设备系统 TTS / 浏览器 speechSynthesis / 可选自建服务（默认关闭）</p>
+        <p class="mini">渲染: LayeredPuppet 分层立绘（Canvas 2D, MIT）· 模型: 潮·原创角色（CC BY 4.0，1235×2841 分层纹理）· 语音: 设备系统 TTS / 浏览器 speechSynthesis / 可选自建服务（默认关闭）</p>
         <p class="mini">隐私：聊天和记忆默认存在本机；用在线模式时，聊天内容会发到模型服务商那里；如果你连的是自己的服务器，服务器也可能留一份上下文，可随时删除。可随时导出或清空本机记录。</p>
         <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）；紧急情况打 120 / 110。</p>
       </div>
@@ -211,7 +211,7 @@
   <div id="widgetBubble" role="status" aria-live="polite"></div>
 </div>
 
-<!-- Live2D 渲染库（约 900KB）改为 stage.js 里按需加载：
+<!-- 分层立绘引擎（puppet.js，约 20KB）与模型清单改为 stage.js 里按需加载：
      先把输入/历史/开场交给用户（TTI），舞台随后补上，不阻塞首屏 -->
 <script src="js/config.js"></script>
 <script src="js/store.js"></script>

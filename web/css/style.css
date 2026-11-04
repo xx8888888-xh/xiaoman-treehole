@@ -211,7 +211,24 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
-#stage canvas { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100% !important; height: 100% !important; }
+/* 分层立绘画布：按容器高度等比缩放、水平居中、底边对齐（INTEGRATION §3.1） */
+#stage .stage-canvas {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  display: block;
+  height: 100% !important;
+  width: auto !important;
+  max-width: 100%;
+  transform: translateX(-50%);
+  background: transparent;
+}
+/* 悬浮挂件：放大到 4 倍并上移，让头部落在 88px 圆形框内 */
+#stage.stage-focus .stage-canvas {
+  height: 400% !important;
+  bottom: auto;
+  top: 12%;
+}
 
 .stage-note,
 .stage-fallback {
