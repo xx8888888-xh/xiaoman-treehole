@@ -2,22 +2,28 @@
  * appearance.js · 外观预设与三个独立开关（纯函数 + DOM 应用）
  * ------------------------------------------------------------
  * 预设：
- *   minimal 极简：灰阶图标、零动画、大字号、扁平层级（首次启动默认）
- *   default 默认：当前样子（灰阶、无装饰动画、标准字号）
- *   lively  生动：彩色图标、仅状态转换的轻动效、标准字号
- * 开关：动画 / 字号（标准·大·特大）/ 图标灰阶
- *   —— 改任一开关即进入 custom，预设本身不会被就地改写。
- * 存储：localStorage("xiaoman_appearance_v1")，在本文件于 <head> 同步加载时
- *   立即写到 <html data-*>，保证首帧就是用户选择，不闪一下。
+ *   minimal 极简（首次启动默认）：灰阶图标（#2B2B2B，黑色只用于 1px 边框）、
+ *           零动画、大字号（正文 17px / 次要 15px / 标题 20px）、
+ *           左对齐、层级扁平、无背景装饰
+ *   default 默认：灰阶图标、正常字号（正文 16px），仅 120–200ms 状态过渡
+ *   lively  生动：彩色图标、正常字号，仅 120–200ms 状态过渡
+ *   三种预设都禁止循环装饰动画、自动播放与出声。
+ * 开关：大字号 / 动画 / 图标灰阶（三个独立布尔开关）
+ *   —— 改任一开关即进入 custom，预设模板本身不会被就地改写。
+ * 存储：localStorage("xiaoman_appearance_v1")，本文件在 <head> 同步执行，
+ *   首帧即写入 <html data-*>，刷新不闪回。
+ * prefers-reduced-motion：只作默认值与提示依据；用户手动选择优先。
+ *   系统偏好变化时派发 appearance:system-motion，由设置页安静提示，不擅自覆盖。
  * ============================================================ */
 (function (root) {
   "use strict";
 
   const KEY = "xiaoman_appearance_v1";
-  const FONTS = ["normal", "large", "xlarge"];
+  const FONTS = ["normal", "large"];
+  const DEFAULT_PRESET = "minimal";
   const PRESETS = {
     minimal: { preset: "minimal", motion: false, font: "large", iconsGray: true, flat: true },
-    default: { preset: "default", motion: false, font: "normal", iconsGray: true, flat: false },
+    default: { preset: "default", motion: true, font: "normal", iconsGray: true, flat: false },
     lively: { preset: "lively", motion: true, font: "normal", iconsGray: false, flat: false },
   };
 
@@ -25,29 +31,33 @@
     return Object.prototype.hasOwnProperty.call(obj, key);
   }
 
-  function normalize(raw) {
-    if (!raw || typeof raw !== "object" || !raw.preset) return resolvePreset("minimal");
-    const src = raw;
-    if (has(PRESETS, src.preset)) return resolvePreset(src.preset);
-    // custom / 缺失 / 非法 → custom；但开关缺省时保持安全值（零动画、灰阶）
-    return {
-      preset: "custom",
-      motion: src.motion === true,
-      font: FONTS.indexOf(src.font) >= 0 ? src.font : "normal",
-      iconsGray: src.iconsGray !== false,
-      flat: src.flat === true,
-    };
+  /** 字号只有标准/大两档；旧版 xlarge 迁移为大字号 */
+  function fontOf(value) {
+    return value === "large" || value === "xlarge" ? "large" : "normal";
   }
 
   function resolvePreset(name) {
-    const p = has(PRESETS, name) ? PRESETS[name] : PRESETS.minimal;
+    const p = has(PRESETS, name) ? PRESETS[name] : PRESETS[DEFAULT_PRESET];
     return Object.assign({}, p);
+  }
+
+  function normalize(raw) {
+    if (!raw || typeof raw !== "object" || !raw.preset) return resolvePreset(DEFAULT_PRESET);
+    if (has(PRESETS, raw.preset)) return resolvePreset(raw.preset);
+    // custom / 缺失 / 非法 → custom；开关缺省时保持安全值（零动画、灰阶、标准字号）
+    return {
+      preset: "custom",
+      motion: raw.motion === true,
+      font: fontOf(raw.font),
+      iconsGray: raw.iconsGray !== false,
+      flat: raw.flat === true,
+    };
   }
 
   function withSwitch(prefs, key, value) {
     const base = normalize(prefs);
     const next = Object.assign({}, base, { preset: "custom" });
-    if (key === "font") next.font = FONTS.indexOf(value) >= 0 ? value : base.font;
+    if (key === "font") next.font = fontOf(value);
     else if (key === "motion") next.motion = !!value;
     else if (key === "iconsGray") next.iconsGray = !!value;
     return next;
@@ -55,18 +65,18 @@
 
   function read(store) {
     const ls = store || (typeof localStorage !== "undefined" ? localStorage : null);
-    if (!ls) return resolvePreset("minimal");
+    if (!ls) return resolvePreset(DEFAULT_PRESET);
     try {
       const raw = ls.getItem(KEY);
       if (raw) return normalize(JSON.parse(raw));
-      // 兼容旧版单独的字号设置：保留用户已选的字号，其余走极简
+      // 兼容旧版单独的字号设置：保留用户已选字号，其余走极简
       const legacy = ls.getItem("xiaoman_fs");
-      if (FONTS.indexOf(legacy) >= 0) {
-        return { preset: "custom", motion: false, font: legacy, iconsGray: true, flat: false };
+      if (legacy && FONTS.concat("xlarge").indexOf(legacy) >= 0) {
+        return { preset: "custom", motion: false, font: fontOf(legacy), iconsGray: true, flat: false };
       }
-      return resolvePreset("minimal");
+      return resolvePreset(DEFAULT_PRESET);
     } catch (e) {
-      return resolvePreset("minimal");
+      return resolvePreset(DEFAULT_PRESET);
     }
   }
 
@@ -77,6 +87,40 @@
       try { ls.setItem(KEY, JSON.stringify(p)); } catch (e) { /* 隐私模式忽略 */ }
     }
     return p;
+  }
+
+  /** 系统是否偏好减少动态效果（不参与决策，只用于默认值与提示） */
+  function prefersReducedMotion(scope) {
+    const w = scope || root;
+    try {
+      return !!(w && typeof w.matchMedia === "function" && w.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 监听系统偏好变化；只更新 data-sys-motion 并回调，绝不改写用户选择 */
+  function watchReducedMotion(handler, scope) {
+    const w = scope || root;
+    if (!w || typeof w.matchMedia !== "function") return function () {};
+    const mql = w.matchMedia("(prefers-reduced-motion: reduce)");
+    const emit = (matches) => {
+      const d = typeof document !== "undefined" && document.documentElement ? document.documentElement.dataset : null;
+      if (d) d.sysMotion = matches ? "reduce" : "no-preference";
+      if (typeof handler === "function") handler(!!matches);
+    };
+    const listener = (e) => emit(!!e.matches);
+    try {
+      if (mql && typeof mql.addEventListener === "function") {
+        mql.addEventListener("change", listener);
+        return function () { mql.removeEventListener("change", listener); };
+      }
+      if (mql && typeof mql.addListener === "function") {
+        mql.addListener(listener);
+        return function () { mql.removeListener(listener); };
+      }
+    } catch (e) { /* 老 WebView 无 matchMedia 监听 */ }
+    return function () {};
   }
 
   let current = read();
@@ -92,6 +136,7 @@
       set.font = p.font;
       set.icons = p.iconsGray ? "gray" : "color";
       set.flat = p.flat ? "on" : "off";
+      set.sysMotion = prefersReducedMotion() ? "reduce" : "no-preference";
     }
     if (root && typeof root.dispatchEvent === "function" && typeof CustomEvent === "function") {
       try { root.dispatchEvent(new CustomEvent("appearance:change", { detail: p })); } catch (e) { /* 老 WebView */ }
@@ -112,13 +157,25 @@
   }
 
   const api = {
-    KEY, FONTS, PRESETS, normalize, resolvePreset, withSwitch, read, save, apply,
-    setPreset, setSwitch, get,
+    KEY, FONTS, PRESETS, DEFAULT_PRESET,
+    fontOf, normalize, resolvePreset, withSwitch, read, save,
+    prefersReducedMotion, watchReducedMotion, apply, setPreset, setSwitch, get,
   };
 
   root.Appearance = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 
-  // <head> 内同步执行：首帧即用户外观
-  if (typeof document !== "undefined" && document.documentElement) apply(current);
+  // <head> 内同步执行：首帧即用户外观；系统偏好变化只提示不改写
+  if (typeof document !== "undefined" && document.documentElement) {
+    apply(current);
+    watchReducedMotion(function (reduced) {
+      if (root && typeof root.dispatchEvent === "function" && typeof CustomEvent === "function") {
+        try {
+          root.dispatchEvent(new CustomEvent("appearance:system-motion", {
+            detail: { reduced: !!reduced, prefs: get() },
+          }));
+        } catch (e) { /* 老 WebView */ }
+      }
+    });
+  }
 })(typeof window !== "undefined" ? window : globalThis);

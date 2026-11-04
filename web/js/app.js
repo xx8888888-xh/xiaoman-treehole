@@ -425,17 +425,20 @@ const App = (() => {
 
   // ---------- 外观预设 / 三个独立开关 ----------
   // appearance.js 已在 <head> 首帧把选择写到 <html data-*>；这里只负责设置面板同步与事件。
-  const FONT_LABEL = { normal: "标准", large: "大", xlarge: "特大" };
+  const FONT_LABEL = { normal: "标准字号", large: "大字号" };
   const PRESET_LABEL = { minimal: "极简", default: "默认", lively: "生动", custom: "自定义" };
 
   function appearanceHint(p) {
-    const bits = [];
-    bits.push(p.motion ? "动画开" : "零动画");
-    bits.push("字号" + (FONT_LABEL[p.font] || "标准"));
-    bits.push(p.iconsGray ? "灰阶图标" : "彩色图标");
+    const bits = [
+      p.motion ? "动画开（160ms 状态过渡）" : "零动画",
+      FONT_LABEL[p.font] || FONT_LABEL.normal,
+      p.iconsGray ? "灰阶图标" : "彩色图标",
+    ];
     if (p.flat) bits.push("扁平层级");
     const head = PRESET_LABEL[p.preset] || "自定义";
-    return `${head}：${bits.join(" · ")}`;
+    const sys = Appearance.prefersReducedMotion && Appearance.prefersReducedMotion()
+      ? "系统偏好减少动态效果，已按你的手动选择" : "";
+    return `${head}：${bits.join(" · ")}${sys ? `（${sys}）` : ""}`;
   }
 
   function syncAppearancePanel() {
@@ -444,9 +447,7 @@ const App = (() => {
     document.querySelectorAll("#apPresets [data-preset]").forEach(btn => {
       btn.setAttribute("aria-checked", String(p.preset === btn.dataset.preset));
     });
-    document.querySelectorAll("#apFonts [data-font]").forEach(btn => {
-      btn.setAttribute("aria-checked", String(p.font === btn.dataset.font));
-    });
+    $("apFont").checked = p.font === "large";
     $("apMotion").checked = p.motion;
     $("apIcons").checked = p.iconsGray;
     $("apHint").textContent = appearanceHint(p);
@@ -457,6 +458,16 @@ const App = (() => {
     if (window.Stage && Stage.setMotionEnabled) Stage.setMotionEnabled(Appearance.get().motion);
   }
   window.addEventListener("appearance:change", onAppearanceChanged);
+  // 系统"减少动态效果"变化：只提示，不覆盖用户手动选择
+  window.addEventListener("appearance:system-motion", (e) => {
+    syncAppearancePanel();
+    const reduced = !!(e.detail && e.detail.reduced);
+    if (reduced) {
+      toast(Appearance.get().motion ? "系统已开启减少动态效果；已按你的手动选择保留动效" : "系统已开启减少动态效果，当前已是零动画");
+    } else {
+      toast("系统已关闭减少动态效果");
+    }
+  });
 
   // ---------- 降级提示（安静、可关闭） ----------
   // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。
@@ -1117,19 +1128,17 @@ const App = (() => {
         toast(`外观已切换：${PRESET_LABEL[p.preset]}`);
       });
     });
+    $("apFont").addEventListener("change", () => {
+      Appearance.setSwitch("font", $("apFont").checked ? "large" : "normal");
+      toast($("apFont").checked ? "已切为大字号" : "已切为标准字号");
+    });
     $("apMotion").addEventListener("change", () => {
       Appearance.setSwitch("motion", $("apMotion").checked);
-      toast($("apMotion").checked ? "已开启动画" : "已关闭所有动画");
+      toast($("apMotion").checked ? "已开启动画（仅状态过渡）" : "已关闭所有动画");
     });
     $("apIcons").addEventListener("change", () => {
       Appearance.setSwitch("iconsGray", $("apIcons").checked);
       toast($("apIcons").checked ? "图标已改为灰阶" : "图标已改为彩色");
-    });
-    $("apFonts").querySelectorAll("[data-font]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        Appearance.setSwitch("font", btn.dataset.font);
-        toast("字号已调整");
-      });
     });
     syncAppearancePanel();
     // ---------- 倾诉记录导出 / 导入（本地 JSON，不做云同步） ----------

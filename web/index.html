@@ -121,19 +121,14 @@
       <div class="field appearance-field">
         <span id="apLabel">外观预设</span>
         <div class="seg" id="apPresets" role="radiogroup" aria-labelledby="apLabel">
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="minimal">极简</button>
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="default">默认</button>
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="lively">生动</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="minimal" title="灰阶图标 · 零动画 · 大字号 · 扁平层级">极简</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="default" title="灰阶图标 · 正常字号 · 轻过渡">默认</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="lively" title="彩色图标 · 正常字号 · 轻过渡">生动</button>
         </div>
         <div class="ap-switches">
+          <label class="switch"><input type="checkbox" id="apFont"><span>大字号</span></label>
           <label class="switch"><input type="checkbox" id="apMotion"><span>动画</span></label>
           <label class="switch"><input type="checkbox" id="apIcons"><span>图标灰阶</span></label>
-        </div>
-        <span id="apFontLabel">字号</span>
-        <div class="seg" id="apFonts" role="radiogroup" aria-labelledby="apFontLabel">
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-font="normal">标准</button>
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-font="large">大</button>
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-font="xlarge">特大</button>
         </div>
         <p class="mini" id="apHint" role="status" aria-live="polite"></p>
       </div>
