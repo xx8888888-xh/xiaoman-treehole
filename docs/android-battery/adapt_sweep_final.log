@@ -1,0 +1,21 @@
+﻿[ADAPT] 已附着 WebView: https://appassets.androidplatform.net/www/index.html
+[ADAPT-PASS] 字体 1.0：无横向溢出 + 输入栏在视口内 | scrollW=360/360 input={'top': 551, 'bottom': 604, 'left': 12, 'right': 296} badRows=0
+[ADAPT-PASS] 字体 1.3：无横向溢出 + 输入栏在视口内 + 气泡不越界 | scrollW=360/360 input={'top': 551, 'bottom': 604, 'left': 12, 'right': 296} badRows=0 ovfBub=0 maxBubW=262
+[ADAPT-PASS] 字体 1.5：无横向溢出 + 输入栏在视口内 + 气泡不越界 | scrollW=360/360 input={'top': 551, 'bottom': 604, 'left': 12, 'right': 296} badRows=0 ovfBub=0 maxBubW=262
+[ADAPT-PASS] 深色模式：背景变暗（亮度<90）且输入栏可见 | bg=rgb(21, 20, 22) lum=20 input={'top': 551, 'bottom': 604, 'left': 12, 'right': 296}
+[ADAPT-PASS] 浅色模式：背景恢复（亮度>180） | bg=rgb(247, 244, 239) lum=244
+[ADAPT-PASS] 横屏：innerWidth>innerHeight 且输入栏完整可见 | viewport=640x336 input={'top': 271, 'bottom': 324, 'left': 57, 'right': 531}
+[ADAPT-PASS] 竖屏恢复：viewport 720x1280 且输入栏可见 | viewport=360x616
+[ADAPT-PASS] 刘海屏模拟：布局未压到挖孔区且输入栏可见 | viewport=360x576 input={'top': 511, 'bottom': 564, 'left': 12, 'right': 296}
+[ADAPT-PASS] 键盘弹出：输入栏不被遮挡（收窄后仍在视口内） | tap=(308,1155) vh 616→353 input={'top': 289, 'bottom': 342, 'left': 12, 'right': 296} imeShown=True
+[ADAPT-PASS] 长消息：气泡不横向溢出且页面无横向滚动 | ovfBub=0 scrollW=360/360 maxBubW=262
+[ADAPT-PASS] 表情消息：气泡渲染且不破版 | ovfBub=0 rows=17
+[ADAPT-PASS] 提醒已镜像到原生（SharedPreferences items 非空） | items=[('r1793830488746', 1793837688746)]
+[ADAPT-PASS] 闹钟已排程（origWhen 存在） | origWhen=[1793837688746]
+[ADAPT-PASS] 时区切换后提醒绝对时刻不变（不漂移） | before=[('r1793830488746', 1793837688746)] after=[('r1793830488746', 1793837688746)]
+[ADAPT-PASS] 时区切换后闹钟重排（origWhen 仍指向原绝对时刻） | before=[1793837688746] after=[1793837688746]
+[ADAPT-PASS] 时区切换触发 TIMEZONE_CHANGED 重注册 | 11-04 17:04:16.200  9989  9989 D ReminderAlarm: rescheduled after android.intent
+[ADAPT-PASS] 72h 时钟前移：提醒条目未丢（at 不变） | items=[('r1793830488746', 1793837688746)]
+[ADAPT-PASS] 72h 时钟前移：触发 TIME_SET 重排 | 11-04 17:04:16.200  9989  9989 D ReminderAlarm: rescheduled after android.intent
+[ADAPT-PASS] 时区/时钟变更全程无 FATAL
+[ADAPT-SUMMARY] 19/19 通过

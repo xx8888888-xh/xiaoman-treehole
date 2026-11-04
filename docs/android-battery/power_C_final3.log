@@ -1,0 +1,12 @@
+﻿
+=== SEGMENT C_chat (5min) ===
+[SEG] chat rounds=28 sent_ok=28
+[SEG] C_chat wall=302s uid=u0a146 ticksΔ=4432 (7776:6279)
+[SEG] cpuinfo total: 21% TOTAL: 1.3% user + 20% kernel + 0% iowait + 0% softirq
+[SEG] cpuinfo app: 49% 7776/com.xiaoman.treehole: 1.6% user + 47% kernel / faults: 1823 minor
+[SEG] probes: {'msg_me': 28, 'msg_them': 57, 'pet_ready': 0}
+[SEG] batterystats: total=0.000662mAh cpu=0.000662mAh cpu_sec=87.6s device_drain=0.0mAh
+[SEG] raw: UID u0a146: 0.000662 fgs: 0.000662 ( cpu=0.000662 (1m 27s 621ms) cpu:fgs=0.000662 (23s 821ms) )
+
+=== SUMMARY ===
+C_chat: 0.000662mAh / cpu 0.000662mAh / cpuΔ 87.621s / ticksΔ=4432 / probes={'msg_me': 28, 'msg_them': 57, 'pet_ready': 0} / device=0.0mAh
