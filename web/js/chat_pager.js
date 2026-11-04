@@ -20,11 +20,12 @@ const ChatPager = (() => {
   const THROTTLE = 250;     // 翻页节流（scroll 事件会因 scrollTop 回填再次触发）
 
   let host = null, typing = null, scroll = null, build = null, doc = null;
-  let loader = null;        // async (before) => 更早的记录数组（可选，持久化历史用）
+  let loader = null;        // async (oldest) => 更早的记录数组（可选，持久化历史用）
   let recs = [];            // 全量记录（内存）
   let rendered = [];        // 当前挂到 DOM 的行
   let start = 0;            // 窗口起点
   let busy = false;         // 正在异步翻页（占位条保持显示）
+  let exhausted = false;    // loader 已确认为空：到底了
   let lastEdgeAt = 0;
   let topBar = null, bottomBar = null;
 
@@ -46,6 +47,7 @@ const ChatPager = (() => {
     rendered = [];
     start = 0;
     busy = false;
+    exhausted = false;
     lastEdgeAt = 0;
     // 两条占位条常驻 DOM（用 hidden 切换显隐）：翻页期间只改文字，不重建节点
     topBar = el("div", "msg-row window-tip hidden", "更早的消息");
@@ -100,11 +102,16 @@ const ChatPager = (() => {
     if (!topBar) return;
     const total = recs.length;
     const end = Math.min(total, start + VIEW);
-    const canOlder = start > 0 || !!loader;
-    topBar.className = "msg-row window-tip" + (busy || canOlder ? "" : " hidden");
-    topBar.textContent = busy
-      ? "正在翻出更早的消息…"
-      : (start > 0 ? `↑ 更早的消息（还有 ${start} 条）` : "↑ 更早的消息");
+    // 有 loader 且窗口里已有内容时，顶栏始终可见：还能翻 / 已到底都给明确说法
+    const canOlder = start > 0 || (!!loader && total > 0 && !exhausted);
+    const showTop = total > 0 && (start > 0 || !!loader);
+    topBar.className = "msg-row window-tip" + (busy || showTop ? "" : " hidden");
+    if (busy) topBar.textContent = "正在翻出更早的消息…";
+    else if (start > 0) topBar.textContent = `↑ 更早的消息（还有 ${start} 条）`;
+    else if (exhausted) topBar.textContent = "没有更早了";
+    else topBar.textContent = "↑ 更早的消息";
+    // 到这里没有更早记录时，顶栏保留提示但不再触发实际加载（visible 语义供 E2E 断言）
+    if (topBar.dataset) topBar.dataset.canOlder = canOlder ? "1" : "0";
     const fresh = total - end;
     bottomBar.className = "msg-row window-tip" + (fresh > 0 ? "" : " hidden");
     bottomBar.textContent = `↓ ${fresh} 条新消息`;
@@ -124,22 +131,28 @@ const ChatPager = (() => {
     return handle;
   }
 
-  /** 向上翻一页；到头且有 loader 时异步取更早记录（占位条原地等待） */
+  /** 向上翻一页；到头且有 loader 时异步取更早记录（占位条原地等待）
+   *  loader 收到窗口里最旧的一条记录（游标 {at,id}），由数据层据此取 strictly older。 */
   async function older() {
-    if (busy) return false;
+    if (busy || !recs.length) return false;
     if (start > 0) {
       start = Math.max(0, start - PAGE);
       render("keep");
       return true;
     }
-    if (!loader) return false;
+    if (!loader || exhausted) return false;
     busy = true;
     syncBars();
     let list = [];
-    try { list = (await loader(recs.length)) || []; }
-    catch (e) { list = []; }
+    try { list = (await loader(recs[0])) || []; }
+    catch (e) { list = null; }
     finally { busy = false; }
-    if (!list.length) { syncBars(); return false; }
+    if (list === null) { syncBars(); return false; }   // 异常：保留 exhausted 状态，允许重试
+    // 防御：数据层若因游标退化重复返回窗口内的记录，按 id 去重（不重复、不跳条）
+    const known = new Set(recs.map(r => r.id).filter(v => v != null));
+    if (known.size) list = list.filter(r => r.id == null || !known.has(r.id));
+    exhausted = list.length === 0;
+    if (exhausted) { syncBars(); return false; }
     recs = list.concat(recs);
     start += list.length;   // 保持当前阅读位置，更早的内容在窗口上方
     render("keep");
@@ -181,7 +194,13 @@ const ChatPager = (() => {
       start,
       end: Math.min(recs.length, start + VIEW),
       page: PAGE,
-      view: VIEW
+      view: VIEW,
+      exhausted,
+      first: recs.length ? recs[0].text : null,
+      last: recs.length ? recs[recs.length - 1].text : null,
+      windowFirst: recs[start] ? recs[start].text : null,
+      windowLast: recs[Math.min(recs.length - 1, start + VIEW - 1)]
+        ? recs[Math.min(recs.length - 1, start + VIEW - 1)].text : null
     };
   }
 
