@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-11-05 · 第四轮合并 r4（feat/android-battery → feat/containerize-and-config）
+
+> 背景：w14 真机复测回报完毕，主干处于 r3（`0a86007`，tag `r3-20261105`）。单分支合并，先建 `backup/pre-r4-20261105` 分支 + `backup-pre-r4-20261105` tag。
+
+### 合并
+- `feat/android-battery` @ `cfbbe71`（4 块：`0f0dc3f` 采样脚本、`1f7b611` 脚本修复、`73c3ef7` 报告+原始日志、`cfbbe71` 证据截图），merge base `61384a0`。
+- **零冲突**：w14 改动全是新增（`docs/android-battery/**` 报告与截图 + `scripts/emulator_adapt_sweep.py` + `scripts/emulator_power_probe.py`），未触碰 `web/**`，因此 `web/assets/**` 无需取舍。
+- 合并后重跑 `build_assets.sh`：产物体积 **86 files / 6,480,501 B**（与 r3 一致，w14 无前端改动）。
+- `treehole-w14` worktree 已 `git worktree remove`（移除前确认工作区干净、分支已合入 HEAD）；w15/w16 worktree 与分支未触碰。
+
+### 闸门（实跑）
+| node | pytest | biome | verify_assets | e2e | live2d | rAF | feature-loop |
+|---|---|---|---|---|---|---|---|
+| 181/181 | 145 + 19 subtests | 0 error（59 warning） | PASS 86 files / 6,480,501 B | 60/60 | 24/24 | 8/8（静止 0 次/60.7s） | 43/43 |
+
+**触及**：`docs/android-battery/**`、`scripts/emulator_adapt_sweep.py`、`scripts/emulator_power_probe.py`；本条 + `docs/PROJECT_STATE.md`。
+
+---
+
 ## 2026-11-05 · 第三轮合并 r3（w10/w11/w12/w13 → feat/containerize-and-config）
 
 > 背景：宿主机硬断电重启（Kernel-Power 41）后重新拉起三容器栈（web/mock/tts 均 healthy，TTS `provider=none` 全程静音）。基线 `61384a0`，先建 `backup/pre-r3-20261105` 分支 + `backup-pre-r3-20261105` tag。四个分支按序合并，**每合一个跑全套闸门，全绿才进下一个**；四次合并均无冲突（ort 自动合并，无整文件覆盖）。
