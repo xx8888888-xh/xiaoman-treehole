@@ -474,4 +474,5 @@ const Heartbeat = (() => {
     selfCandidates, STATS_TPL, ME_POOL, MEMSEE_TPL, SELF_P,
   };
 })();
+if (typeof module === "object" && module.exports) module.exports = Heartbeat;   // node 单测用
 window.Heartbeat = Heartbeat;   // const 不挂 window，跨模块守卫需显式挂载

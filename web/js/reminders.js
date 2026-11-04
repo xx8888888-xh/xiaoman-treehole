@@ -13,7 +13,16 @@ const Reminders = (() => {
   function load() {
     try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { return []; }
   }
-  function save(list) { localStorage.setItem(KEY, JSON.stringify(list)); }
+  function save(list) {
+    try { localStorage.setItem(KEY, JSON.stringify(list)); }
+    catch (e) {
+      // 配额满/隐私模式：提醒会丢，必须让 UI 提示用户（而不是静默失败）
+      try { if (typeof window !== "undefined" && window.__storageFull) window.__storageFull("提醒"); } catch (e2) {}
+    }
+  }
+  function newId() {
+    return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
 
   /**
    * 自然语言时间解析（中文场景常用格式）
@@ -97,13 +106,34 @@ const Reminders = (() => {
   /** 新增提醒 {text, time(Date|str)} */
   function add(text, time) {
     const when = time instanceof Date ? time : parseTime(time);
-    if (!when || !text) return null;
+    if (!when || !when.getTime || !text) return null;
     const list = load();
     const item = {
-      id: "r" + Date.now(), text: String(text).slice(0, 80),
-      at: when.getTime(), done: false
+      id: newId(), text: String(text).slice(0, 80),
+      at: when.getTime(), done: false, createdAt: Date.now()
     };
     list.push(item); save(list);
+    return item;
+  }
+
+  /** 编辑提醒（只允许改文案与时间；已完成的不改） */
+  function update(id, patch) {
+    const p = patch || {};
+    const list = load();
+    const item = list.find(r => r.id === id && !r.done);
+    if (!item) return null;
+    if ("text" in p) {
+      const text = String(p.text || "").trim().slice(0, 80);
+      if (!text) return null;
+      item.text = text;
+    }
+    if ("at" in p) {
+      const when = p.at instanceof Date ? p.at : parseTime(p.at);
+      if (!when) return null;
+      item.at = when.getTime();
+    }
+    item.updatedAt = Date.now();
+    save(list);
     return item;
   }
 
@@ -114,21 +144,33 @@ const Reminders = (() => {
     return list.filter(r => !r.done && r.at <= now);
   }
 
-  /** 标记指定 id 的提醒为已完成 */
+  /** 标记指定 id 的提醒为已完成（记录触发时间，供"已完成"历史回看） */
   function markDone(ids) {
     if (!ids || !ids.length) return;
     const list = load();
     let changed = false;
+    const now = Date.now();
     for (const r of list) {
       if (ids.includes(r.id) && !r.done) {
         r.done = true;
+        r.doneAt = now;
         changed = true;
       }
     }
     if (changed) save(list);
   }
 
-  function pending() { return load().filter(r => !r.done); }
+  /** 即将到来的提醒（按时间升序） */
+  function pending() { return load().filter(r => !r.done).sort((a, b) => a.at - b.at); }
+  /** 已触发/已完成提醒（最近触发优先）；n 为上限（默认 10） */
+  function history(n) {
+    const len = n || 10;
+    return load()
+      .filter(r => r.done)
+      .sort((a, b) => (b.doneAt || b.at) - (a.doneAt || a.at))
+      .slice(0, len);
+  }
+  function clearDone() { save(load().filter(r => !r.done)); }
   function cancel(id) { save(load().filter(r => r.id !== id)); }
   function all() { return load().sort((a, b) => a.at - b.at); }
 
@@ -144,6 +186,14 @@ const Reminders = (() => {
     return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   }
 
-  return { add, due, pending, cancel, all, parseTime, fmt, markDone };
+  /** 历史回看用的完整时间（含年份，跨年不歧义） */
+  function fmtFull(ts) {
+    const d = new Date(ts);
+    const pad = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  return { add, update, due, pending, history, clearDone, cancel, all, parseTime, fmt, fmtFull, markDone, KEY };
 })();
+if (typeof module === "object" && module.exports) module.exports = Reminders;   // node 单测用
 window.Reminders = Reminders;   // const 不挂 window，跨模块守卫需显式挂载
