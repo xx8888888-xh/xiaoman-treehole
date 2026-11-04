@@ -30,14 +30,15 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   --radius: 12px;
   --font: -apple-system, "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
-  /* 字号档位：1 = 标准；大/特大由 <html data-font> 覆盖（只放大文字，不改布局） */
+  /* 字号：大字号 = 正文 17px / 次要 15px / 标题 20px（--fs:1）；
+     标准字号 = 正文 16px，由 <html data-font="normal"> 覆盖（只缩放文字，不改布局） */
   --fs: 1;
   /* 生动模式下的彩色图标；浅色下保证 AA（#7A4E5A on #EFEFEA ≈ 5.7:1） */
   --icon-accent: #7A4E5A;
 }
 
-html[data-font="large"] { --fs: 1.15; }
-html[data-font="xlarge"] { --fs: 1.3; }
+html[data-font="large"] { --fs: 1; }
+html[data-font="normal"] { --fs: 0.94117647; }
 
 body.theme-dark {
   color-scheme: dark;
@@ -355,24 +356,23 @@ body {
 /* ---------- 尊重系统"减少动态效果"偏好 ----------
    本项目本身零动画；这里只做兜底声明，防止后续新增样式违背偏好 */
 @media (prefers-reduced-motion: reduce) {
-  /* 系统减少动效时默认走极简；但用户主动选"生动"（data-motion=on）可覆盖 */
+  /* 系统减少动效时默认零动画；但用户手动选"默认/生动"（data-motion=on）优先 */
   html:not([data-motion="on"]) *, html:not([data-motion="on"]) *::before, html:not([data-motion="on"]) *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    animation: none !important;
+    transition: none !important;
     scroll-behavior: auto !important;
   }
 }
 
 /* ============ 外观预设 / 三个独立开关 ============
    <html data-preset=minimal|default|lively|custom
-         data-motion=on|off data-font=normal|large|xlarge
-         data-icons=gray|color data-flat=on|off>
-   极简：灰阶 + 零动画 + 大字号 + 扁平；生动：彩色图标 + 仅状态转换的轻动效 */
+         data-motion=on|off data-font=normal|large
+         data-icons=gray|color data-flat=on|off data-sys-motion=reduce|no-preference>
+   极简：灰阶 + 零动画 + 大字号 + 扁平；默认/生动：仅 160ms 状态转换的轻过渡；
+   三种预设都不允许循环装饰动画、自动播放与出声 */
 html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after {
-  animation-duration: 0.01ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 0.01ms !important;
+  animation: none !important;
+  transition: none !important;
   scroll-behavior: auto !important;
 }
 
@@ -391,12 +391,19 @@ html[data-motion="on"] .icon-btn,
 html[data-motion="on"] .ghost-btn,
 html[data-motion="on"] .solid-btn,
 html[data-motion="on"] .seg-btn,
-html[data-motion="on"] .bubble {
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+html[data-motion="on"] .pending-btn,
+html[data-motion="on"] .pending-close,
+html[data-motion="on"] .bubble,
+html[data-motion="on"] .switch,
+html[data-motion="on"] .switch input,
+html[data-motion="on"] .field input,
+html[data-motion="on"] .field select {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
 }
 html[data-motion="on"] .icon-btn:active,
 html[data-motion="on"] .ghost-btn:active,
-html[data-motion="on"] .solid-btn:active { transform: translateY(1px); }
+html[data-motion="on"] .solid-btn:active,
+html[data-motion="on"] .seg-btn:active { transform: translateY(1px); transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease, color 160ms ease; }
 
 /* ---------- 外观面板控件 ---------- */
 .appearance-field { gap: 10px; }
