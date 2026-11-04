@@ -10,4 +10,4 @@
 纹理档：s050（0.5×，首屏默认候选）/ s070（0.7×）；兜底：
 art/full.png（静态立绘）、art/silhouette.png（纯色剪影 #2E6E74）。
 
-接入契约见仓库 docs/live2d_integration.md。
+接入契约：随资产包提供的 INTEGRATION.md（层名/锚点/缩放/口型/眨眼/降级）。
