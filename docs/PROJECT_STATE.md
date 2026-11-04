@@ -20,6 +20,7 @@
 | 凭据边界 | Key 只从**环境变量 / Windows 凭据管理器**读取，不写前端、不入镜像、不落日志；**容器内读不到 Windows 凭据管理器**，Docker 部署必须用 `.env` / `-e AI_API_KEY=…` 显式注入 |
 | 语音 | 默认设备系统 TTS / 浏览器 `speechSynthesis`；服务端语音是可选插件，默认 `provider=none`，仓库无 edge-tts |
 | 日志 | TTS 原文只走 POST body，日志统一经 `server/log_redact.py` 脱敏（查询串、长文本、疑似密钥、手机号） |
+| 功能落实（2026-11-05） | 分支 `feat/feature-completeness`（基线 61384a0，**未合并**）：43 项承诺功能盘点见 `docs/FEATURE_MATRIX.md`；已补齐设置开关真实生效（语音链跟随设置）、提醒 UI 闭环、小本本统计、首次空状态、错误边界提示；验证 166 node / 22 appearance / 60 e2e / 43 feature-loop |
 
 ---
 

@@ -15,7 +15,8 @@
  *              原文只放 body，不进查询串（避免整句对话被访问日志落盘，审计 P1-5）
  * 3. browser → Web Speech API speechSynthesis（离线兜底）
  * 4. none    → 关闭语音（设置页 tts=off，随配置持久化）
- * 顺序：native → server（如启用）→ browser → none。
+ * 顺序：跟随设置页选择——server=服务端优先，browser=本机优先（逐级降级）；
+ *        tts=off 直接静音，不触碰任何后端。
  * 失败语义：任一路失败都只降级，绝不阻塞文字、不抛未捕获异常（弱网先出文字）。
  * 口型：音频解码后预计算 RMS 包络关键帧（不用实时 analyser——MuMu 上
  *      analyser RMS 恒 0）；无音频时只喂极轻微呼吸（极简模式由 stage 归零）。
@@ -397,11 +398,15 @@ const TTS = (() => {
 
     const providers = { native: nativeProvider, server: serverProvider, browser: browserProvider };
 
-    /** 按配置生成 provider 尝试顺序；tts=off 时直接静音，不走任何后端 */
+    /** 按配置生成 provider 尝试顺序；tts=off 时直接静音，不走任何后端。
+     *  这里必须尊重设置页的选择（审计发现旧版无论选什么都先 native，
+     *  "服务端语音"形同虚设）：server → 服务端优先；browser → 本机优先；
+     *  缺失/未配置时自然回落到下一条。 */
     function providerChain(cfg) {
       const c = cfg || {};
       if (c.tts === "off") return ["none"];
-      const chain = ["native", "server", "browser"].filter((id) => {
+      const prefer = c.tts === "browser" ? ["browser", "native"] : ["server", "native", "browser"];
+      const chain = prefer.filter((id) => {
         try { return !!providers[id].available(c); } catch (e) { return false; }
       });
       return chain.length ? chain : ["none"];

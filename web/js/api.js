@@ -64,7 +64,11 @@ const API = (() => {
       delete incoming.apiKey;
     }
     const cfg = XMConfig.normalizeCfg(incoming, rawCfg());
-    try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch {}
+    try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+    catch (e) {
+      // 配额满/隐私模式：配置没落盘要让用户知道，而不是假装保存成功
+      try { if (typeof window !== "undefined" && window.__storageFull) window.__storageFull("设置"); } catch {}
+    }
     return cfg;
   }
 
@@ -632,6 +636,30 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   }
 
   /**
+   * 纯函数：按配置决定"这一轮会尝试哪些在线通道"。
+   * 设置页三个开关（模式 / 是否填 Key / 是否允许免费通道承载倾诉）在这里落到行为，
+   * 单测可直接断言，不依赖 fetch。
+   * @param {object} cfg 已归一化的配置
+   * @param {{native?:boolean}} env native=是否运行在安卓原生桥环境
+   * @returns {string[]} direct / proxy / native；空数组代表没有在线通道可用
+   */
+  function routePlan(cfg, env) {
+    const c = cfg || {};
+    const native = !!(env && env.native);
+    if (c.mode === "offline") return ["offline"];
+    if (c.mode === "mock") return native ? ["offline"] : ["mock"];
+    const routes = [];
+    if (c.apiKey) routes.push("direct");
+    else if (native) {
+      // 隐私闸门：Kilo 免费 trial 默认不承载倾诉内容，必须用户显式授权
+      if (c.allowFreePersonal) routes.push("native");
+    } else {
+      routes.push("proxy");
+    }
+    return routes;
+  }
+
+  /**
    * 流式对话入口。降级链：自填 key 直连 → 服务端代理 → mock → offline；
    * 安卓未授权免费端点时直接从 mock/offline 兜底。每级有超时与熔断。
    * handlers: { onMeta(meta), onDelta(acc, delta), onReplace(acc), onError(err) }
@@ -660,14 +688,8 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     }
 
     // openai 模式
-    const routes = [];
-    if (cfg.apiKey) routes.push("direct");
-    else if (nativeBridge()) {
-      // 隐私闸门：Kilo 免费 trial 默认不承载倾诉内容，需用户显式授权
-      if (cfg.allowFreePersonal && !breakerOpen("native")) routes.push("native");
-    } else if (!breakerOpen("proxy")) {
-      routes.push("proxy");
-    }
+    const routes = routePlan(cfg, { native: !!nativeBridge() })
+      .filter((r) => r === "direct" || !breakerOpen(r));
     let limitErr = null;
     for (const route of routes) {
       try {
@@ -1051,7 +1073,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     chat, chatStream, loadCfg, saveCfg, buildSystemPrompt, SYSTEM_PROMPT, HEARTBEAT_PROMPT,
     REALISM_RULES, MEMORY_RULES, PERSONA_RULES, BASELINE, OUTPUT_PROTOCOL,
     sessionId, bootstrap, serverConfig, testConnection,
-    getApiKey, setApiKey, parseStructured, effectiveMode,
+    getApiKey, setApiKey, parseStructured, effectiveMode, routePlan,
     // 测试与观测用（不参与业务逻辑）
     parseSseBlock, createSseDecoder, extractReplyPrefix,
     breakerSnapshot, resetBreakers, LIMITS,

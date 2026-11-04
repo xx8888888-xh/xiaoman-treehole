@@ -379,7 +379,11 @@ const App = (() => {
 
   /** 启动时从 IndexedDB 恢复最近对话（失败不影响主流程） */
   async function restoreHistory() {
-    if (!window.ChatStore) return;
+    if (!window.ChatStore) {
+      // 隐私模式/老 WebView：本机记录功能不可用，得让用户知道"刷新会丢"
+      showNotice("本机记录功能不可用（可能是隐私模式）：这次聊天刷新后不会保留。", { retry: false });
+      return;
+    }
     try {
       const msgs = await ChatStore.list(SID, MAX_HISTORY);
       if (!msgs.length) return;
@@ -390,7 +394,13 @@ const App = (() => {
                { id: m.id, at: m.at });
       }
       console.log("[probe] history restored n=" + msgs.length);
-    } catch (e) { console.warn("[probe] HISTORY_RESTORE_FAIL", e.message); }
+    } catch (e) {
+      console.warn("[probe] HISTORY_RESTORE_FAIL", e.message);
+      const d = XMErrors.describe({ kind: "idb" });
+      showNotice(`${d.title}：${d.hint}`, { retry: true, action: restoreHistory });
+    } finally {
+      syncEmptyState();
+    }
   }
 
   /** 分页 loader：从 IndexedDB 取严格早于游标 {at,id} 的一页（升序） */
@@ -450,6 +460,39 @@ const App = (() => {
     const t = $("toast");
     t.textContent = msg; t.classList.remove("hidden");
     clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), ms);
+  }
+
+  // ---------- 可操作的提示条（本机记录读不出来 / 存储满） ----------
+  // 原则：不白屏、不卡死；每条提示都要说"发生了什么 + 你能做什么"。
+  let noticeAction = null;
+  function showNotice(text, opts) {
+    const bar = $("noticeBar"), retry = $("noticeRetry");
+    if (!bar) return;
+    $("noticeText").textContent = text;
+    const canRetry = !!(opts && opts.retry && opts.action);
+    retry.classList.toggle("hidden", !canRetry);
+    noticeAction = canRetry ? opts.action : null;
+    bar.classList.remove("hidden");
+  }
+  function hideNotice() {
+    $("noticeBar").classList.add("hidden");
+    noticeAction = null;
+  }
+  // 各模块 localStorage 写失败时（配额满/隐私模式）经此统一提示，只提示一次避免刷屏
+  let storageWarned = false;
+  window.__storageFull = (where) => {
+    if (!storageWarned) {
+      storageWarned = true;
+      toast("本机存储满了，这次没存上");
+    }
+    showNotice(XMErrors.storageText(where), { retry: false });
+  };
+
+  /** 空状态：只在还没有用户消息时出现；第一条发出后自动收起 */
+  function syncEmptyState() {
+    const el = $("emptyState");
+    if (!el) return;
+    el.classList.toggle("hidden", history.some(m => m.role === "user"));
   }
 
   // ---------- 外观（浅色/深色/跟随系统；用户可手动覆盖，不靠系统猜） ----------
@@ -547,6 +590,32 @@ const App = (() => {
       lastRoute: API.effectiveMode ? API.effectiveMode() : ""
     });
   }
+
+  // ---------- 语音设置的"实际行为"说明 ----------
+  // 旧版设置写着"服务端语音（自然）"，实际 provider 链却永远先走 native，
+  // 开关和真实行为对不上。这里把同一套判定直接展示给用户，并对内复用 XMConfig。
+  function ttsAvail() {
+    const cfg = API.loadCfg();
+    return {
+      server: !!(cfg.ttsServer || "").trim(),
+      native: !!(window.AndroidTTS && typeof window.AndroidTTS.speak === "function"),
+      browser: typeof window.speechSynthesis !== "undefined",
+    };
+  }
+  function updateTtsHint() {
+    if (!window.XMConfig) return;
+    const cfg = API.loadCfg();
+    const d = XMConfig.describeTts(cfg.tts, ttsAvail());
+    const el = $("ttsHint");
+    if (el) el.textContent = d.text;
+    const vh = $("voiceHint");
+    if (vh) {
+      vh.textContent = XMConfig.voiceApplies(cfg.tts, d.actual)
+        ? "音色会按下面的设置生效（服务端语音已连通）。"
+        : "当前实际不是服务端语音，音色设置不会生效——本机语音使用系统音色。";
+    }
+  }
+  window.__ttsHint = () => XMConfig.describeTts(API.loadCfg().tts, ttsAvail());
 
   // ---------- 降级提示（安静、可关闭） ----------
   // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。
@@ -674,33 +743,244 @@ const App = (() => {
         box.appendChild(c);
       }
     }
-    // 提醒清单（可取消）
-    if (window.Reminders) {
-      const rbox = $("reminderList");
-      const pend = Reminders.pending();
-      rbox.innerHTML = "";
-      if (pend.length) {
-        const sub = document.createElement("p");
-        sub.className = "drawer-sub";
-        sub.style.marginTop = "10px";
-        sub.textContent = "定好的提醒";
-        rbox.appendChild(sub);
-        for (const r of pend) {
-          const div = document.createElement("div");
-          div.className = "chip row";
-          const span = document.createElement("span");
-          span.textContent = `⏰ ${Reminders.fmt(r.at)} · ${r.text}`;
-          const btn = document.createElement("button");
-          btn.dataset.rid = r.id;
-          btn.className = "r-cancel";
-          btn.setAttribute("aria-label", "取消提醒");
-          btn.textContent = "✕";
-          btn.onclick = () => { Reminders.cancel(btn.dataset.rid); renderMem(); toast("提醒取消了"); };
-          div.appendChild(span);
-          div.appendChild(btn);
-          rbox.appendChild(div);
-        }
+    // 提醒 + 小本本
+    renderReminders();
+    renderStats();
+  }
+
+  // ---------- 提醒：新建 / 编辑 / 取消 / 即将到来 / 已提醒记录 ----------
+  // 旧版只能"对话里设、清单里删"，UI 侧不闭环；这里补齐完整 CRUD。
+  let editingReminder = null;   // 正在编辑的提醒 id（null = 新增）
+
+  function pad2(n) { return String(n).padStart(2, "0"); }
+  function toLocalInput(ts) {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+  /** 默认时间：1 小时后，分钟向上取整到 10 的倍数（不会落在过去） */
+  function defaultReminderAt() {
+    const d = new Date(Date.now() + 3600e3);
+    d.setSeconds(0, 0);
+    d.setMinutes(Math.ceil(d.getMinutes() / 10) * 10);
+    return d.getTime();
+  }
+  function editReminder(id) {
+    const item = Reminders.pending().find(r => r.id === id);
+    if (!item) return;
+    editingReminder = id;
+    renderReminders();
+    const t = $("reminderText"); if (t) { t.focus(); t.select(); }
+  }
+  function saveReminderForm() {
+    const textEl = $("reminderText"), atEl = $("reminderAt");
+    const text = (textEl && textEl.value || "").trim();
+    const raw = atEl && atEl.value;
+    if (!text) { toast("先写一句要提醒的事"); if (textEl) textEl.focus(); return; }
+    const when = raw ? new Date(raw) : null;
+    if (!when || Number.isNaN(when.getTime())) { toast("选一个提醒时间"); if (atEl) atEl.focus(); return; }
+    if (when.getTime() <= Date.now() + 30e3) { toast("要选将来的一点时间哦"); if (atEl) atEl.focus(); return; }
+    if (editingReminder) {
+      const item = Reminders.update(editingReminder, { text, at: when });
+      editingReminder = null;
+      if (!item) { toast("这条提醒已经不在清单里了"); renderReminders(); return; }
+      toast(`提醒改好了：${Reminders.fmt(item.at)}`);
+    } else {
+      const item = Reminders.add(text, when);
+      if (!item) { toast("提醒没存上，再试一次"); return; }
+      toast(`已设提醒：${Reminders.fmt(item.at)}`);
+    }
+    renderReminders();
+  }
+
+  function renderReminders() {
+    if (!window.Reminders) return;
+    const rbox = $("reminderList");
+    if (!rbox) return;
+    rbox.innerHTML = "";
+
+    const head = document.createElement("p");
+    head.className = "drawer-sub";
+    head.textContent = "提醒";
+    rbox.appendChild(head);
+
+    // 新建/编辑表单（native datetime-local；不依赖第三方日期组件）
+    const form = document.createElement("div");
+    form.className = "reminder-form";
+    const textEl = document.createElement("input");
+    textEl.id = "reminderText";
+    textEl.type = "text";
+    textEl.maxLength = 80;
+    textEl.placeholder = "想让我提醒你什么？比如：喝水 / 给妈妈打电话";
+    textEl.value = editingReminder
+      ? ((Reminders.pending().find(r => r.id === editingReminder) || {}).text || "") : "";
+    const atEl = document.createElement("input");
+    atEl.id = "reminderAt";
+    atEl.type = "datetime-local";
+    atEl.value = editingReminder
+      ? toLocalInput((Reminders.pending().find(r => r.id === editingReminder) || {}).at || defaultReminderAt())
+      : toLocalInput(defaultReminderAt());
+    const actions = document.createElement("div");
+    actions.className = "reminder-form-actions";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "solid-btn";
+    save.id = "reminderSave";
+    save.textContent = editingReminder ? "保存修改" : "加上提醒";
+    save.onclick = saveReminderForm;
+    actions.appendChild(save);
+    if (editingReminder) {
+      const cancelEdit = document.createElement("button");
+      cancelEdit.type = "button";
+      cancelEdit.className = "ghost-btn";
+      cancelEdit.id = "reminderCancelEdit";
+      cancelEdit.textContent = "取消修改";
+      cancelEdit.onclick = () => { editingReminder = null; renderReminders(); };
+      actions.appendChild(cancelEdit);
+    }
+    form.appendChild(textEl);
+    form.appendChild(atEl);
+    form.appendChild(actions);
+    rbox.appendChild(form);
+
+    // 即将到来（按时间升序）
+    const pend = Reminders.pending();
+    if (!pend.length) {
+      const empty = document.createElement("div");
+      empty.className = "drawer-empty";
+      empty.id = "reminderEmpty";
+      empty.textContent = "还没有提醒。也可以直接跟小满说「明天八点提醒我吃药」。";
+      rbox.appendChild(empty);
+    } else {
+      const sub = document.createElement("p");
+      sub.className = "drawer-sub";
+      sub.textContent = `即将到来（${pend.length}）`;
+      rbox.appendChild(sub);
+      for (const r of pend) {
+        const row = document.createElement("div");
+        row.className = "reminder-item";
+        row.dataset.rid = r.id;
+        const span = document.createElement("span");
+        span.className = "reminder-text";
+        span.textContent = `⏰ ${Reminders.fmt(r.at)} · ${r.text}`;
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "r-edit";
+        edit.setAttribute("aria-label", "编辑提醒");
+        edit.textContent = "改";
+        edit.onclick = () => editReminder(r.id);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.dataset.rid = r.id;
+        btn.className = "r-cancel";
+        btn.setAttribute("aria-label", "取消提醒");
+        btn.textContent = "✕";
+        btn.onclick = () => {
+          Reminders.cancel(btn.dataset.rid);
+          if (editingReminder === btn.dataset.rid) editingReminder = null;
+          renderReminders();
+          toast("提醒取消了");
+        };
+        row.appendChild(span);
+        row.appendChild(edit);
+        row.appendChild(btn);
+        rbox.appendChild(row);
       }
+    }
+
+    // 已提醒记录（触发后留痕，可回看/清空；只保留最近 10 条）
+    const done = Reminders.history(10);
+    if (done.length) {
+      const sub = document.createElement("p");
+      sub.className = "drawer-sub";
+      sub.textContent = "已经提醒过";
+      rbox.appendChild(sub);
+      for (const r of done) {
+        const row = document.createElement("div");
+        row.className = "reminder-item done";
+        const span = document.createElement("span");
+        span.className = "reminder-text";
+        span.textContent = `✓ ${Reminders.fmtFull(r.doneAt || r.at)} · ${r.text}`;
+        row.appendChild(span);
+        rbox.appendChild(row);
+      }
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "ghost-btn";
+      clear.id = "reminderClearDone";
+      clear.textContent = "清空已提醒记录";
+      clear.onclick = () => { Reminders.clearDone(); renderReminders(); toast("已清空提醒记录"); };
+      rbox.appendChild(clear);
+    }
+  }
+
+  // ---------- 小本本：统计真的跨会话保留，日期按本地日切 ----------
+  function renderStats() {
+    if (!window.Stats) return;
+    const box = $("statsBox");
+    if (!box) return;
+    box.innerHTML = "";
+    const s = Stats.snapshot();
+
+    const head = document.createElement("p");
+    head.className = "drawer-sub";
+    head.textContent = "我的小本本";
+    box.appendChild(head);
+
+    if (!s.msgs) {
+      const empty = document.createElement("div");
+      empty.className = "drawer-empty";
+      empty.textContent = "还没有数据。聊几句，这里会慢慢长出来。";
+      box.appendChild(empty);
+      return;
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "stats-grid";
+    const cells = [
+      [s.msgs, "说过的话"],
+      [s.streak, "连续打卡（天）"],
+      [s.night, "深夜来过"],
+      [s.haha, "笑出声"],
+    ];
+    for (const [n, label] of cells) {
+      const cell = document.createElement("div");
+      cell.className = "stat-cell";
+      const num = document.createElement("b");
+      num.className = "stat-num";
+      num.textContent = String(n);
+      const tag = document.createElement("span");
+      tag.textContent = label;
+      cell.appendChild(num);
+      cell.appendChild(tag);
+      grid.appendChild(cell);
+    }
+    box.appendChild(grid);
+
+    // 最近 7 天柱状（纯 CSS，无动画；高度按当天最大值归一）
+    const max = Math.max(1, ...s.last7.map(d => d.n));
+    const bars = document.createElement("div");
+    bars.className = "stats-bars";
+    bars.setAttribute("aria-label", "最近七天聊天条数");
+    for (const d of s.last7) {
+      const col = document.createElement("div");
+      col.className = "bar-col";
+      col.title = `${d.date}：${d.n} 条`;
+      const bar = document.createElement("span");
+      bar.className = "bar" + (d.n ? "" : " zero");
+      bar.style.height = Math.max(3, Math.round((d.n / max) * 34)) + "px";
+      const lab = document.createElement("em");
+      lab.textContent = d.date;
+      col.appendChild(bar);
+      col.appendChild(lab);
+      bars.appendChild(col);
+    }
+    box.appendChild(bars);
+
+    if (s.emoji) {
+      const tip = document.createElement("p");
+      tip.className = "mini";
+      tip.textContent = `招牌表情：${s.emoji}（${s.emojiN} 次）`;
+      box.appendChild(tip);
     }
   }
 
@@ -812,6 +1092,7 @@ const App = (() => {
     await withSendLock(async () => {
       const meHandle = addMsg(text, "me");
       pushHistory("user", text, undefined, meHandle && meHandle.rec);
+      syncEmptyState();
       bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
       if (window.Stats) Stats.bump(text);   // P2-1：小本本计数（真实数据，自我叙事素材）
 
@@ -922,6 +1203,11 @@ const App = (() => {
           return;
         }
         console.error(e);
+        // 边界兜底：把技术错误翻译成人话（500/断网/坏 JSON 各有说法），
+        // 但回复文案保持原样，不让错误术语砸到正在倾诉的人。
+        try {
+          if (window.XMErrors) toast(XMErrors.describe(e).title + "；这条已经记下了，稍后补发", 3000);
+        } catch (e2) {}
         // P1-3：极端兜底也入队（原版只回显文案不落盘，刷新即丢——补"不丢消息"）
         queuePending(text);
         await showTyping(300);
@@ -1319,6 +1605,24 @@ const App = (() => {
     $("memoryClose").onclick = () => closePanel($("memoryDrawer"));
     $("memoryDrawer").querySelector(".drawer-mask").onclick = () => closePanel($("memoryDrawer"));
     $("memoryClear").onclick = () => { localStorage.removeItem(MEM_KEY); if (window.MemoryStore) MemoryStore.clear(); renderMem(); toast("小满失忆了，重新认识一下吧"); };
+    // 首次引导的三个快捷入口（空状态内）
+    if ($("quickSay")) $("quickSay").onclick = () => { $("textInput").focus(); };
+    if ($("quickRemind")) $("quickRemind").onclick = () => {
+      renderMem();
+      openPanel($("memoryDrawer"), $("quickRemind"));
+      const t = $("reminderText");
+      if (t) { t.focus(); t.scrollIntoView({ block: "center" }); }
+    };
+    if ($("quickMemory")) $("quickMemory").onclick = () => {
+      renderMem(); openPanel($("memoryDrawer"), $("quickMemory"));
+    };
+    // 提示条：重试 / 关闭
+    if ($("noticeClose")) $("noticeClose").onclick = hideNotice;
+    if ($("noticeRetry")) $("noticeRetry").onclick = () => {
+      const act = noticeAction;
+      hideNotice();
+      if (typeof act === "function") { try { act(); } catch (e) { toast("重试还是没成功，稍后再试一次"); } }
+    };
     // ---------- P2-3 友谊卡片（口碑裂变：脱敏聚合数据 → 2D canvas PNG → 分享/保存） ----------
     if (window.FriendCard) {
       $("cardBtn").onclick = () => {
@@ -1345,6 +1649,9 @@ const App = (() => {
       $("cfgTts").value = cfg.tts || "server";
       $("cfgVoice").value = cfg.voice || "zh-CN-XiaoyiNeural";
       $("cfgRate").value = cfg.ttsRate || "normal";
+      $("cfgHeartbeat").checked = cfg.heartbeatOn !== false;
+      $("cfgAllowFree").checked = cfg.allowFreePersonal === true;
+      updateTtsHint();
       syncAppearancePanel();
       $("cfgTheme").value = (() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })();
       $("cfgTestResult").textContent = "";
@@ -1365,8 +1672,19 @@ const App = (() => {
           ttsRate: $("cfgRate").value
         });
         refreshModeHint();
+        updateTtsHint();
         toast("已保存");
       });
+    });
+    // 「主动问候」开关：真实作用于 Heartbeat.tick（每 tick 现读配置）
+    $("cfgHeartbeat").addEventListener("change", () => {
+      API.saveCfg({ heartbeatOn: $("cfgHeartbeat").checked });
+      toast($("cfgHeartbeat").checked ? "小满会偶尔主动找你" : "已关掉主动问候，提醒照常");
+    });
+    // 「免费通道」开关：真实作用于 API 路由（安卓免 Key 环境才会改变通道）
+    $("cfgAllowFree").addEventListener("change", () => {
+      API.saveCfg({ allowFreePersonal: $("cfgAllowFree").checked });
+      toast($("cfgAllowFree").checked ? "已允许免费通道承载聊天内容" : "已关闭免费通道（隐私优先）");
     });
     // 外观预设：三档按钮 + 三个独立开关（改任一开关 → 自定义）
     $("apPresets").querySelectorAll("[data-preset]").forEach(btn => {
@@ -1547,6 +1865,7 @@ const App = (() => {
 
     // 3) 从 IndexedDB 恢复历史（先于开场白，保证时间顺序；本机路径通常 <10ms）
     try { await restoreHistory(); } catch (e) { console.warn("[probe] HISTORY_FAIL", e.message); }
+    syncEmptyState();
 
     // 4) 舞台并行加载（Live2D 运行时约 900KB，按需拉取，不阻塞输入与开场）
     //    悬浮窗迷你模式：跳过 Live2D（双 WebView 实例省内存），布局由 CSS float-mode 接管

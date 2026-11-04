@@ -47,7 +47,7 @@ test("远程 provider 默认关闭：只选 server 但没配地址 → 不可用
   assert.deepEqual(injected.chain({ tts: "off" }), ["none"], "off 优先于注入");
 });
 
-test("链序 native → server → browser；全可用时优先 native", () => {
+test("链序跟随设置：server 优先服务端、browser 优先本机（全可用时按选择走）", () => {
   const win = fakeWin({
     AndroidTTS: { available: () => true, speakRate: () => true, stop: () => {} },
     speechSynthesis: { speak: () => {}, cancel: () => {} },
@@ -55,9 +55,20 @@ test("链序 native → server → browser；全可用时优先 native", () => {
     XIAOMAN_TTS_SERVER: "https://tts.example.com"
   });
   const engine = makeEngine(win, { tts: "server" });
-  assert.deepEqual(engine.chain({ tts: "server" }), ["native", "server", "browser"]);
-  assert.equal(engine.provider({ tts: "server" }), "native");
+  // 审计修复：旧版永远先 native，设置页的"服务端语音"形同虚设
+  assert.deepEqual(engine.chain({ tts: "server" }), ["server", "native", "browser"]);
+  assert.equal(engine.provider({ tts: "server" }), "server");
   assert.equal(engine.available({ tts: "server" }), true);
+  // 选"本机语音"时浏览器语音优先；没有浏览器语音则落安卓系统语音
+  assert.deepEqual(engine.chain({ tts: "browser" }), ["browser", "native"]);
+  assert.equal(engine.provider({ tts: "browser" }), "browser");
+  // 未配置服务端地址：server 偏好自动落到本机，不阻塞出声
+  const localOnly = makeEngine(fakeWin({
+    AndroidTTS: { available: () => true, speakRate: () => true, stop: () => {} },
+    speechSynthesis: { speak: () => {}, cancel: () => {} },
+    SpeechSynthesisUtterance: function (t) { this.text = t; }
+  }), { tts: "server", ttsServer: "" });
+  assert.deepEqual(localOnly.chain({ tts: "server", ttsServer: "" }), ["native", "browser"]);
 });
 
 test("native provider：真桥可用时传入文本 + 语速档（不播放真实音频）", async () => {
