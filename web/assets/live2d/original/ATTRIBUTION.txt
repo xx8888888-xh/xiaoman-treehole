@@ -1,0 +1,13 @@
+潮 · 原创角色（original）
+======================
+
+角色立绘与分层纹理：CC BY 4.0，Xiaoman Treehole Contributors 原创生成
+（AI 图像生成 + 分层抠图 + 参数驱动绑骨）。
+与任何既有作品的角色无关。
+
+绑定引擎 LayeredPuppet（web/js/vendor/puppet.js）：MIT。
+
+纹理档：s050（0.5×，首屏默认候选）/ s070（0.7×）；兜底：
+art/full.png（静态立绘）、art/silhouette.png（纯色剪影 #2E6E74）。
+
+接入契约见仓库 docs/live2d_integration.md。
