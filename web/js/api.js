@@ -648,6 +648,9 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
           breakerReset("mock");
           return r;
         } catch (e) {
+          // 429/402 不是路由故障而是"没额度"：不熔断、也不静默换离线人格，
+          // 交还调用方走"排队 + 诚实告知"（P1-3），否则用户永远等不到排队提示
+          if (e && e.kind === "limit") throw e;
           breakerFail("mock");
           console.warn("mock 流不可用，转离线引擎:", e.message);
         }
@@ -665,6 +668,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     } else if (!breakerOpen("proxy")) {
       routes.push("proxy");
     }
+    let limitErr = null;
     for (const route of routes) {
       try {
         let r;
@@ -674,10 +678,16 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
         breakerReset(route);
         return r;
       } catch (e) {
-        breakerFail(route);
+        // 429/402 计入独立标记但不熔断：额度耗尽说明路由本身是通的，
+        // 熔断会把"恢复后立刻补话"也一起挡 30s
+        if (e && e.kind === "limit") limitErr = e;
+        else breakerFail(route);
         console.warn(`[stream] ${route} 失败，降级:`, e && e.message);
       }
     }
+    // 限流是"共情能力被上游卡住"，不能降级成离线人格假装没事：
+    // 抛回 app.js 的 limit 分支，落盘排队 + 诚实告知（P1-3）
+    if (limitErr) throw limitErr;
     // mock 兜底（安卓壳内 mock 即离线引擎）
     if (!nativeBridge() && !breakerOpen("mock")) {
       try {

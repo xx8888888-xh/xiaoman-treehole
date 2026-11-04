@@ -266,7 +266,11 @@ const App = (() => {
     const inHistory = new Set(history.filter(h => h && h.role === "user").map(h => h.content));
     const msgs = q.filter(p => !inHistory.has(p.content))
       .map(p => ({ role: "user", content: p.content, at: p.at || Date.now() }));
-    if (msgs.length) history = [...msgs, ...history].slice(-MAX_HISTORY);
+    // 先保注回的欠账，再用剩余窗口装最近对话：直接 spread 后 slice(-MAX_HISTORY)
+    // 会在历史已满窗口时把刚注回的（最老的）排队消息又切掉——模型就看不到欠账了
+    if (!msgs.length) return;
+    const keep = Math.max(0, MAX_HISTORY - msgs.length);
+    history = keep ? [...msgs, ...history.slice(-keep)] : msgs.slice(-MAX_HISTORY);
   }
   window.__pendingMsgs = loadPending;               // E2E 探针（沿 __genericPet 先例）
   window.__lastLimitLine = () => lastLimitLine;     // E2E：连发不重样断言

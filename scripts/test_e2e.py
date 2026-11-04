@@ -600,7 +600,13 @@ async def main():
                 "() => { localStorage.setItem('xiaoman_pending', JSON.stringify("
                 "[{content:'上周说的搬家的事', at: Date.now()-86400000}])); location.reload(); }")
             await pg2.wait_for_selector("#textInput", state="visible", timeout=15000)
-            # greet 分条发送：等**本次开场特有**的末条"…没接上"出现。
+            # 隐私改造（W7）：apiKey 只驻内存，loadCfg 迁移时会从 localStorage 抹掉，
+            # 刷新即失。这里重新注入一份，确保 g-6 走的还是被拦截的 direct 路由
+            # （否则会落到 proxy/mock 连接被拒 → 离线兜底，测不到"注回欠账"）。
+            await pg2.evaluate(
+                "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
+                "{mode:'openai', apiBase:'http://127.0.0.1:8999', "
+                "mockBase:'http://127.0.0.1:8999', apiKey:'test-key'}))")
             # 注意不能等"信号不太好"——历史恢复里可能已有 g-1 的同名词，会在
             # greet 渲染前就命中，造成时序假 FAIL（16:53 CI 轮实测）。
             greet_g = await wait_contains(pg2, "#messages", "没接上", timeout=20)
@@ -615,7 +621,14 @@ async def main():
                     break
                 await asyncio.sleep(0.5)
             body2 = api_state["bodies"][n2] if len(api_state["bodies"]) > n2 else ""
-            pend5 = await pg2.evaluate("() => __pendingMsgs().length")
+            # 真实链路是"stream 试探 → 非 SSE 再补一次非流式"，清队发生在其后：
+            # 只等第一条 body 就断言 pend 会抢跑（实测 59/60 的假 FAIL）
+            pend5 = 1
+            for _ in range(20):
+                pend5 = await pg2.evaluate("() => __pendingMsgs().length")
+                if pend5 == 0:
+                    break
+                await asyncio.sleep(0.5)
             ok_g6 = ("搬家" in body2) and pend5 == 0
             print("⑦g-6 跨会话注回+补话清队:",
                   f"PASS | 注回={'搬家' in body2}" if ok_g6 else
