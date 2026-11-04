@@ -43,6 +43,8 @@ public class MainActivity extends Activity {
     static final String ASSET_HOST = "appassets.androidplatform.net";
     /** 主界面与悬浮窗共用的同源入口（同一 Origin 才能共享 localStorage/IndexedDB） */
     static final String BASE_URL = "https://" + ASSET_HOST + "/www/index.html";
+    /** 桌面 Live2D 宠物页（与主界面同源：共享 localStorage 里的提醒与外观设置） */
+    static final String PET_URL = "https://" + ASSET_HOST + "/www/pet.html";
 
     private WebView webView;
     private TextToSpeech tts;
@@ -422,25 +424,56 @@ public class MainActivity extends Activity {
             });
         }
 
-        /** 启动悬浮窗服务（悬浮球）；未授权时返回 false 由 web 端引导授权 */
+        /** 启动悬浮窗服务（Live2D 桌宠）；未授权或系统禁止后台启动时返回 false */
         @JavascriptInterface
         public boolean floatShow() {
             if (!Settings.canDrawOverlays(getApplicationContext())) return false;
-            runOnUiThread(() -> {
+            try {
                 Intent i = new Intent(MainActivity.this, FloatWindowService.class)
                         .setAction(FloatWindowService.ACTION_SHOW);
                 if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
                 else startService(i);
-            });
-            return true;
+                return true;
+            } catch (Exception e) {
+                // Android 12+ 后台启动前台服务受限等：不崩溃，交给 web 提示
+                Log.w("MainActivity", "floatShow rejected: " + e);
+                return false;
+            }
         }
 
         /** 关闭悬浮窗（收起并停服务） */
         @JavascriptInterface
         public void floatHide() {
-            runOnUiThread(() -> startService(new Intent(MainActivity.this, FloatWindowService.class)
-                    .setAction(FloatWindowService.ACTION_HIDE)));
+            try {
+                Intent i = new Intent(MainActivity.this, FloatWindowService.class)
+                        .setAction(FloatWindowService.ACTION_HIDE);
+                startService(i);
+            } catch (Exception e) {
+                Log.w("MainActivity", "floatHide failed: " + e);
+            }
         }
+    }
+
+    /** 主 App 前后台信号：桌宠据此避让提醒，避免双弹；页面不可见 90s 后桌宠自动接手 */
+    private void notifyAppVisibility(boolean visible) {
+        if (webView == null) return;
+        webView.post(() -> {
+            if (webView == null) return;
+            webView.evaluateJavascript(
+                    "window.__appVisibility && window.__appVisibility(" + visible + ")", null);
+        });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        notifyAppVisibility(true);
+    }
+
+    @Override
+    protected void onPause() {
+        notifyAppVisibility(false);
+        super.onPause();
     }
 
     @Override
