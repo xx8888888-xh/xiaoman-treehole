@@ -89,7 +89,7 @@ const Backup = (() => {
   function parseBackup(text) {
     let obj;
     try { obj = JSON.parse(String(text || "")); }
-    catch (e) { return { ok: false, error: "这不是有效的 JSON 文件" }; }
+    catch { return { ok: false, error: "这不是有效的 JSON 文件" }; }
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
       return { ok: false, error: "备份文件格式不对" };
     }

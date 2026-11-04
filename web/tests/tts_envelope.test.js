@@ -27,8 +27,8 @@ test("前半段正弦、后半段静音：包络峰值 1，静音段回 0", () =
   const levels = envelopeLevels(ch, 400);
   const head = Array.from(levels.slice(0, 5));
   const tail = Array.from(levels.slice(-5));
-  head.forEach((v) => assert.ok(v > 0.6 && v <= 1, `有声段 ${v}`));
-  tail.forEach((v) => assert.ok(v < 0.001, `静音段 ${v}`));
+  for (const v of head) assert.ok(v > 0.6 && v <= 1, `有声段 ${v}`);
+  for (const v of tail) assert.ok(v < 0.001, `静音段 ${v}`);
   assert.equal(Math.max(...levels), 1); // 归一化到峰值的最大值恰为 1
 });
 

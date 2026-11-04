@@ -6,6 +6,14 @@
 > 沙箱重置会清掉仓库外的 `.trae/rules/`，故以本副本为准；运行 `bash scripts/setup_dsh.sh` 会自动把它还原到
 > `/workspace/.trae/rules/project_rules.md`。**规则只在本文件改**，改完重跑脚本即同步生效。
 
+## 铁律 0：测试不得发声、不得在宿主侧起服务（2026-11-04 用户明确要求）
+
+- 未得到用户「可以开声音」的明确指令前，**禁止**启动 `server/tts_server.py`、`edge_tts`，
+  **禁止**跑任何会播放音频的浏览器用例。TTS 相关只校验 HTTP 响应与音频文件生成，或标 `SKIP: muted by user`。
+- 不要在宿主侧启动 8901/8902/8903（曾起出多份重复进程占端口、干扰容器）；端到端统一走 Docker 容器，
+  容器未起时先请用户拉起，本轮只做代码改动 + 静态/单测。
+- 浏览器/Playwright 一律 headless，不打开带自动播放的页面。
+
 ## 铁律 1：执行者优先级 —— 能让 DSH 干就让 DSH 干
 
 **DeepSeek Harness (dsh) 是免费的，必须优先承担实际执行工作。**
