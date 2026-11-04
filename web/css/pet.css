@@ -29,11 +29,17 @@ html, body {
   cursor: grab;
 }
 
+/* 分层立绘：画布 CSS 高 300% 窗口（头像式取景：头+肩胸），按宽度水平居中 */
 #petStage canvas {
+  position: absolute;
+  left: 50%;
+  top: 8px;
   display: block;
-  width: 100%;
-  height: 100%;
+  height: 300% !important;
+  width: auto !important;
+  transform: translateX(-50%);
   background: transparent;
+  pointer-events: none;
 }
 
 #petTip {

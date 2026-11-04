@@ -21,7 +21,11 @@ import sys
 EXCLUDED_DIRS = {"node_modules", "tests", "docs"}
 EXCLUDED_FILES = {"package.json", "package-lock.json", "biome.json", "ASSET_MANIFEST.json"}
 EXCLUDED_SUFFIXES = (".orig",)
-EXCLUDED_PREFIX_PATHS = ("assets/audio/selftest.",)
+EXCLUDED_PREFIX_PATHS = (
+    "assets/audio/selftest.",
+    # Hiyori 全档纹理（4.12MiB）无任何路径引用，不参与发布物一致性比对
+    "assets/models/hiyori/Hiyori.2048/",
+)
 
 
 def is_excluded(rel_path):

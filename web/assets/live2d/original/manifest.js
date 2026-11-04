@@ -1,0 +1,378 @@
+window.PUPPET_MANIFEST = {
+  "schema": "layered-png-puppet/1.0",
+  "id": "original",
+  "displayName": "潮 · 原创角色",
+  "edition": "open",
+  "canvas": {
+    "width": 1235,
+    "height": 2841
+  },
+  "pivot": {
+    "x": 618,
+    "y": 550
+  },
+  "layers": {
+    "body": {
+      "file": "art/layers/body.png",
+      "x": 0,
+      "y": 545,
+      "w": 1235,
+      "h": 2296
+    },
+    "haori": {
+      "file": "art/layers/haori.png",
+      "x": 4,
+      "y": 557,
+      "w": 1229,
+      "h": 1455
+    },
+    "head": {
+      "file": "art/layers/head.png",
+      "x": 349,
+      "y": 0,
+      "w": 540,
+      "h": 550
+    },
+    "hair_front": {
+      "file": "art/layers/hair_front.png",
+      "x": 521,
+      "y": 270,
+      "w": 234,
+      "h": 122
+    },
+    "eye_l": {
+      "half": {
+        "file": "art/layers/eye_l_half.png",
+        "x": 479,
+        "y": 300,
+        "w": 120,
+        "h": 56
+      },
+      "closed": {
+        "file": "art/layers/eye_l_closed.png",
+        "x": 486,
+        "y": 314,
+        "w": 107,
+        "h": 28
+      },
+      "open": {
+        "file": "art/layers/eye_l_open.png",
+        "x": 486,
+        "y": 270,
+        "w": 106,
+        "h": 115
+      }
+    },
+    "eye_r": {
+      "half": {
+        "file": "art/layers/eye_r_half.png",
+        "x": 642,
+        "y": 303,
+        "w": 120,
+        "h": 56
+      },
+      "closed": {
+        "file": "art/layers/eye_r_closed.png",
+        "x": 648,
+        "y": 317,
+        "w": 108,
+        "h": 28
+      },
+      "open": {
+        "file": "art/layers/eye_r_open.png",
+        "x": 650,
+        "y": 270,
+        "w": 105,
+        "h": 122
+      }
+    },
+    "mouth": {
+      "closed": {
+        "file": "art/layers/mouth_closed.png",
+        "x": 584,
+        "y": 431,
+        "w": 67,
+        "h": 14
+      },
+      "smile": {
+        "file": "art/layers/mouth_smile.png",
+        "x": 593,
+        "y": 427,
+        "w": 49,
+        "h": 24
+      },
+      "open_xs": {
+        "file": "art/layers/mouth_open_xs.png",
+        "x": 609,
+        "y": 434,
+        "w": 17,
+        "h": 9
+      },
+      "open_s": {
+        "file": "art/layers/mouth_open_s.png",
+        "x": 606,
+        "y": 432,
+        "w": 24,
+        "h": 13
+      },
+      "open_ms": {
+        "file": "art/layers/mouth_open_ms.png",
+        "x": 604,
+        "y": 431,
+        "w": 28,
+        "h": 16
+      },
+      "open_m": {
+        "file": "art/layers/mouth_open_m.png",
+        "x": 602,
+        "y": 430,
+        "w": 32,
+        "h": 18
+      },
+      "open_ml": {
+        "file": "art/layers/mouth_open_ml.png",
+        "x": 600,
+        "y": 429,
+        "w": 36,
+        "h": 20
+      },
+      "open_l": {
+        "file": "art/layers/mouth_open_l.png",
+        "x": 598,
+        "y": 428,
+        "w": 40,
+        "h": 23
+      }
+    },
+    "mouthLevels": [
+      "closed",
+      "open_xs",
+      "open_s",
+      "open_ms",
+      "open_m",
+      "open_ml",
+      "open_l"
+    ]
+  },
+  "params": {
+    "breath": {
+      "min": 0,
+      "max": 1,
+      "default": 0.5,
+      "label": "呼吸"
+    },
+    "headTilt": {
+      "min": -1,
+      "max": 1,
+      "default": 0,
+      "label": "头部倾斜"
+    },
+    "headTurn": {
+      "min": -1,
+      "max": 1,
+      "default": 0,
+      "label": "头部平移"
+    },
+    "gazeX": {
+      "min": -1,
+      "max": 1,
+      "default": 0,
+      "label": "视线水平"
+    },
+    "gazeY": {
+      "min": -1,
+      "max": 1,
+      "default": 0,
+      "label": "视线垂直"
+    },
+    "lipSync": {
+      "min": 0,
+      "max": 1,
+      "default": 0,
+      "label": "口型"
+    },
+    "bodySway": {
+      "min": -1,
+      "max": 1,
+      "default": 0,
+      "label": "身体摆动"
+    }
+  },
+  "emotions": {
+    "neutral": {
+      "eye_l": "open",
+      "eye_r": "open",
+      "mouth": "closed",
+      "label": "平静"
+    },
+    "smile": {
+      "eye_l": "open",
+      "eye_r": "open",
+      "mouth": "smile",
+      "label": "微笑"
+    },
+    "laugh": {
+      "eye_l": "closed",
+      "eye_r": "closed",
+      "mouth": "open_l",
+      "label": "大笑"
+    },
+    "shy": {
+      "eye_l": "half",
+      "eye_r": "half",
+      "mouth": "smile",
+      "label": "害羞"
+    },
+    "talk": {
+      "eye_l": "open",
+      "eye_r": "open",
+      "mouth": "open_m",
+      "label": "说话"
+    }
+  },
+  "motions": [
+    {
+      "id": "idle",
+      "label": "待机呼吸",
+      "duration": 4.2,
+      "loop": true
+    },
+    {
+      "id": "nod",
+      "label": "点头",
+      "duration": 1.1,
+      "loop": false
+    },
+    {
+      "id": "shake",
+      "label": "摇头",
+      "duration": 1.2,
+      "loop": false
+    },
+    {
+      "id": "talk",
+      "label": "说话循环",
+      "duration": 2.4,
+      "loop": true
+    }
+  ],
+  "art": {
+    "full": "art/full.png",
+    "thumb": "art/thumb.png"
+  },
+  "fallback": {
+    "silhouette": "art/silhouette.png",
+    "color": "#2E6E74",
+    "file": "art/silhouette.png",
+    "bytes": 135062
+  },
+  "tiers": {
+    "s050": {
+      "scale": 0.5,
+      "path": "art/tiers/s050/",
+      "bytes": 693987,
+      "decoded": 5001068
+    },
+    "s070": {
+      "scale": 0.7,
+      "path": "art/tiers/s070/",
+      "bytes": 1186448,
+      "decoded": 9791028
+    }
+  },
+  "provenance": {
+    "method": "AI 图像生成 + 分层抠图 + 参数驱动绑骨（Layered PNG）",
+    "generated": "2026-11-04",
+    "note": "原创角色，与任何既有作品的角色无关；同风格二次元赛璐璐立绘。"
+  },
+  "license": {
+    "art": "CC-BY-4.0",
+    "code": "MIT"
+  },
+  "files": {
+    "art/full.png": {
+      "bytes": 1900078,
+      "sha256_16": "cd615957f1d10801"
+    },
+    "art/silhouette.png": {
+      "bytes": 135062,
+      "sha256_16": "d1acf6f38533e3c4"
+    },
+    "art/thumb.png": {
+      "bytes": 224118,
+      "sha256_16": "a17c1e50a381f34f"
+    },
+    "art/layers/body.png": {
+      "bytes": 436120,
+      "sha256_16": "2f3e428145dc02a3"
+    },
+    "art/layers/eye_l_closed.png": {
+      "bytes": 4450,
+      "sha256_16": "cf97c976e57224ca"
+    },
+    "art/layers/eye_l_half.png": {
+      "bytes": 9565,
+      "sha256_16": "e2ee45bb46ab126c"
+    },
+    "art/layers/eye_l_open.png": {
+      "bytes": 26055,
+      "sha256_16": "f2e5f9fec5d5ffa1"
+    },
+    "art/layers/eye_r_closed.png": {
+      "bytes": 4643,
+      "sha256_16": "43434db9a07fefbf"
+    },
+    "art/layers/eye_r_half.png": {
+      "bytes": 9689,
+      "sha256_16": "6307915b78a221a3"
+    },
+    "art/layers/eye_r_open.png": {
+      "bytes": 27758,
+      "sha256_16": "1da8c1015d8825db"
+    },
+    "art/layers/hair_front.png": {
+      "bytes": 8036,
+      "sha256_16": "730dbba902194325"
+    },
+    "art/layers/haori.png": {
+      "bytes": 993129,
+      "sha256_16": "d6d679ee0fa5dab6"
+    },
+    "art/layers/head.png": {
+      "bytes": 338179,
+      "sha256_16": "13135566cb0e5ee8"
+    },
+    "art/layers/mouth_closed.png": {
+      "bytes": 1746,
+      "sha256_16": "f82501df4d7da579"
+    },
+    "art/layers/mouth_open_l.png": {
+      "bytes": 1588,
+      "sha256_16": "405c8969f0578bf9"
+    },
+    "art/layers/mouth_open_m.png": {
+      "bytes": 1110,
+      "sha256_16": "bda8892ad45746c9"
+    },
+    "art/layers/mouth_open_ml.png": {
+      "bytes": 1303,
+      "sha256_16": "a715192c9613a012"
+    },
+    "art/layers/mouth_open_ms.png": {
+      "bytes": 937,
+      "sha256_16": "513c0223688c893d"
+    },
+    "art/layers/mouth_open_s.png": {
+      "bytes": 699,
+      "sha256_16": "7cb954acdaa37f4a"
+    },
+    "art/layers/mouth_open_xs.png": {
+      "bytes": 390,
+      "sha256_16": "99a1c49a1c9c9719"
+    },
+    "art/layers/mouth_smile.png": {
+      "bytes": 767,
+      "sha256_16": "d21e17ccb25acd01"
+    }
+  }
+};

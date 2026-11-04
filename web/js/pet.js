@@ -1,5 +1,5 @@
 /* ============================================================
- * pet.js · Android 桌面悬浮宠物（Live2D + 点击反馈 + 提醒气泡）
+ * pet.js · Android 桌面悬浮宠物（分层立绘 + 点击反馈 + 提醒气泡）
  * ------------------------------------------------------------
  * 运行环境：FloatWindowService 里的透明 WebView（窗口仅 140x180dp）。
  * 分工：
@@ -8,6 +8,9 @@
  *  - 文字气泡：原生 TextView（AndroidPet.bubble），无桥时退化为页内气泡
  *  - 提醒：每 30s 读 Reminders.due()，经 PetCore 节流后播报；主 App 在前台时让位
  *  - 静音：本页不加载 tts.js、不创建 Audio，静音约束始终满足
+ *  - 渲染：与主舞台同一套 LayeredPuppet（Canvas 2D）。过去 WebGL 画布在
+ *    overlay 里不会被合成，只能每帧 drawImage 到 2D 镜像层；现在引擎本身就是
+ *    2D，镜像层/上下文丢失重载整套补丁一并移除。
  * ============================================================ */
 (function () {
   "use strict";
@@ -18,15 +21,14 @@
   const menuEl = document.getElementById("petMenu");
   const BRIDGE = window.AndroidPet || null;
 
-  const MODEL_URL = "assets/models/hiyori/Hiyori.model3.json";
+  const MODEL_BASE = "assets/live2d/original/";
   const VENDOR = [
-    "js/vendor/pixi.min.js",
-    "js/vendor/live2dcubismcore.min.js",
-    "js/vendor/pixi-live2d-cubism4.min.js",
+    "assets/live2d/original/manifest.js",
+    "js/vendor/puppet.js",
   ];
 
-  let app = null;
-  let model = null;
+  let puppet = null;
+  let canvas = null;
   let mounted = false;
   let motion = true;
   let largeFont = false;
@@ -38,19 +40,16 @@
   let moved = false;
   let longFired = false;
   let tipTimer = 0;
-  let phase = 0;
-  let nextBlink = 2.5;
-  let blinkAt = -1;
-  let nextGaze = 2.2;
-  let gazeX = 0;
-  let gazeY = 0;
-  let gazeTX = 0;
-  let gazeTY = 0;
   let introShown = false;
   let reminderTimer = 0;
   let styleTimer = 0;
   let lastPaintAt = 0;
   let repaintTimer = 0;
+  let rafId = null;
+  let lastTs = 0;
+  let freezeTimer = 0;
+  let watchdogTimer = 0;
+  let envPaused = false;   // 页面不可见/窗口失焦期间暂停（收起桌宠时也走这里）
 
   function log(msg) {
     try { console.log("[probe] " + msg); } catch (e) { /* 忽略 */ }
@@ -119,91 +118,103 @@
   }
 
   function setParam(name, value) {
-    if (!model) return;
-    try { model.internalModel.coreModel.setParameterValueById(name, value); } catch (e) { /* 模型无此参数 */ }
+    if (!puppet) return;
+    try { puppet.setParam(name, value); } catch (e) { /* 模型无此参数 */ }
   }
 
-  /**
-   * 原生 overlay 里 WebGL 画布不会被合成（Android WebView 把 WebGL 渲染到独立 surface，
-   * 悬浮窗拿不到这块 surface，实测整块透明、只有 DOM 能显示）。这里把 WebGL 帧拷进一个
-   * 2D canvas（普通 DOM 层，和迷你窗 HTML 同样能合成），桌宠因此能真正显示在桌面上。
-   * 桌面浏览器预览不需要这层。
-   */
-  const MIRROR = !!BRIDGE;
-  let mirror = null;
-  let mirrorCtx = null;
-
-  function syncMirror() {
-    if (!mirror || !app) return;
-    const w = app.renderer.width;
-    const h = app.renderer.height;
-    if (mirror.width !== w || mirror.height !== h) {
-      mirror.width = w;
-      mirror.height = h;
-    }
-  }
-
-  function mirrorFrame() {
-    if (!mirrorCtx || !app) return;
-    try {
-      mirrorCtx.clearRect(0, 0, mirror.width, mirror.height);
-      mirrorCtx.drawImage(app.view, 0, 0, mirror.width, mirror.height);
-    } catch (e) {
-      log("pet-mirror-error " + (e && e.message));
-    }
-  }
-
-  function setupMirror() {
-    if (!MIRROR || mirror) return;
-    mirror = document.createElement("canvas");
-    mirror.id = "petMirror";
-    mirror.style.position = "absolute";
-    mirror.style.left = "0";
-    mirror.style.top = "0";
-    mirror.style.width = "100%";
-    mirror.style.height = "100%";
-    mirror.style.pointerEvents = "none";
-    stageEl.appendChild(mirror);
-    // WebGL 画布退居"离屏源"：仍在渲染、可被 drawImage 读取，只是不直接参与合成
-    app.view.style.opacity = "0";
-    mirrorCtx = mirror.getContext("2d");
-    syncMirror();
-    log("pet-mirror size=" + mirror.width + "x" + mirror.height);
-  }
-
-  function safeRender(tag) {
-    if (!app) return;
-    try {
-      app.render();
-      lastPaintAt = Date.now();
-      mirrorFrame();
-    } catch (e) {
-      // 渲染异常只记录：单帧失败不该把整个桌宠弄挂
-      log("pet-render-error:" + tag + " " + (e && e.message));
-    }
-  }
+  const EMOTION_MAP = {
+    happy: "smile", sad: "neutral", gentle: "smile", surprised: "smile",
+    shy: "shy", neutral: "neutral", smile: "smile", laugh: "laugh", talk: "talk",
+  };
+  const MOTION_MAP = {
+    greeting: "nod", nod: "nod", shake: "shake", happyjump: "nod", talk: "talk",
+  };
 
   function renderOnce() {
-    if (!motion) safeRender("once");
+    if (!puppet) return;
+    try {
+      puppet.fit();
+      puppet.render();
+      lastPaintAt = Date.now();
+    } catch (e) {
+      log("pet-render-error " + (e && e.message));
+    }
+  }
+
+  function stopLoop() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    lastTs = 0;
+  }
+
+  /* ---------- 环境暂停（耗电 P0） ----------
+   * 桌宠窗口被收起（GONE → document.hidden）、窗口失焦、页面切换时停掉 rAF；
+   * 恢复可见/聚焦后按需重启，零动画（motion=off）下永不启动。 */
+  function envBlocked() {
+    return envPaused || (typeof document !== "undefined" && document.hidden === true);
+  }
+
+  function pauseForEnv(why) {
+    if (envPaused) return;
+    envPaused = true;
+    stopLoop();
+    clearTimeout(repaintTimer);
+    repaintTimer = 0;
+    log("pet-pause:" + why);
+  }
+
+  function resumeForEnv(why) {
+    envPaused = false;
+    if (document.hidden) return;
+    if (!mounted || !puppet) return;
+    if (motion) startLoop();
+    else renderOnce();
+    log("pet-resume:" + why);
+  }
+
+  function startLoop() {
+    if (rafId || !puppet || !motion || envBlocked()) return;
+    lastTs = 0;
+    const tick = (ts) => {
+      rafId = null;
+      if (!puppet || !motion) return;
+      const dt = lastTs ? Math.min(0.05, (ts - lastTs) / 1000) : 1 / 60;
+      lastTs = ts;
+      // 呼吸/眨眼(216ms)/视线漫游由引擎的自动待机统一驱动
+      puppet.update(dt);
+      puppet.render();
+      lastPaintAt = Date.now();
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+  }
+
+  /** 零动画：停 rAF 并定格同一帧；纹理解码后补一帧，随后不再重绘 */
+  function freezeFrame() {
+    stopLoop();
+    if (!puppet) return;
+    puppet.setAutoIdle(false);
+    renderOnce();
+    clearTimeout(freezeTimer);
+    freezeTimer = setTimeout(() => {
+      freezeTimer = 0;
+      if (!motion) renderOnce();
+    }, 300);
   }
 
   function setEmotion(name) {
-    if (!model) return;
-    try {
-      const names = model.expressionManager && model.expressionManager.expressionNames;
-      const idx = (names || []).indexOf(name);
-      if (idx >= 0) model.expression(idx);
-      else {
-        const fallback = { happy: 0, sad: 1, gentle: 2, surprised: 3, shy: 4, neutral: 5 }[name];
-        if (fallback != null) model.expression(fallback);
-      }
-    } catch (e) { /* 模型无此表情 */ }
-    renderOnce();
+    if (!puppet) return;
+    try { puppet.setEmotion(EMOTION_MAP[name] || "neutral"); } catch (e) { /* 忽略 */ }
+    setParam("headTilt", name === "sad" ? -0.6 : 0);
+    if (!motion) renderOnce();
   }
 
   function playMotion(group) {
-    if (!motion || !model) return;
-    try { model.motion(group, undefined, 2); } catch (e) { /* 模型无此动作 */ }
+    if (!motion || !puppet) return;
+    const id = MOTION_MAP[String(group || "").toLowerCase()];
+    if (!id) return;
+    try { puppet.playMotion(id); } catch (e) { /* 忽略 */ }
+    startLoop();
   }
 
   function interact(yRatio) {
@@ -215,112 +226,27 @@
   }
 
   function setMotionEnabled(on) {
-    if (!app || !app.ticker) return;
-    if (on) {
-      app.ticker.maxFPS = 30;
-      app.ticker.start();
+    motion = !!on;
+    if (!puppet) return;
+    puppet.setAutoIdle(motion);
+    if (motion) {
+      clearTimeout(freezeTimer);
+      freezeTimer = 0;
+      startLoop();
     } else {
-      // 零动画预设仍保留 2FPS 重绘：Live2D 贴图异步上传，ticker 全停会永远停在空白首帧
-      app.ticker.maxFPS = 2;
-      app.ticker.start();
-      safeRender("motion-off");
+      freezeFrame();
     }
   }
 
-  /**
-   * 自适应缩放：model.width/height 是“当前 scale 下的像素尺寸”，
-   * 先把 scale 归一到 1 再按窗口做等比裁剪，避免用模型内部单位（约 2）当像素算出巨大 scale。
-   */
+  /** 自适应：画布 CSS 高度 = 300% 窗口（头部特写），引擎按 clientHeight 等比铺满 */
   function fit() {
-    if (!model || !app) return;
-    const cw = stageEl.clientWidth || window.innerWidth;
-    const ch = stageEl.clientHeight || window.innerHeight;
-    if (!cw || !ch) {
-      log("pet-fit-skip w=" + cw + " h=" + ch);
-      return;
-    }
+    if (!puppet) return;
     try {
-      // 渲染目标必须跟窗口一致：PIXI 默认 800x600，若靠 CSS 拉伸会让坐标/缩放全错位
-      const r = app.renderer;
-      const curW = Math.round(r.width / r.resolution);
-      const curH = Math.round(r.height / r.resolution);
-      if (curW !== cw || curH !== ch) r.resize(cw, ch);
-      const w = r.width / r.resolution;
-      const h = r.height / r.resolution;
-      syncMirror();
-      model.anchor.set(0.5, 0.5);
-      model.scale.set(1);
-      const bw = model.width || model.internalModel.originalWidth || 1;
-      const bh = model.height || model.internalModel.originalHeight || 1;
-      const s = Math.min(w / bw, h / bh) * 0.95;
-      model.scale.set(s);
-      model.x = w / 2;
-      model.y = h * 0.55;
-      log("pet-fit w=" + w + " h=" + h + " bw=" + bw.toFixed(2) + " bh=" + bh.toFixed(2)
-        + " s=" + s.toFixed(3) + " mx=" + model.x + " my=" + model.y);
+      puppet.fit();
+      log("pet-fit w=" + canvas.width + " h=" + canvas.height);
     } catch (e) {
       log("pet-fit-error " + (e && e.message));
     }
-  }
-
-  // 零动画时 ticker 停摆，纹理是异步加载的：首帧可能还没有贴图，需要补渲染几帧才不会“空白”
-  function renderStaticFrames() {
-    if (!app) return;
-    let n = 0;
-    const once = () => {
-      if (motion) return;
-      safeRender("static" + n);
-      n += 1;
-      if (n < 10) setTimeout(once, 900);
-    };
-    once();
-  }
-
-  function animate() {
-    if (!app) return;
-    app.ticker.add(() => {
-      lastPaintAt = Date.now();
-      if (!model || !motion) return;
-      const dt = Math.min(0.05, (app.ticker.deltaMS || 16) / 1000);
-      phase += dt;
-
-      // 待机呼吸（ParamBreath 0~1，周期约 4.8s）
-      const breath = 0.5 + 0.5 * Math.sin(phase * 1.3);
-      setParam("ParamBreath", breath);
-
-      // 眨眼：每 2.6~5.4s 一次，单次 180ms
-      nextBlink -= dt;
-      if (nextBlink <= 0 && blinkAt < 0) {
-        blinkAt = 0;
-        nextBlink = 2.6 + Math.random() * 2.8;
-      }
-      if (blinkAt >= 0) {
-        blinkAt += dt;
-        const p = blinkAt / 0.18;
-        const open = p < 0.5 ? 1 - p * 2 : (p - 0.5) * 2;
-        setParam("ParamEyeLOpen", Math.max(0, Math.min(1, open)));
-        setParam("ParamEyeROpen", Math.max(0, Math.min(1, open)));
-        if (p >= 1) {
-          blinkAt = -1;
-          setParam("ParamEyeLOpen", 1);
-          setParam("ParamEyeROpen", 1);
-        }
-      }
-
-      // 视线漫游：每 2~4s 换一个轻微目标，平滑跟随
-      nextGaze -= dt;
-      if (nextGaze <= 0) {
-        nextGaze = 2.2 + Math.random() * 2.2;
-        gazeTX = (Math.random() - 0.5) * 0.8;
-        gazeTY = (Math.random() - 0.5) * 0.45;
-      }
-      gazeX += (gazeTX - gazeX) * 0.08;
-      gazeY += (gazeTY - gazeY) * 0.08;
-      setParam("ParamEyeBallX", gazeX);
-      setParam("ParamEyeBallY", gazeY);
-      setParam("ParamAngleX", gazeX * 10);
-      setParam("ParamAngleY", gazeY * 8);
-    });
   }
 
   /**
@@ -329,23 +255,24 @@
    * 通过 evaluateJavascript 调用本函数，把尺寸重置 + 立刻补一帧。
    */
   function repaint(why) {
-    if (!mounted) return;
+    if (!mounted || envBlocked()) return;   // 不可见时不排 rAF；恢复可见由 visibilitychange 补帧
     clearTimeout(repaintTimer);
     log("pet-repaint:" + (why || "manual"));
     repaintTimer = setTimeout(() => {
-      fit();
-      safeRender("repaint:" + (why || "manual"));
-      requestAnimationFrame(() => safeRender("repaint-raf:" + (why || "manual")));
+      renderOnce();
+      requestAnimationFrame(() => renderOnce());
     }, 120);
   }
 
-  /** 看门狗：rAF 被系统暂停时（窗口不可见/被移动）靠定时器兜底重绘 */
+  /** 看门狗：rAF 被系统暂停时（窗口不可见/被移动）重新拉起并补一帧 */
   function startWatchdog() {
-    setInterval(() => {
-      if (!model) return;
+    clearInterval(watchdogTimer);
+    watchdogTimer = setInterval(() => {
+      if (!mounted || !puppet || !motion || envBlocked()) return;
       if (Date.now() - lastPaintAt > 2500) {
         log("pet-watchdog");
-        safeRender("watchdog");
+        startLoop();
+        renderOnce();
       }
     }, 1500);
   }
@@ -364,63 +291,50 @@
   function mount() {
     if (mounted) return;
     mounted = true;
-    const vw = stageEl.clientWidth || window.innerWidth;
-    const vh = stageEl.clientHeight || window.innerHeight;
-    const stage = new PIXI.Application({
-      width: vw,
-      height: vh,
-      backgroundAlpha: 0,
-      antialias: true,
-      resolution: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
-      autoDensity: true,
-      // 2D 镜像层要从 WebGL 画布 drawImage 取帧，必须保留绘制缓冲
-      preserveDrawingBuffer: true,
-    });
-    app = stage;
-    app.ticker.maxFPS = 30;
-    stageEl.appendChild(app.view);
-    app.view.style.background = "transparent";
-    setupMirror();
-    if (MIRROR) app.ticker.add(() => mirrorFrame());
-    // WebGL 上下文丢失后 PIXI 6 不会自愈，整块画面会永久空白：记探针并限频重载一次
-    app.view.addEventListener("webglcontextlost", (ev) => {
-      try { ev.preventDefault(); } catch (e) { /* 忽略 */ }
-      log("pet-gl-lost");
-      let last = 0;
-      try { last = Number(localStorage.getItem("xiaoman_pet_gl_reload_v1") || 0) || 0; } catch (e) { /* 忽略 */ }
-      if (Date.now() - last > 5000) {
-        try { localStorage.setItem("xiaoman_pet_gl_reload_v1", String(Date.now())); } catch (e) { /* 忽略 */ }
-        setTimeout(() => { try { location.reload(); } catch (e) { /* 忽略 */ } }, 1200);
-      }
-    }, false);
-    // 渲染后端探针：PIXI 拿不到 WebGL 会静默退回 CanvasRenderer，而 Live2D 只能在 WebGL 上出图
-    try {
-      const gl = stage.renderer.gl;
-      log("pet-gl type=" + stage.renderer.type + (gl ? " version=" + gl.getParameter(gl.VERSION) : " none"));
-    } catch (e) {
-      log("pet-gl probe-failed " + (e && e.message));
+    canvas = document.createElement("canvas");
+    canvas.id = "petCanvas";
+    canvas.className = "pet-canvas";
+    canvas.setAttribute("aria-label", "小满");
+    stageEl.appendChild(canvas);
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      log("pet-canvas-failed");
+      return;
     }
 
-    PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false })
-      .catch(() => PIXI.live2d.Live2DModel.from(MODEL_URL))
-      .then((m) => {
-        model = m;
-        app.stage.addChild(m);
-        fit();
-        animate();
-        setMotionEnabled(motion);
-        renderStaticFrames();
-        log("pet-ready");
-        try { if (BRIDGE && BRIDGE.ping) BRIDGE.ping(); } catch (e) { /* 忽略 */ }
-        if (!introShown) {
-          introShown = true;
-          setTimeout(() => bubble("小满来啦，戳戳我；双击聊天，长按更多"), 1500);
-        }
-      })
-      .catch((err) => {
+    // 桌宠画布 CSS 高 300% 窗口（头像式取景），DPR 上限 2 → s070 仍在 12MB 预算内
+    const mem = navigator && navigator.deviceMemory;
+    const tier = mem && mem < 4 ? "s050" : "s070";
+    try {
+      puppet = new LayeredPuppet(canvas, window.PUPPET_MANIFEST, { base: MODEL_BASE, tier: tier });
+    } catch (e) {
+      log("pet-model-failed " + (e && e.message));
+      return;
+    }
+
+    puppet.load().then(() => {
+      if (!puppet) return;
+      fit();
+      puppet.setEmotion("neutral");
+      puppet.setAutoIdle(motion);
+      if (motion) startLoop();
+      else freezeFrame();
+      log("pet-mode=" + puppet.mode);
+      if (puppet.mode === "hidden") {
         log("pet-model-failed");
-        try { console.error("Live2D 加载失败:", err && err.message); } catch (e) { /* 忽略 */ }
-      });
+        return;
+      }
+      log("pet-ready");
+      try { if (BRIDGE && BRIDGE.ping) BRIDGE.ping(); } catch (e) { /* 忽略 */ }
+      if (!introShown) {
+        introShown = true;
+        setTimeout(() => bubble("小满来啦，戳戳我；双击聊天，长按更多"), 1500);
+      }
+    }).catch((err) => {
+      log("pet-model-failed");
+      try { console.error("分层立绘加载失败:", err && err.message); } catch (e) { /* 忽略 */ }
+    });
   }
 
   // ---------- 手势：单击互动 / 双击聊天 / 长按菜单 ----------
@@ -481,12 +395,39 @@
     downPoint = null;
   }
 
+  /** 真正卸载（pagehide / 桌宠窗被原生销毁）：停循环与全部定时器、销毁实例、移除画布 */
+  function destroy() {
+    mounted = false;
+    stopLoop();
+    clearTimeout(repaintTimer); repaintTimer = 0;
+    clearTimeout(freezeTimer); freezeTimer = 0;
+    clearTimeout(pressTimer); pressTimer = 0;
+    clearTimeout(tipTimer); tipTimer = 0;
+    clearInterval(reminderTimer); reminderTimer = 0;
+    clearInterval(styleTimer); styleTimer = 0;
+    clearInterval(watchdogTimer); watchdogTimer = 0;
+    window.removeEventListener("appearance:change", syncAppearance);
+    try { showMenu(false); } catch (e) { /* 忽略 */ }
+    if (puppet) {
+      try { puppet.stop(); } catch (e) { /* 忽略 */ }
+      puppet = null;
+    }
+    if (canvas && canvas.parentElement) canvas.parentElement.removeChild(canvas);
+    canvas = null;
+    envPaused = false;
+    log("pet-destroy");
+  }
+
   // 渲染异常只记录不抛出：桌宠挂掉也要保留悬浮层可用
   window.addEventListener("error", (e) => log("pet-js-error " + (e && e.message)));
-  // 窗口从不可见恢复（面板收起/系统回收后回来）时补帧，否则会停在空白帧
+  // 窗口从不可见恢复（面板收起/系统回收后回来）时按需重启并补帧，否则会停在空白帧
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) repaint("visibility");
+    if (document.hidden) pauseForEnv("hidden");
+    else { resumeForEnv("visible"); repaint("visibility"); }
   });
+  window.addEventListener("blur", () => pauseForEnv("blur"));
+  window.addEventListener("focus", () => { resumeForEnv("focus"); repaint("focus"); });
+  window.addEventListener("pagehide", (e) => { if (!e || !e.persisted) destroy(); });
   window.addEventListener("pageshow", () => repaint("pageshow"));
   document.addEventListener("pointerdown", onDown, true);
   document.addEventListener("pointermove", onMove, true);
@@ -548,10 +489,11 @@
     tap(ratio) { interact(typeof ratio === "number" ? ratio : 0.4); },
     openPanel,
     close: closePet,
+    destroy,
     tickReminders,
     repaint,
     state() {
-      return { mounted, motion, largeFont, grayIcons, ready: !!model };
+      return { mounted, motion, largeFont, grayIcons, ready: !!(puppet && puppet.mode !== "hidden") };
     },
   };
 

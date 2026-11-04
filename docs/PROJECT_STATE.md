@@ -96,8 +96,8 @@ bash scripts/build_apk.sh         # 需 ANDROID_HOME；版本号在 build.gradle
 ┌─────────────── Android APK（WebView 壳，待定 Capacitor/原生） ───────────────┐
 │                                                                             │
 │  web/ 前端核心（同一份代码，浏览器=我们的"模拟器"）                            │
-│  ├─ index.html        萌系 UI：Live2D 舞台(上) + 聊天流(下) + 输入栏          │
-│  ├─ js/live2d.js      PixiJS + pixi-live2d-display；情绪→表情/动作；口型同步  │
+│  ├─ index.html        萌系 UI：分层立绘舞台(上) + 聊天流(下) + 输入栏          │
+│  ├─ js/stage.js       LayeredPuppet(Canvas 2D)；情绪/动作/7档口型/视线/三级降级  │
 │  ├─ js/app.js         活人感引擎：分条发送/打字延迟/主动开口/记忆/留存钩子     │
 │  ├─ js/api.js         LLM 适配器：MOCK ⇄ OPENAI 兼容（真 API 明天接入）       │
 │  └─ js/tts.js         TTS 适配器：native(系统TTS) / server(可选) / browser / none  │
@@ -150,9 +150,8 @@ treehole-app/
 
 | 来源 | 用途 | 许可 |
 |------|------|------|
-| pixi-live2d-display (guansss) | Live2D 渲染 | MIT |
-| PixiJS | 渲染底层 | MIT |
-| Live2D 官方免费示例模型 | 角色模型（将做结构化改造） | Live2D 免费素材许可 |
+| LayeredPuppet（自研，随资产包） | 分层 PNG 立绘渲染（Canvas 2D，无 WebGL 依赖） | MIT |
+| 潮·原创角色（original 资产包） | 产品默认角色（1235×2841 分层立绘 + 静态/剪影兜底） | 图像 CC-BY-4.0 |
 | 系统 TTS / speechSynthesis | 语音默认路径 | 设备自带，离线可用，零额外依赖 |
 | Open-LLM-VTuber (t41372) | 架构参考：情绪标签驱动 Live2D | AGPL-3.0（仅参考思路，不复代码） |
 | 前几日"小满"测试集与盲测结论 | 人设、活人感规则、安全层话术 | 自产 |
