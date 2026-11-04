@@ -24,6 +24,7 @@
     // W7 隐私开关：Kilo 等免费 trial 条款禁止承载个人倾诉数据。
     // 默认 false → 安卓免 key 通道不发请求，直接 mock/offline 安全兜底。
     allowFreePersonal: false,
+    heartbeatOn: true,   // 主动问候总开关（设置页可关；关掉后只保留用户自己定的提醒）
     apiKey: ""            // 仅内存使用，normalizeCfg 会把它丢弃
   };
 
@@ -58,6 +59,7 @@
     cfg.voice = String(raw.voice || DEFAULTS.voice).trim();
     cfg.ttsRate = RATES.indexOf(raw.ttsRate) >= 0 ? raw.ttsRate : DEFAULTS.ttsRate;
     cfg.allowFreePersonal = raw.allowFreePersonal === true;
+    cfg.heartbeatOn = raw.heartbeatOn !== false;   // 缺省开；只有显式 false 才关
     // 密钥永不进入持久化配置
     delete cfg.apiKey;
     return cfg;
@@ -109,7 +111,48 @@
     return `当前实际：${configuredLabel}`;
   }
 
-  const api = { DEFAULTS, MODES, RATES, normalizeMode, normalizeCfg, stripSecret, maskKey, trimUrl, apiRoot, describeMode };
+  /**
+   * 设置页「语音实际会怎么发声」文案（纯函数，便于单测）。
+   * 关键：用户选的服务端语音只是**偏好**，真正发声还要看环境有没有该后端。
+   * @param {string} tts 配置值：server / browser / off
+   * @param {{server?:boolean, native?:boolean, browser?:boolean}} opts 环境可用性
+   * @returns {{mode:string, chain:string[], actual:string, text:string}}
+   */
+  function describeTts(tts, opts) {
+    const o = opts || {};
+    const mode = ["server", "browser", "off"].indexOf(tts) >= 0 ? tts : DEFAULTS.tts;
+    const label = {
+      server: "服务端语音",
+      native: "安卓系统语音",
+      browser: "浏览器本机语音",
+      none: "无可用的语音后端",
+    };
+    if (mode === "off") {
+      return { mode, chain: ["none"], actual: "none", text: "语音已关闭：只显示文字，不会出声" };
+    }
+    const prefer = mode === "server" ? ["server", "native", "browser"] : ["browser", "native"];
+    const avail = { server: !!o.server, native: !!o.native, browser: !!o.browser };
+    const chain = prefer.filter((id) => avail[id]);
+    const actual = chain[0] || "none";
+    if (actual === "none") {
+      return { mode, chain, actual, text: "当前没有可用的语音后端：文字照常，不会出声" };
+    }
+    let text = `实际发声：${label[actual]}`;
+    if (mode === "server" && actual !== "server") {
+      text += "（服务端语音地址为空或不可用，已自动用本机语音）";
+    }
+    if (mode === "browser" && actual === "native") {
+      text += "（当前环境没有浏览器语音，已用安卓系统语音）";
+    }
+    return { mode, chain, actual, text };
+  }
+
+  /** 音色只在服务端语音真正发声时才有意义（本机 TTS 用系统音色） */
+  function voiceApplies(tts, actual) {
+    return (tts || DEFAULTS.tts) === "server" && actual === "server";
+  }
+
+  const api = { DEFAULTS, MODES, RATES, normalizeMode, normalizeCfg, stripSecret, maskKey, trimUrl, apiRoot, describeMode, describeTts, voiceApplies };
 
 
   root.XMConfig = api;
