@@ -19,6 +19,7 @@ COPY server/ ./server/
 # 不再 COPY web/（否则容器内容会和工作树/APK 漂移，红队 P1-1）。
 COPY android/app/src/main/assets/www/ ./web/
 COPY scripts/verify_manifest.py ./scripts/verify_manifest.py
+COPY scripts/verify_assets.py ./scripts/verify_assets.py
 
 # 静态站 / mock API / TTS 三个端口
 EXPOSE 8901 8902 8903

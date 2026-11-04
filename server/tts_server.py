@@ -41,6 +41,7 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 import xm_config
+from log_redact import mask_sensitive, redact_log_line
 
 # ---------------- 日志配置 ----------------
 logging.basicConfig(
@@ -110,7 +111,7 @@ def redact_request_line(line):
     s = str(line).replace("\r", " ").replace("\n", " ")
     s = _QUERY_RE.sub("", s)      # ? 及其后到空白前的查询串整体删除
     s = _HTTP_VER_RE.sub("", s)   # 去掉 HTTP/1.1 版本号
-    return s.strip()
+    return mask_sensitive(s)
 
 
 def parse_tts_payload(raw_body):
@@ -403,7 +404,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _error(self, code, message):
         """统一 JSON 错误格式，不泄露内部异常细节"""
-        logger.error("HTTP %d: %s", code, message)
+        logger.error("HTTP %d: %s", code, mask_sensitive(message))
         self._json({"error": message}, code)
 
     def do_OPTIONS(self):
@@ -435,7 +436,8 @@ class Handler(BaseHTTPRequestHandler):
             logger.debug("tts 200 %dms audio_len=%d",
                          int((time.time() - start) * 1000), len(audio))
         except TtsProviderUnavailable as e:
-            logger.error("TTS provider unavailable: provider=%s detail=%s", PROVIDER, e)
+            logger.error("TTS provider unavailable: provider=%s detail=%s",
+                         PROVIDER, mask_sensitive(e))
             self._json({"error": "tts_provider_unavailable", "provider": PROVIDER},
                        503, public=True)
         except RuntimeError:

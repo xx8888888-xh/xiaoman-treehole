@@ -1,13 +1,29 @@
 # PROJECT_STATE · 小满树洞（Xiaoman Treehole）
 
-> 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完本文件即可掌握全局。
-> 最后更新：2026-10-06（分支合并日：audit+r2+zhiqiu/dev 三线合一）｜ 当前版本：v0.4.0 ｜ 状态：**朋友定位+记忆/提醒/心跳三大生命线全绿** · 全需求闭环 · 开源仓库已上线 · 等真API增强 ｜ 分支：main=稳定线，知秋=zhiqiu/dev（多AI协同）
-> 测试基线（全部实跑，均 exit 0）：Mock 契约 8/8（幂等 ×2）· UI 集成 5/5 · 端到端 5/5（含危机/记忆/TTS 落点）· XSS 回归通过 · 舞台降级通过 · verify_tts mp3 PASS（ASR 因本机缺 z-ai-web-dev-sdk 为 SKIP）
-> 代码审计（DSH 逐行精读，报告见 \`/workspace/.dsh_audit/\`）：合计 **148 条缺陷/风险**（高 22 / 中 69 / 低 56 / 中高 1）。修复进度以 \`docs/AUDIT_REMEDIATION.md\` 为准：**已修 136 / 部分 11 / 遗留 1**；第二轮清零 4 项，其余为"有意不修"（逐条附理由，见该文档 §9.2）
-> ⚠️ 环境与额度：环境一键重建 \`bash scripts/setup_dsh.sh\`（Node24+dsh+免费模型路由+playwright+chromium+系统依赖+**AI 长期记忆还原**）；DSH 免费模型额度 **50 次/日**（次日 00:00 UTC 重置），耗尽后全量 429 —— 额度耗尽时由助手直接执行并记录
+> 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完文件即可掌握全局。
+> 最后更新：2026-11-04（w4 安全/发布）｜ 当前版本：v0.5.0 ｜ 状态：**安全审计收口 + 发布物单一真源 + 默认在线** ｜ 工作分支：`feat/security`；`main` 为稳定线。
+
+## 0. 2026-11-04 当前事实（优先于下文历史快照）
+
+> 下文 §1–§12 是 2026-10-06 的历史快照，其中的版本号、分支、缺陷计数、`treehole-app/` 路径、
+> 「无 KVM / DSH 沙箱」等描述**已过期**。现状以本节、`README.md`、`CHANGELOG.md` 为准。
+
+| 主题 | 当前事实（2026-11-04） |
+|---|---|
+| 版本 / 分支 | v0.5.0；`feat/security`（含 w4 安全与发布整改），`main` 稳定线 |
+| 启动路径 | ① 本地网页：`bash scripts/build_assets.sh` 后 `python -m http.server`；② Docker Compose：`docker compose up -d --build`（WSL bridge 无法出网时叠加 `docker-compose.hostnet.yml`）；③ APK：`bash scripts/build_apk.sh`。详见 README「快速开始」 |
+| 默认对话模式 | **在线优先**：安卓走原生桥直连免费模型，浏览器走服务端代理；`mock` 仅作兜底，`offline` 可手动选。设置页显示「当前实际模式」，自动降级会如实标注 |
+| 发布物真源 | 唯一真源是仓库 `web/`；`scripts/build_assets.sh` 生成 `android/app/src/main/assets/www` + `ASSET_MANIFEST.json`。compose 启动前跑 `verify_assets.py`（对齐 `web/`）与 `verify_manifest.py`（对齐清单），**不一致直接拒绝启动** |
+| CORS | **不是 `*`**：`server/xm_config.py` 默认白名单 `http://127.0.0.1:8901`、字面量 `null`（旧 file:// 壳）、`https://appassets.androidplatform.net`；可用 `XIAOMAN_ALLOW_ORIGINS` 追加。音频 `/tts` 是公开资源，固定回 `Access-Control-Allow-Origin: *` |
+| 监听地址 | 默认 `127.0.0.1`；仅在容器内注入 `XIAOMAN_BIND_HOST=0.0.0.0`，再由 compose 端口映射回宿主机回环，不直接暴露局域网 |
+| WSL host 网络 | 仅在 bridge 无外网出口（DNS/TCP 被防火墙拦）时使用 `docker-compose.hostnet.yml` 覆盖；仍只绑回环，不是默认部署方式 |
+| 凭据边界 | Key 只从**环境变量 / Windows 凭据管理器**读取，不写前端、不入镜像、不落日志；**容器内读不到 Windows 凭据管理器**，Docker 部署必须用 `.env` / `-e AI_API_KEY=…` 显式注入 |
+| 语音 | 默认设备系统 TTS / 浏览器 `speechSynthesis`；服务端语音是可选插件，默认 `provider=none`，仓库无 edge-tts |
+| 日志 | TTS 原文只走 POST body，日志统一经 `server/log_redact.py` 脱敏（查询串、长文本、疑似密钥、手机号） |
+
 ---
 
-## 0. 项目一句话
+## 0.1 项目一句话
 
 安卓端 AI 树洞/倾听陪伴应用「小满树洞」：Live2D 萌系角色 + 活人感对话 + 语音回复，角色名"小满"（26岁新媒体运营，养橘猫团子）。开源（MIT）。
 
@@ -30,27 +46,28 @@
 
 - **Web 核心**：浏览器打开 web/index.html 即完整体验（需起 server/mock_api.py + server/tts_server.py；不起也行，离线引擎兜底）
 - **本地部署**：`bash scripts/dev_up.sh` 一键起三服务（幂等，可重复执行），`bash scripts/dev_down.sh` 一键停
-- **APK**：已签名 debug 包可直接装真机：`android/app/build/outputs/apk/debug/xiaoman-treehole-v0.3-debug.apk`
+- **APK**：v0.5.0，产物在 `android/app/build/outputs/apk/debug/`（`bash scripts/build_apk.sh` 重新生成）
 - **模拟器**：本地无 KVM 不可行；GitHub Actions runner 自带 KVM，推仓后自动出包+模拟器截图（workflow 已写好）
 - **明天接真 API**：设置页（右上齿轮）→ 模式切 openai → 填 base URL + key + 模型名即可；提示词与结构化协议已内置（web/js/api.js）
 
-## 3. 三分钟跑起来
+## 3. 三分钟跑起来（2026-11-04 更新）
 
 ```bash
-# 0) 一键启停（推荐，本轮新增）：幂等，重复执行安全
-bash scripts/dev_up.sh     # 起三服务：前端 8901 / mock 对话 8902 / TTS 语音 8903
-bash scripts/dev_down.sh   # 一键停
+# 唯一真源 → 发布物（先做一次；之后每次改 web/ 都要重跑）
+bash scripts/build_assets.sh
 
-# 1) Web 预览（推荐先跑这个看效果）
-cd treehole-app && (cd server && python3 mock_api.py &) && (cd server && python3 tts_server.py &)
-cd web && python3 -m http.server 8901
-# 浏览器访问 http://127.0.0.1:8901（手机视口390x844最佳）
+# 方式 ①：纯本地网页（最轻）
+bash scripts/dev_up.sh            # 起 8901 静态站 / 8902 mock / 8903 tts（默认 provider=none）
+bash scripts/dev_down.sh          # 一键停
 
-# 2) 重新构建 APK
-bash scripts/build_apk.sh   # 需 ANDROID_HOME；构建器依赖已固化在脚本注释
+# 方式 ②：Docker Compose（推荐）
+docker compose up -d --build
 
-# 3) GitHub CI（推仓后自动）：出包 + KVM模拟器冒烟 + 截图 artifact
+# 方式 ③：APK
+bash scripts/build_apk.sh         # 需 ANDROID_HOME；版本号在 build.gradle.kts / build_apk.sh
 ```
+
+完整说明与常见问题（含 WSL hostnet、容器凭据边界）见仓库根目录 `README.md`。
 
 ## 4. 关键约束（用户明示）
 

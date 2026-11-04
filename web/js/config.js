@@ -71,7 +71,42 @@
     return k.length <= 8 ? "*".repeat(k.length) : `${k.slice(0, 3)}***${k.slice(-4)}`;
   }
 
-  const api = { DEFAULTS, MODES, RATES, normalizeMode, normalizeCfg, stripSecret, maskKey, trimUrl, apiRoot };
+  /**
+   * 设置页「当前实际模式」文案（纯函数，便于单测）。
+   * @param {string} mode 已保存的配置模式
+   * @param {{native?:boolean, lastRoute?:string}} opts
+   *        native：是否在安卓原生桥环境；lastRoute：最近一次真正生效的通道
+   *        （openai/native/mock/offline，由 API.effectiveMode() 提供）
+   */
+  function describeMode(mode, opts) {
+    const o = opts || {};
+    const configured = normalizeMode(mode || DEFAULTS.mode);
+    const route = o.lastRoute ? String(o.lastRoute) : "";
+    const native = !!o.native;
+
+    const label = m => {
+      if (m === "offline") return "纯离线规则引擎（不联网）";
+      if (m === "mock") return native ? "本机离线规则引擎（安卓壳内无本地服务）" : "本地 Mock 服务";
+      return native ? "在线免费模型（原生桥直连）" : "在线模型（服务端代理）";
+    };
+
+    const configuredLabel = label(configured);
+    // lastRoute=openai/native 都属于「在线模型」；mock/offline 单独判断
+    if (route) {
+      const routeLabel = label(route === "native" ? "openai" : route);
+      const same = (route === "native" || route === "openai")
+        ? configuredLabel === label("openai")
+        : route === configured;
+      if (!same) {
+        return `当前实际：${routeLabel}（配置为${configuredLabel}，已自动降级）`;
+      }
+      return `当前实际：${routeLabel}`;
+    }
+    return `当前实际：${configuredLabel}`;
+  }
+
+  const api = { DEFAULTS, MODES, RATES, normalizeMode, normalizeCfg, stripSecret, maskKey, trimUrl, apiRoot, describeMode };
+
 
   root.XMConfig = api;
   if (typeof module === "object" && module.exports) module.exports = api;

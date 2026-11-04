@@ -7,6 +7,14 @@
 > - 审计范围：`server/`、`web/js/`、`web/`（UI）、`android/` + CI、`scripts/`
 > - 验证：本地三服务（8901 静态站 / 8902 mock_api / 8903 tts_server）实跑，见 §八
 
+> **2026-11-04 后续更正（w4 安全/发布）**：本文件是历史总账，下列当时的「部分采纳/遗留」已落地：
+> - CORS Origin 已从 `*` 改为 `server/xm_config.py` 的白名单（默认 `http://127.0.0.1:8901`、旧壳 `null`、
+>   `https://appassets.androidplatform.net`，可用 `XIAOMAN_ALLOW_ORIGINS` 追加）；`/tts` 音频仍为公开 `*`；
+> - `BIND_HOST` 默认已改为 `127.0.0.1`，容器内才注入 `0.0.0.0` 并由 compose 映射回宿主机回环；
+> - 凭据边界：Key 只从环境变量 / Windows 凭据管理器读取；**容器内无 `CredRead`**，Docker 部署必须显式注入；
+> - TTS 原文改为 POST body，日志经 `server/log_redact.py` 脱敏（查询串/长文本/密钥/手机号）；
+> - 发布物以 `web/` 为唯一真源，`build_assets.sh` 生成清单，compose 启动前双重校验，漂移即拒绝启动。
+
 ---
 
 ## 一、总览

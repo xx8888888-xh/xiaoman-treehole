@@ -32,12 +32,19 @@ jobs:
       - name: 语法编译检查（server + scripts）
         run: python -m compileall -q server scripts
 
+      - name: 发布物一致性自检（web ↔ assets/www ↔ 清单）
+        run: |
+          bash scripts/build_assets.sh
+          python scripts/verify_assets.py
+          bash scripts/verify_assets.sh
+
       - name: Python 单测（同一步内起 mock 服务）
         # 关键：GitHub Actions 每个 step 结束会清理后台进程，不能"上一步起服务、
         # 下一步跑测试"（会 0/8 Connection refused）。起服务、等待、测试、收尸放一起。
         env:
           AI_MODE: mock
         run: |
+          python -m unittest discover -s server/tests
           python server/mock_api.py > /tmp/mock.log 2>&1 &
           MPID=$!
           trap 'kill $MPID 2>/dev/null || true' EXIT

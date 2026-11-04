@@ -22,7 +22,7 @@ cd web && python -m http.server 8901
 
 ```bash
 bash scripts/build_assets.sh       # 先同步 web/ → android/.../assets/www 并生成哈希清单（唯一真源）
-docker compose up -d --build      # 或在 WSL: docker compose -f ~/treehole-stack/compose/docker-compose.yml up -d --build
+docker compose up -d --build      # 必须在仓库根目录执行：web 与 assets/www 用相对路径只读挂载
 ```
 
 > 如果所在环境的 Docker 容器**没有外网出口**（本机 WSL 的 bridge 被防火墙拦掉 DNS/TCP，表现为 App 只能降级到本地 mock），
@@ -158,8 +158,9 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 **我的数据存在哪里？**
 
 对话历史在浏览器/APK 本机的 IndexedDB（库名 `xiaoman_chat`）；记忆、设置、字号、待发消息、风险日志在
-`localStorage`。服务端默认不落盘，只有设置 `XIAOMAN_DATA_DIR` 时才把会话上下文写到该目录。
-卸载 App 或清除浏览器数据会一并删除，重要记录请先导出。
+`localStorage`。服务端默认不落盘；但 **Docker Compose 会通过 `XIAOMAN_DATA_DIR` 把会话上下文写到宿主机的
+`./data/sessions`**（用于多轮上下文），不需要时直接删该目录即可。卸载 App 或清除浏览器数据会一并删除本机记录，
+重要内容请先导出。
 
 **怎么导出 / 迁移备份？**
 

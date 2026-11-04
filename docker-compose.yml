@@ -28,18 +28,21 @@ services:
       target: runtime
       network: host
     image: treehole-web:local
-    # 启动前强校验：镜像内 /app/web 是 build_assets.sh 产出的唯一副本，
-    # 必须与 ASSET_MANIFEST.json 逐文件 sha256/字节一致，否则 fail fast 并打印差异。
+    # 启动前强校验：
+    #   1) 挂载的 assets/www 必须与工作树 web/ 逐文件一致（同一排除口径）；
+    #   2) assets/www 必须与自身 ASSET_MANIFEST.json 逐文件 sha256/字节一致。
+    # 任一不一致 → 拒绝启动并打印差异，避免 8901 对外提供过期 index.html/app.js。
     command:
       - sh
       - -c
-      - "python /app/scripts/verify_manifest.py --dir /app/web --manifest /app/web/ASSET_MANIFEST.json && exec python -m http.server 8901 --bind 0.0.0.0 --directory web"
+      - "python /app/scripts/verify_assets.py --src /app/source-web --dst /app/web && python /app/scripts/verify_manifest.py --dir /app/web --manifest /app/web/ASSET_MANIFEST.json && exec python -m http.server 8901 --bind 0.0.0.0 --directory web"
     ports:
       - "127.0.0.1:8901:8901"
     # 运行期直接只读挂载唯一真源（assets/www），杜绝镜像里留旧副本造成漂移；
-    # Dockerfile 的 COPY 保留给独立 `docker run` 场景。
+    # Dockerfile 的 COPY 保留给独立 `docker run` 场景。web/ 只用于启动前交叉校验，不对外服务。
     volumes:
       - ./android/app/src/main/assets/www:/app/web:ro
+      - ./web:/app/source-web:ro
     environment:
       <<: *common-env
     labels: *labels
