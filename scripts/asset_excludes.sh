@@ -14,4 +14,6 @@ ASSET_TAR_EXCLUDES=(
   --exclude=docs
   --exclude='*.orig'
   --exclude=ASSET_MANIFEST.json
+  # Hiyori 全档纹理（4.12MiB）无任何路径引用：合并主干后也不得再打进发布物
+  --exclude='assets/models/hiyori/Hiyori.2048'
 )
