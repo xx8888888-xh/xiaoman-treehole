@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>小满桌宠</title>
+<meta name="theme-color" content="transparent">
+<!-- 外观预设早于样式执行：悬浮宠物同样遵守零动画/大字号/非拟态 -->
+<script src="js/appearance.js"></script>
+<link rel="stylesheet" href="css/pet.css">
+</head>
+<body>
+<div id="petRoot" aria-label="小满桌面宠物">
+  <div id="petStage" role="button" aria-label="小满桌宠：点一下互动，双击聊天，长按更多"></div>
+  <!-- 无原生桥时的兜底气泡（浏览器预览/自动化也能看到文字） -->
+  <div id="petTip" role="status" aria-live="polite" class="hidden"></div>
+  <div id="petMenu" class="hidden" role="menu" aria-label="小满桌宠菜单">
+    <button type="button" id="petChat" role="menuitem">聊天</button>
+    <button type="button" id="petClose" role="menuitem">关闭</button>
+  </div>
+</div>
+<script src="js/pet_core.js"></script>
+<script src="js/reminders.js"></script>
+<script src="js/pet.js"></script>
+</body>
+</html>
