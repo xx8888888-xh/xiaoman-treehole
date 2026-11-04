@@ -128,6 +128,29 @@ def run(base_url, out_dir):
         fps = measure_fps(page, 3.0)
         perf["fps"] = round(fps, 1)
         rep.check("实测帧率 ≥%.0ffps（rAF 3s 采样）" % FRAME_TARGET, fps >= FRAME_TARGET, "%.1ffps" % fps)
+
+        # 音频包络 → 7 档口型：连续 lipSync 喂入后嘴部像素必须变化
+        mouth0 = page.evaluate("""() => {
+          const c = document.querySelector('#stage canvas');
+          const s = window.__stageVram.scale;
+          const d = c.getContext('2d').getImageData(Math.round(617*s), Math.round(438*s), 1, 1).data;
+          return [d[0], d[1], d[2], d[3]];
+        }""")
+        page.evaluate("""() => new Promise((res) => {
+          let n = 0;
+          const t = setInterval(() => { Stage.lipFrame(1); if (++n >= 10) { clearInterval(t); res(); } }, 16);
+        })""")
+        page.wait_for_timeout(80)
+        mouth1 = page.evaluate("""() => {
+          const c = document.querySelector('#stage canvas');
+          const s = window.__stageVram.scale;
+          const d = c.getContext('2d').getImageData(Math.round(617*s), Math.round(438*s), 1, 1).data;
+          return [d[0], d[1], d[2], d[3]];
+        }""")
+        delta = max(abs(a - b) for a, b in zip(mouth0, mouth1))
+        rep.check("口型：连续 1.0 喂入后嘴部像素变化（包络→7 档）", delta >= 8,
+                 "before=%s after=%s Δ=%d" % (mouth0, mouth1, delta))
+
         errs = [x for x in logs if x.startswith("PAGEERROR")]
         rep.check("无页面级 JS 异常", not errs, errs[0][:120] if errs else "")
         ctx.close()
