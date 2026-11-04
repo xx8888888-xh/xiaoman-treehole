@@ -35,6 +35,42 @@ const Stage = (() => {
   let wanderTimer = null;     // 视线漫游计时器：零动画时必须真正停掉
   let freezeTimer = null;     // 零动画的"渲染几帧后定格"计时器
 
+  /** 纹理档位：按设备 DPR + 画布可视尺寸选 1024/2048（首屏显存 33.5MB → 8.4MB）。
+   *  2048 只在“画布实际像素 ≥900 且 DPR≥2”的高分大屏上才值得；
+   *  安卓 WebView / 低内存设备一律 1024（渲染分辨率本来就只有 1x）。 */
+  function pickTier(o) {
+    const opt = o || {};
+    const force = opt.force;
+    if (force === "1024" || force === "2048") return force;
+    if (opt.native) return "1024";
+    const w = Number(opt.width) || 0, h = Number(opt.height) || 0;
+    const dpr = Number(opt.dpr) || 1;
+    const mem = Number(opt.memory) || 8;
+    if (mem < 4) return "1024";
+    const need = Math.max(w, h) * Math.min(1.5, dpr);
+    return need >= 900 && dpr >= 2 ? "2048" : "1024";
+  }
+
+  function modelUrl(tier) {
+    return tier === "2048"
+      ? "assets/models/hiyori/Hiyori.model3.json"
+      : "assets/models/hiyori/Hiyori.1024.model3.json";
+  }
+
+  function currentTier(container) {
+    const native = !!(window.AndroidTTS && window.AndroidTTS.available);
+    return pickTier({
+      width: container ? container.clientWidth : 0,
+      height: container ? container.clientHeight : 0,
+      dpr: window.devicePixelRatio || 1,
+      memory: navigator && navigator.deviceMemory,
+      native,
+      force: window.__texTier
+    });
+  }
+
+  let activeTier = null;   // 本次挂载实际选中的档位（[probe] 与 E2E 断言用）
+
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const s = document.createElement("script");
@@ -135,6 +171,9 @@ const Stage = (() => {
       else fit(w, h);
     };
     window.addEventListener("resize", resizeHandler);
+    activeTier = currentTier(container);
+    window.__stageTier = activeTier;   // 探针：E2E 读取实际纹理档位
+    console.log("[probe] tex-tier=" + activeTier);
     loadModel();
   }
 
@@ -204,7 +243,8 @@ const Stage = (() => {
   }
 
   function loadModel() {
-    PIXI.live2d.Live2DModel.from("assets/models/hiyori/Hiyori.model3.json").then(m => {
+    const tier = activeTier || currentTier(host);
+    PIXI.live2d.Live2DModel.from(modelUrl(tier)).then(m => {
       model = m;
       if (!app) return;
       app.stage.addChild(m);
@@ -329,6 +369,10 @@ const Stage = (() => {
 
   return {
     mount, unmount, setEmotion, playMotion, lipFrame, focusHead, restoreView, setMotionEnabled,
+    /** 单测/探针：纹理档位纯函数与本次挂载实际档位 */
+    _pickTier: pickTier,
+    _modelUrl: modelUrl,
+    _tier: () => activeTier,
     /** 单测入口：口型目标纯函数与当前内部状态 */
     _lipFor: lipFor,
     _lipState: () => ({ lipOpen, lipHold })

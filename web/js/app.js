@@ -159,8 +159,8 @@ const App = (() => {
       localStorage.setItem(MS_DONE_KEY, JSON.stringify([...done, m]));
       await new Promise(r => setTimeout(r, 700));   // 分条节奏：里程碑单独一条，稍隔半拍
       const line = milestoneLine(m);
-      addMsg(line, "them", { tip: true });
-      pushHistory("assistant", line);
+      const msHandle = addMsg(line, "them", { tip: true });
+      pushHistory("assistant", line, undefined, msHandle && msHandle.rec);
     } catch (e) { /* 数据层异常不影响对话主流程 */ }
   }
   /** 关系进度注入行（真模型路径让 LLM 也有感知，数据同源） */
@@ -353,14 +353,20 @@ const App = (() => {
   let idleTimers = [];
   let pings = 0;
   const MAX_HISTORY = 30;    // 历史滑动窗口上限
+  let appendChain = Promise.resolve();   // 串行追加：把 IndexedDB 自增 id 回填给分页记录
 
-  /** 统一写历史：内存滑动窗口 + IndexedDB 持久化（刷新/重启不丢） */
-  function pushHistory(role, content, at) {
+  /** 统一写历史：内存滑动窗口 + IndexedDB 持久化（刷新/重启不丢）
+   *  rec：可选的 ChatPager 记录句柄；append 完成后回填 id，供历史分页游标使用 */
+  function pushHistory(role, content, at, rec) {
     const ts = at || Date.now();
-    history.push({ role, content, at: ts });
+    const entry = { role, content, at: ts };
+    history.push(entry);
     if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
     if (window.ChatStore) {
-      ChatStore.append(SID, { role, content, at: ts }).catch(() => {});
+      appendChain = appendChain
+        .then(() => ChatStore.append(SID, entry))
+        .then(id => { entry.id = id; if (rec) rec.id = id; })
+        .catch(() => {});
       if (history.length >= MAX_HISTORY) {
         ChatStore.prune(SID, ChatStore.MAX_KEEP).catch(() => {});
       }
@@ -376,10 +382,28 @@ const App = (() => {
       history = msgs.map(m => ({ role: m.role, content: m.content, at: m.at }));
       for (const m of msgs) {
         addMsg(m.content, m.role === "user" ? "me" : "them",
-               m.role !== "user" && Risk.isScript(m.content) ? { crisis: true } : {});
+               m.role !== "user" && Risk.isScript(m.content) ? { crisis: true } : {},
+               { id: m.id, at: m.at });
       }
       console.log("[probe] history restored n=" + msgs.length);
     } catch (e) { console.warn("[probe] HISTORY_RESTORE_FAIL", e.message); }
+  }
+
+  /** 分页 loader：从 IndexedDB 取严格早于游标 {at,id} 的一页（升序） */
+  async function loadOlderPage(oldest) {
+    if (!window.ChatStore || !oldest) return [];
+    try { await appendChain; } catch (e) { /* 追加失败不挡翻页 */ }
+    const cursor = Number.isFinite(Number(oldest.at))
+      ? { at: Number(oldest.at), id: oldest.id == null ? null : Number(oldest.id) }
+      : null;
+    const msgs = await ChatStore.listBefore(SID, ChatPager.PAGE, cursor);
+    return msgs.map(m => ({
+      text: m.content,
+      who: m.role === "user" ? "me" : "them",
+      opts: m.role !== "user" && Risk.isScript(m.content) ? { crisis: true } : {},
+      id: m.id,
+      at: m.at
+    }));
   }
 
   // ---------- 工具 ----------
@@ -600,10 +624,13 @@ const App = (() => {
     return row;
   }
 
-  function addMsg(text, who, opts = {}) {
+  function addMsg(text, who, opts = {}, meta) {
     // [probe] 渲染探针（logcat tag=XiaoManWeb）：只记方向与长度，不落内容（CI 验证迷你窗聊天链路）
     try { console.log("[probe] msg " + who + " len=" + String(text == null ? "" : text).length); } catch (e) {}
-    return ChatPager.push({ text, who, opts });
+    const rec = { text, who, opts };
+    if (meta && meta.id != null) rec.id = meta.id;
+    if (meta && meta.at != null) rec.at = meta.at;
+    return ChatPager.push(rec);
   }
 
   function renderMem() {
@@ -709,8 +736,8 @@ const App = (() => {
     resetIdle();
 
     await withSendLock(async () => {
-      addMsg(text, "me");
-      pushHistory("user", text);
+      const meHandle = addMsg(text, "me");
+      pushHistory("user", text, undefined, meHandle && meHandle.rec);
       bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
       if (window.Stats) Stats.bump(text);   // P2-1：小本本计数（真实数据，自我叙事素材）
 
@@ -727,9 +754,9 @@ const App = (() => {
         const script = Risk.SCRIPTS[risk.level];
         const typing = risk.level === "high" ? 450 : 800;
         await showTyping(typing);
-        addMsg(script, "them", { crisis: true, level: risk.level });
+        const careHandle = addMsg(script, "them", { crisis: true, level: risk.level });
         Stage.setEmotion("gentle");
-        pushHistory("assistant", script);
+        pushHistory("assistant", script, undefined, careHandle && careHandle.rec);
         logRisk(risk, text);
         stickySet(risk.level, RISK_STICKY_TURNS);
         return;
@@ -768,8 +795,8 @@ const App = (() => {
           if (item) {
             const conf = pickConfirm(item);
             await showTyping(700);
-            addMsg(conf, "them", { tip: true });
-            pushHistory("assistant", conf);
+            const confHandle = addMsg(conf, "them", { tip: true });
+            pushHistory("assistant", conf, undefined, confHandle && confHandle.rec);
             toast(`已设提醒：${Reminders.fmt(item.at)}`);
             return;
           }
@@ -847,9 +874,9 @@ const App = (() => {
         const script = (typeof data.reply === "string" && data.reply.trim())
           ? data.reply : (Risk.SCRIPTS[level] || CARE_SCRIPT);
         await showTyping(level === "high" ? 450 : 800);
-        addMsg(script, "them", { crisis: true, level });
+        const careHandle = addMsg(script, "them", { crisis: true, level });
         Stage.setEmotion("gentle");
-        pushHistory("assistant", script);
+        pushHistory("assistant", script, undefined, careHandle && careHandle.rec);
         return;   // 高危/中危：不播 TTS、不做钩子
       }
 
@@ -862,7 +889,7 @@ const App = (() => {
         const seg = limitedParts[i];
         await showTyping(typingDelay(seg));
         lastRow = addMsg(seg, "them");
-        pushHistory("assistant", seg);
+        pushHistory("assistant", seg, undefined, lastRow && lastRow.rec);
       }
 
       // 表情 + 动作
@@ -990,7 +1017,8 @@ const App = (() => {
     // 中间没说过话），就不要再插一条开场——否则气泡会一次次累积。
     // 有待补回复的消息时例外：必须告诉用户"话没丢"。
     if (!loadPending().length && tail && Date.now() - lastGreet < 6 * 3600 * 1000) {
-      // 隐藏的打字指示/系统提示不算"最后一条"，否则会误判成没说过话而重复开场
+      // 隐藏的打字指示/系统提示不算"最后一条"，否则会误判成没说过话而重复开场；
+      // 同时排除打字占位（"正在想…"）：它常驻 #messages 且带 .bubble，会把真正末条挤掉。
       const rows = Array.from(document.querySelectorAll("#messages .msg-row:not(.hidden) .bubble"))
         .filter(b => !b.classList.contains("typing"));
       const lastBubble = rows.length ? rows[rows.length - 1].innerText.trim() : "";
@@ -1338,7 +1366,8 @@ const App = (() => {
         host: $("messages"),
         typing: $("typingRow"),
         scroll: $("chatScroll"),
-        build: buildRow
+        build: buildRow,
+        loader: loadOlderPage   // IndexedDB：首屏 30 条 → 上翻可回看全部 300 条
       });
     } catch (e) { console.warn("[probe] PAGER_FAIL", e.message); }
 
@@ -1355,10 +1384,13 @@ const App = (() => {
       console.log("[probe] float-mode: stage & widget skipped");
       try { $("stage").style.display = "none"; } catch (e) {}
     } else {
-      Stage.mount($("stage")).then(() => {
+      // 首屏先让输入/历史/问候就位，舞台等空闲帧再挂载（纹理/运行时不与首帧抢带宽）
+      const mountStage = () => Stage.mount($("stage")).then(() => {
         Stage.setMotionEnabled(Appearance.get().motion);
         console.log("[probe] mount ok ms=" + Math.round(performance.now()));
       }).catch(e => console.warn("[probe] STAGE_FAIL", e.message));
+      if (typeof requestIdleCallback === "function") requestIdleCallback(mountStage, { timeout: 1200 });
+      else setTimeout(mountStage, 600);
     }
 
     try { greet(); console.log("[probe] greet ok ms=" + Math.round(performance.now())); } catch (e) { console.warn("[probe] GREET_FAIL", e.message); }

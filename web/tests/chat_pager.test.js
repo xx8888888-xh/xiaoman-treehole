@@ -146,3 +146,114 @@ test("markVoice 写回记录：滑出窗口后重新渲染仍带「语音已播�
   assert.equal(host.findAll("meta").length, 1, "重渲染后语音标记不丢");
 });
 
+/* ==================== 历史分页专项（w9） ==================== */
+
+const mk = (id) => ({ text: `m${id - 1}`, who: id % 2 ? "me" : "them", id, at: 1000 + id - 1 });
+
+function topBarOf(host) {
+  return host.children[0];
+}
+
+test("空历史：有 loader 也不触发加载，顶栏隐藏，节点数恒定", async () => {
+  let calls = 0;
+  const { host } = setup({ loader: () => { calls += 1; return []; } });
+  assert.equal(Pager.stats().total, 0);
+  assert.equal(await Pager.older(), false);
+  assert.equal(calls, 0, "没有记录时不应去查库");
+  assert.equal(topBarOf(host).className.includes("hidden"), true);
+  assert.equal(rows(host).length, 0, "空历史没有任何消息节点");
+});
+
+test("恰好 30 条：翻到最旧再触发 loader，显示「没有更早了」且节点恒定", async () => {
+  let calls = 0;
+  const { host } = setup({ loader: () => { calls += 1; return []; } });
+  pushN(Pager, 30);
+  const before = countNodes(host);
+  assert.equal(Pager.stats().start, 16);
+  assert.equal(await Pager.older(), true);   // 6
+  assert.equal(await Pager.older(), true);   // 0
+  assert.equal(Pager.stats().start, 0);
+  assert.equal(rowTexts(host)[0], "m0");
+  assert.equal(countNodes(host), before);
+  assert.equal(await Pager.older(), false);
+  assert.equal(calls, 1, "到底时才查一次库");
+  assert.equal(Pager.stats().exhausted, true);
+  assert.equal(topBarOf(host).textContent, "没有更早了");
+  assert.equal(topBarOf(host).className.includes("hidden"), false, "到底提示保持可见");
+  assert.equal(countNodes(host), before);
+});
+
+test("31 条：翻出唯一一条更早记录，再翻确认到底（不重复）", async () => {
+  const { host } = setup({
+    loader: (oldest) => Promise.resolve(oldest && oldest.id === 2 ? [mk(1)] : [])
+  });
+  for (const r of Array.from({ length: 30 }, (_, i) => mk(i + 2))) Pager.push(r);
+  const before = countNodes(host);
+  while (Pager.stats().start > 0) await Pager.older();
+  assert.equal(await Pager.older(), true);   // 取到 m0
+  assert.equal(Pager.stats().total, 31);
+  assert.equal(Pager.stats().start, 1);
+  assert.equal(Pager.stats().first, "m0");
+  assert.equal(countNodes(host), before);
+  assert.equal(await Pager.older(), true);    // 回到窗口 0，看到 m0
+  assert.equal(rowTexts(host)[0], "m0");
+  assert.equal(await Pager.older(), false);   // loader 空 → 到底
+  assert.equal(Pager.stats().total, 31, "没有重复插入");
+  assert.equal(Pager.stats().exhausted, true);
+});
+
+test("300 条：首屏 30 → 逐页上翻到 m0，不重不漏不跳条", async () => {
+  const all = Array.from({ length: 300 }, (_, i) => mk(i + 1));
+  const loader = (oldest) => {
+    const idx = all.findIndex(r => r.id === oldest.id);
+    return Promise.resolve(all.slice(Math.max(0, idx - 10), idx));
+  };
+  const { host } = setup({ loader });
+  for (const r of all.slice(270)) Pager.push(Object.assign({}, r));
+  const base = countNodes(host);
+  assert.equal(Pager.stats().total, 30);
+  assert.equal(Pager.stats().last, "m299");
+  let guard = 0;
+  while (guard++ < 100) {
+    const moved = await Pager.older();
+    assert.equal(countNodes(host), base, `第 ${guard} 次翻页节点数恒定`);
+    if (!moved && Pager.stats().exhausted) break;
+  }
+  assert.equal(Pager.stats().total, 300, "30 → 300 全部取回且无重复");
+  assert.equal(Pager.stats().first, "m0");
+  assert.equal(Pager.stats().exhausted, true);
+  Pager.jumpLatest();
+  assert.equal(Pager.stats().last, "m299");
+  while (Pager.stats().start > 0) await Pager.older();
+  assert.equal(rowTexts(host)[0], "m0", "滚动回顶能看到最早一条");
+});
+
+test("200 轮上下滚动（加载 + 回底交替）DOM 节点数保持恒定", async () => {
+  const all = Array.from({ length: 300 }, (_, i) => mk(i + 1));
+  const loader = (oldest) => {
+    const idx = all.findIndex(r => r.id === oldest.id);
+    return Promise.resolve(all.slice(Math.max(0, idx - 10), idx));
+  };
+  const { host } = setup({ loader });
+  for (const r of all.slice(270)) Pager.push(Object.assign({}, r));
+  const base = countNodes(host);
+  const samples = [];
+  let steps = 0;
+  while (steps < 200) {
+    await Pager.older();
+    samples.push(countNodes(host));
+    steps += 1;
+    if (Pager.stats().start === 0 && Pager.stats().exhausted) {
+      Pager.jumpLatest();          // 回底再用新消息/回滚继续，模拟 200 轮上下滚动
+      samples.push(countNodes(host));
+      steps += 1;
+    }
+  }
+  assert.equal(new Set(samples).size, 1, "200 轮里节点数只有一种取值");
+  assert.equal(samples[0], base);
+  assert.equal(Pager.stats().rendered, Pager.VIEW);
+  assert.equal(Pager.stats().total, 300);
+});
+
+
+
