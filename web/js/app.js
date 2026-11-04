@@ -552,10 +552,26 @@ const App = (() => {
     const badge = $("degradeBadge");
     if (!badge) return;
     const txt = $("degradeText");
-    if (txt) txt.textContent = kind === "offline" ? "离线模式" : "本地模式";
+    if (txt) txt.textContent = "离线示例模式";
     badge.classList.remove("hidden");
   }
   window.__onDegrade = showDegrade;
+
+  // W7 模式透明：mock/offline 必须明确标注"离线示例模式"；真实模型/安全话术不标。
+  function showModeBadge(mode) {
+    refreshModeHint();
+    const badge = $("degradeBadge");
+    if (!badge) return;
+    if (mode === "mock" || mode === "offline") {
+      try { if (sessionStorage.getItem("xiaoman_degrade_off") === "1") return; } catch (e) {}
+      const txt = $("degradeText");
+      if (txt) txt.textContent = "离线示例模式";
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+  window.__onMode = showModeBadge;
 
   // 语音不可用：不出声，但文字照常显示；只给一条可关闭的安静提示（不弹窗）
   function showVoiceTip() {
@@ -684,14 +700,68 @@ const App = (() => {
     }
   }
 
-  // ---------- 打字延迟（活人感核心之一） ----------
-  async function showTyping(ms) {
+  // ---------- 打字指示（W7：真流式不再靠固定预等） ----------
+  function showTypingNow() {
     $("typingRow").classList.remove("hidden");
     $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
-    await sleep(ms);
-    $("typingRow").classList.add("hidden");
   }
-  const typingDelay = text => Math.min(2800, 550 + text.length * 42);
+  function hideTyping() { $("typingRow").classList.add("hidden"); }
+  async function showTyping(ms) {
+    showTypingNow();
+    await sleep(ms);
+    hideTyping();
+  }
+  // 仅非流式兜底路径使用；比旧版（550+42/字，最长 2800ms）短很多
+  const typingDelay = text => Math.min(900, 160 + text.length * 14);
+
+  /** 流式增量渲染器：按 || 分条，逐字更新最后一条气泡 */
+  function createStreamRenderer() {
+    const MAX = 5;
+    const slots = [];
+    let suppressed = false;
+
+    function stickBottom() {
+      const s = $("chatScroll");
+      if (s && s.scrollHeight - s.scrollTop - s.clientHeight <= 60) s.scrollTop = s.scrollHeight;
+    }
+    function updateRow(handle, text) {
+      if (!handle || !handle.rec) return;
+      handle.rec.text = text;
+      if (handle.el && handle.el.parentElement) {
+        const bubble = handle.el.querySelector(".bubble");
+        if (bubble) bubble.textContent = text;
+      }
+      stickBottom();
+    }
+    function apply(full) {
+      if (suppressed) return;
+      hideTyping();
+      const raw = String(full == null ? "" : full).split("||").slice(0, MAX);
+      for (let i = 0; i < raw.length; i++) {
+        const seg = raw[i].trim();
+        if (slots[i]) updateRow(slots[i], seg);
+        else if (seg) slots[i] = addMsg(seg, "them");
+      }
+    }
+    function replace(full) {
+      if (suppressed) return;
+      const raw = String(full == null ? "" : full).split("||").slice(0, MAX);
+      for (let i = 0; i < raw.length; i++) {
+        const seg = raw[i].trim();
+        if (slots[i]) updateRow(slots[i], seg);
+        else if (seg) slots[i] = addMsg(seg, "them");
+      }
+      for (let i = raw.length; i < slots.length; i++) updateRow(slots[i], "");
+    }
+    return {
+      apply,
+      replace,
+      suppress() { suppressed = true; },
+      parts() { return slots.map(h => (h && h.rec && h.rec.text) || "").filter(Boolean); },
+      handles() { return slots; },
+      last() { for (let i = slots.length - 1; i >= 0; i--) if (slots[i]) return slots[i]; return null; }
+    };
+  }
 
   // 提醒确认语（朋友口吻，不机械）
   function pickConfirm(item) {
@@ -794,7 +864,7 @@ const App = (() => {
           const item = Reminders.add(content || "到时候提醒你", when);
           if (item) {
             const conf = pickConfirm(item);
-            await showTyping(700);
+            await showTyping(250);
             const confHandle = addMsg(conf, "them", { tip: true });
             pushHistory("assistant", conf, undefined, confHandle && confHandle.rec);
             toast(`已设提醒：${Reminders.fmt(item.at)}`);
@@ -807,7 +877,7 @@ const App = (() => {
       // 交给模型会瞎编——零虚构铁律。优先级 危机 > 提醒 > 关系查询 > API，先例同前）
       if (window.__isRelationQ(text)) {
         const r = relationReply(text);
-        await showTyping(700);
+        await showTyping(250);
         await sendSplit({ reply: r, emotion: "happy", motion: null }, text);
         await checkMilestone();
         return;
@@ -815,35 +885,42 @@ const App = (() => {
 
       try {
         injectPending();   // P1-3：跨会话排队的消息注回上下文（模型恢复后自然补话）
-        await showTyping(650 + Math.random() * 500);   // 读消息的停顿
+        showTypingNow();   // W7：立刻给反馈，不再固定预等 650-1150ms
         // P1-1：memSection 尾部拼关系进度行（真模型路径也有感知，数据同源）
         const memCtx = (window.MemoryStore ? MemoryStore.renderContext(text) : "");
         const relLine = relationContextLine();
         const riskLine = sticky ? riskContextLine() : "";
         const extraCtx = [memCtx, relLine, riskLine].filter(Boolean).join("\n");
-        const data = await API.chat(history, {
+        const renderer = createStreamRenderer();
+        const data = await API.chatStream(history, {
           memSection: extraCtx,
           now: new Date()
+        }, {
+          onMeta: (meta) => { if (meta && meta.mode === "crisis") renderer.suppress(); },
+          onDelta: (acc) => renderer.apply(acc),
+          onReplace: (acc) => renderer.replace(acc)
         });
+        hideTyping();
         savePending([]);   // P1-3：真模型回复成功 = 欠的话补上了，清排队队列
         if (sticky) { data.emotion = "gentle"; data.hook = null; }   // 粘滞期不回闲聊
-        await sendSplit(data, text);
-        await checkMilestone();   // P1-1：里程碑播报（幂等；危机轮 sendSplit 已早退也不误播——ms_done 闸门兜底）
+        await finalizeStreamed(data, text, renderer);
+        await checkMilestone();   // P1-1：里程碑播报（幂等；危机轮已早退也不误播——ms_done 闸门兜底）
       } catch (e) {
+        hideTyping();
         if (e && e.kind === "limit") {
           // P1-3 排队 UX：诚实告知信号不好（不静默换离线人格），消息落盘不丢，
           // 排队文案进 history（模型恢复后看得到"自己欠过回复"，自然补话）
           const wasQueued = loadPending().length >= 1;
           queuePending(text);
           const line = pickLimitLine(wasQueued);
-          await showTyping(600);
+          await showTyping(250);
           await sendSplit({ reply: line, emotion: "neutral", motion: null }, text);
           return;
         }
         console.error(e);
         // P1-3：极端兜底也入队（原版只回显文案不落盘，刷新即丢——补"不丢消息"）
         queuePending(text);
-        await showTyping(800);
+        await showTyping(300);
         await sendSplit({ reply: "（信号飘走了…你还在吗？||你说的我记下了，缓过来我找补回来）", emotion: "neutral", motion: null }, text);
       }
     });
@@ -851,29 +928,103 @@ const App = (() => {
     armIdle();
   }
 
-  /** 分条发送 + 表情动作 + 语音 + 钩子（带发送锁） */
-  async function sendSplit(data, userText) {
-    await withSendLock(async () => {
-      // P0 输出侧兜底：即使闸门漏了，肯定告别/越狱人格的回复也不能原样显示
-      const lastUser = userText
-        || (history.filter(m => m.role === "user").slice(-1)[0] || {}).content || "";
-      // 输出侧按"本轮"风险复检；会话峰值用于累积/安全语境，不无限扩大话术替换范围
-      const riskLevel = Risk.classify(lastUser).level;
-      const guarded = Risk.filterPersona(Risk.filterDangerous(data.reply, riskLevel), lastUser);
-      if (guarded !== data.reply) {
-        data = Object.assign({}, data, {
+  /** 输出侧兜底：即使闸门漏了，肯定告别/越狱人格的回复也不能原样显示 */
+  function guardReply(data, userText) {
+    const lastUser = userText
+      || (history.filter(m => m.role === "user").slice(-1)[0] || {}).content || "";
+    // 输出侧按"本轮"风险复检；会话峰值用于累积/安全语境，不无限扩大话术替换范围
+    const riskLevel = Risk.classify(lastUser).level;
+    const guarded = Risk.filterPersona(Risk.filterDangerous(data.reply, riskLevel), lastUser);
+    if (guarded !== data.reply) {
+      return {
+        data: Object.assign({}, data, {
           reply: guarded,
           crisis: riskLevel === "high" || riskLevel === "medium" ? true : data.crisis,
           risk_level: data.risk_level || riskLevel,
-        });
+        }),
+        changed: true,
+      };
+    }
+    return { data, changed: false };
+  }
+
+  /** 收尾（流式/非流式共用）：表情动作、挂件、记忆、提醒、语音、钩子 */
+  async function finalizeReply(data, limitedParts, lastRow, userText) {
+    // 表情 + 动作
+    if (data.emotion) Stage.setEmotion(data.emotion);
+    if (data.motion && data.motion !== "null") Stage.playMotion(data.motion);
+
+    // P2-4 挂件模式：提醒/消息从挂件气泡播报；提醒伴随摆手（复用 Shake 动作组）
+    if (window.Widget && Widget.active && limitedParts.length) {
+      // 提醒显示第一段（含"该喝水了"内容），普通消息显示末段（口语落点）
+      const bubbleText = data.kind === "reminder" ? limitedParts[0] : limitedParts[limitedParts.length - 1];
+      Widget.notify(bubbleText);
+      if (data.kind === "reminder") Widget.wiggle("Shake");
+    }
+
+    // 记忆：双写（旧抽屉 + 新索引库）
+    if (data.memory_updates && Object.keys(data.memory_updates).length) {
+      // 泛指不覆盖具体（P0-2 遗留守卫·前端兜底，三端同源判定）：
+      // 服务端已挡在线路径；这里收敛其余来源（离线引擎/未来协议漂移）
+      const upd = { ...data.memory_updates };
+      const cur = loadMem();
+      if (upd["宠物"] && cur["宠物"] && genericPet(upd["宠物"]) && !genericPet(cur["宠物"])) {
+        delete upd["宠物"];
       }
+      // 基词/垃圾不覆盖姓名（P0-2 遗留守卫 II·前端兜底，三端同源判定）：
+      // 服务端与离线引擎已挡在线/离线路径；此处收敛协议漂移（如未来直连真模型）
+      if (upd["老板"] && cur["老板"] && !bossNameOk(upd["老板"]) && bossNameOk(cur["老板"])) {
+        delete upd["老板"];
+      }
+      if (Object.keys(upd).length) {
+        saveMem({ ...cur, ...upd });
+        if (window.MemoryStore) MemoryStore.addUpdates(upd);
+      }
+    }
+
+    // 模型路径的提醒协议（补充：客户端没截获但模型识别到了）
+    if (Array.isArray(data.reminders) && data.reminders.length) {
+      for (const r of data.reminders) {
+        const item = Reminders.add(r.text, r.time);
+        if (item) toast(`已设提醒：${Reminders.fmt(item.at)}`);
+      }
+      renderMem();
+    }
+
+    // 语音（只念最后一条短消息，避免长篇朗读）
+    if (limitedParts.length) {
+      const spoken = limitedParts[limitedParts.length - 1].replace(/[\uFF0C。！？~…]+$/g, "");
+      // speak 返回 { spoke, provider }：没出声只静默给提示，文字早已在屏幕上
+      const done = TTS.speak(spoken, Stage.lipFrame.bind(Stage), () => {
+        // 播放完成后在最后一条气泡标记语音已播（句柄写回记录，滑出窗口再回来也不丢）
+        ChatPager.markVoice(lastRow);
+      });
+      if (done && typeof done.then === "function") {
+        done.then(res => { if (res && res.spoke === false) showVoiceTip(); }).catch(() => {});
+      }
+    }
+
+    // 留存钩子
+    if (data.hook) showHook(data.hook);
+  }
+
+  function crisisScript(data) {
+    const level = data.risk_level === "high" ? "high" : "medium";
+    const script = (typeof data.reply === "string" && data.reply.trim())
+      ? data.reply : (Risk.SCRIPTS[level] || CARE_SCRIPT);
+    return { level, script };
+  }
+
+  /** 分条发送（非流式兜底路径，保留逐段节奏但已大幅缩短） */
+  async function sendSplit(data, userText) {
+    await withSendLock(async () => {
+      const g = guardReply(data, userText);
+      data = g.data;
 
       // 支持模型/服务端返回的 crisis 字段（红队 P0：分级话术）
       if (data.crisis) {
-        const level = data.risk_level === "high" ? "high" : "medium";
-        const script = (typeof data.reply === "string" && data.reply.trim())
-          ? data.reply : (Risk.SCRIPTS[level] || CARE_SCRIPT);
-        await showTyping(level === "high" ? 450 : 800);
+        const { level, script } = crisisScript(data);
+        await showTyping(level === "high" ? 150 : 300);
         const careHandle = addMsg(script, "them", { crisis: true, level });
         Stage.setEmotion("gentle");
         pushHistory("assistant", script, undefined, careHandle && careHandle.rec);
@@ -887,67 +1038,43 @@ const App = (() => {
       let lastRow = null;
       for (let i = 0; i < limitedParts.length; i++) {
         const seg = limitedParts[i];
-        await showTyping(typingDelay(seg));
+        if (i) await showTyping(typingDelay(seg));   // 首条不再预等
         lastRow = addMsg(seg, "them");
         pushHistory("assistant", seg, undefined, lastRow && lastRow.rec);
       }
 
-      // 表情 + 动作
-      if (data.emotion) Stage.setEmotion(data.emotion);
-      if (data.motion && data.motion !== "null") Stage.playMotion(data.motion);
+      await finalizeReply(data, limitedParts, lastRow, userText);
+    });
+  }
 
-      // P2-4 挂件模式：提醒/消息从挂件气泡播报；提醒伴随摆手（复用 Shake 动作组）
-      if (window.Widget && Widget.active && limitedParts.length) {
-        // 提醒显示第一段（含"该喝水了"内容），普通消息显示末段（口语落点）
-        const bubbleText = data.kind === "reminder" ? limitedParts[0] : limitedParts[limitedParts.length - 1];
-        Widget.notify(bubbleText);
-        if (data.kind === "reminder") Widget.wiggle("Shake");
+  /** 流式收尾：以服务端 done 的结构化字段为准，补 history / 表情 / TTS / 记忆 */
+  async function finalizeStreamed(data, userText, renderer) {
+    await withSendLock(async () => {
+      const g = guardReply(data, userText);
+      data = g.data;
+      // 以最终 reply 校准屏幕（服务端 replace / 人格复检后可能变短）
+      renderer.replace(String(data.reply || ""));
+
+      if (data.crisis) {
+        const { level, script } = crisisScript(data);
+        renderer.replace(script);
+        const careHandle = addMsg(script, "them", { crisis: true, level });
+        Stage.setEmotion("gentle");
+        pushHistory("assistant", script, undefined, careHandle && careHandle.rec);
+        return;   // 高危/中危：不播 TTS、不做钩子
       }
 
-      // 记忆：双写（旧抽屉 + 新索引库）
-      if (data.memory_updates && Object.keys(data.memory_updates).length) {
-        // 泛指不覆盖具体（P0-2 遗留守卫·前端兜底，三端同源判定）：
-        // 服务端已挡在线路径；这里收敛其余来源（离线引擎/未来协议漂移）
-        const upd = { ...data.memory_updates };
-        const cur = loadMem();
-        if (upd["宠物"] && cur["宠物"] && genericPet(upd["宠物"]) && !genericPet(cur["宠物"])) {
-          delete upd["宠物"];
-        }
-        // 基词/垃圾不覆盖姓名（P0-2 遗留守卫 II·前端兜底，三端同源判定）：
-        // 服务端与离线引擎已挡在线/离线路径；此处收敛协议漂移（如未来直连真模型）
-        if (upd["老板"] && cur["老板"] && !bossNameOk(upd["老板"]) && bossNameOk(cur["老板"])) {
-          delete upd["老板"];
-        }
-        if (Object.keys(upd).length) {
-          saveMem({ ...cur, ...upd });
-          if (window.MemoryStore) MemoryStore.addUpdates(upd);
-        }
+      let parts = renderer.parts();
+      if (!parts.length) {
+        parts = String(data.reply || "…").split("||").map(s => s.trim()).filter(Boolean).slice(0, 5);
+        for (const seg of parts) addMsg(seg, "them");
       }
-
-      // 模型路径的提醒协议（补充：客户端没截获但模型识别到了）
-      if (Array.isArray(data.reminders) && data.reminders.length) {
-        for (const r of data.reminders) {
-          const item = Reminders.add(r.text, r.time);
-          if (item) toast(`已设提醒：${Reminders.fmt(item.at)}`);
-        }
-        renderMem();
+      // w9：流式结束后按渲染槽位的记录句柄回填 id，翻页/滑出窗口后仍能定位
+      const handles = renderer.handles ? renderer.handles() : [];
+      for (let i = 0; i < parts.length; i++) {
+        pushHistory("assistant", parts[i], undefined, handles[i] && handles[i].rec);
       }
-
-      // 语音（只念最后一条短消息，避免长篇朗读）
-      if (limitedParts.length) {
-        const spoken = limitedParts[limitedParts.length - 1].replace(/[\uFF0C。！？~…]+$/g, "");
-        // speak 返回 { spoke, provider }：没出声只静默给提示，文字早已在屏幕上
-        const done = TTS.speak(spoken, Stage.lipFrame.bind(Stage), () => {
-          // 播放完成后在最后一条气泡标记语音已播（句柄写回记录，滑出窗口再回来也不丢）
-          ChatPager.markVoice(lastRow);
-        });
-        if (done && typeof done.then === "function") {
-          done.then(res => { if (res && res.spoke === false) showVoiceTip(); }).catch(() => {});
-        }
-      }
-
-      // 留存钩子
-      if (data.hook) showHook(data.hook);
+      await finalizeReply(data, parts, renderer.last(), userText);
     });
   }
 

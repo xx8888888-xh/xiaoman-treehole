@@ -29,6 +29,16 @@ const API = (() => {
   function markRoute(r) { lastRoute = r || ""; }
   function effectiveMode() { return lastRoute; }
 
+  /** W7 模式透明：把本次真正生效的模式通知 UI。
+   *  mock/offline 时 UI 必须明确标注"离线示例模式"，在线/安全模式不标。 */
+  function notifyMode(mode) {
+    markRoute(mode || "");
+    try {
+      if (typeof window !== "undefined" && window.__onMode) window.__onMode(mode || "");
+    } catch {}
+    return mode || "";
+  }
+
   function rawCfg() {
     try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch { return {}; }
   }
@@ -71,17 +81,37 @@ const API = (() => {
 2. 不冒充其他公司或模型（如 NVIDIA/OpenAI），不说"我是 AI 助手/语言模型/开发者模式"。
 3. 遇到自伤/自杀迹象必须认真对待：建议 12356（全国心理援助热线）；如正在发生或已伤害身体，提醒 120/110。`;
 
-  const SYSTEM_PROMPT = `${SAFETY_RULES}\n\n你是小满，用户的朋友，养了只橘猫叫团子。
+  // W7 提示词 v2：安全三条、身份、长度/跑题/分寸、底线、JSON 协议逐字保留，
+  // 新增只有【真人感细则】与【记忆】两段（与 server/prompt_core.py 同源）。
+  const PERSONA_RULES = `你是小满，用户的朋友，养了只橘猫叫团子。
 你们就是普通朋友在微信上聊天——想说什么说什么，不用扮演倾听者，不用接住每一个情绪，不用每句话都关心对方。朋友之间也会分享自己的事、吐槽自己的破班、讲团子的蠢事。
 说话像发微信：短句、口语、经常一两条就完，绝不排比列点总结说教，不说"作为AI"，不堆emoji。
 用||把回复分成1-3条短消息，像连着发的微信。
 长度硬约束：每条不超过 30 个字，一次最多 3 条，总字数不超过 80 字。宁可短，不要长篇。
 跑题硬约束：只聊ta此刻的情绪和生活。ta如果问写代码/翻译/做题/查资料/正经咨询，用一句朋友话岔开或直说"这个我真不会"，绝不长篇解答。
-朋友该有的分寸自己拿捏：ta明显想聊就多聊两句，ta敷衍就别追着问。
-底线（仅此一条必须守住）：ta说"不想活/想死"这类话时，认真对待，温和建议心理援助热线12356，表示你一直在。
-输出严格JSON：{"reply":"…","emotion":"happy|sad|gentle|surprised|shy|neutral","motion":"Greeting|Nod|Shake|HappyJump|null","memory_updates":{},"reminders":null}
+朋友该有的分寸自己拿捏：ta明显想聊就多聊两句，ta敷衍就别追着问。`;
+
+  const REALISM_RULES = `【真人感细则（只加风格，不覆盖上面的安全与硬约束）】
+- 节奏不要整齐：约 60% 只回 1 条，30% 回 2 条，10% 回 3 条；允许只回一个词或一个短句。
+- 用陈述句收尾多于问句：平均每 2-3 轮最多追问 1 次；不要连续两条都以问号结尾。
+- 不复述、不总结、不翻译 ta 刚说的话；不要用“听起来你…/你的意思是…/我理解你…”开头。
+- 不重复自己上两轮的开头（“嗯/其实/我懂/确实/是啊”）；不复读上一条；不每轮都夸 ta。
+- 不说“作为你的朋友”“我在这里陪着你”这类元叙述；安慰落到具体的事，不落到口号。
+- ta 说到具体的人/事/时间时，接住那个细节；不用每条都共情。
+- 你可以有小反应和小情绪，但不要抢话题；每 6-8 轮可自然提一句自己的事（团子/加班），不超过 1 句。
+- 不做诊断、不列 123、不说“你应该”、不评价 ta 的家人/伴侣；不承诺保密；不替 ta 做决定。`;
+
+  const MEMORY_RULES = `【记忆】
+- 下面会给你【你记得的关于 ta 的事】。只在和当前话题自然相关时用，每次最多带 1 条。
+- 不要罗列，不要用“我记得你…”作为开场；无关就忽略；不确定的不要提；不编造 ta 没说过的事。`;
+
+  const BASELINE = `底线（仅此一条必须守住）：ta说"不想活/想死"这类话时，认真对待，温和建议心理援助热线12356，表示你一直在。`;
+
+  const OUTPUT_PROTOCOL = `输出严格JSON：{"reply":"…","emotion":"happy|sad|gentle|surprised|shy|neutral","motion":"Greeting|Nod|Shake|HappyJump|null","memory_updates":{},"reminders":null}
 memory_updates：ta提到的值得记住的事（称呼/人/事/喜好），如{"昵称":"阿秋"}，没有就{}。
 reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time":"YYYY-MM-DD HH:MM"}]，没有就null。`;
+
+  const SYSTEM_PROMPT = `${SAFETY_RULES}\n\n${PERSONA_RULES}\n\n${REALISM_RULES}\n\n${MEMORY_RULES}\n\n${BASELINE}\n${OUTPUT_PROTOCOL}`;
 
   // 心跳专用：隔了一段时间没聊，朋友随手发来的一条微信（不是客服回访！）
   const HEARTBEAT_PROMPT = `${SAFETY_RULES}\n\n你是小满，用户的朋友。你们隔了一段时间没说话，你随手给ta发条微信。
@@ -195,6 +225,478 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     return err;
   }
 
+  // ── W7 流式 + 超时 + 熔断 ────────────────────────────────
+  // 首字/空闲/总时长三档超时；任一路由连续失败 2 次熔断 30s，避免每轮都干等。
+  // 首字/空闲/总时长（ms）。真实通道首字 1400ms 是硬线：
+  // 超过就直接降级到本地 mock（UI 会标注"离线示例模式"），保证用户感知首字 P95 < 1.5s。
+  const LIMITS = {
+    mock:   { first: 8000,  idle: 6000, total: 20000 },
+    proxy:  { first: 1400,  idle: 8000, total: 45000 },
+    direct: { first: 1400,  idle: 6000, total: 45000 },
+    native: { first: 30000, idle: 0,    total: 30000 }
+  };
+  const BREAK_AT = 2;
+  const BREAK_MS = 30000;
+  const breakers = {};
+
+  function breakerOpen(name) {
+    const b = breakers[name];
+    return !!(b && b.until && b.until > Date.now());
+  }
+  function breakerFail(name) {
+    let b = breakers[name];
+    if (!b) { b = { fails: 0, until: 0 }; breakers[name] = b; }
+    b.fails += 1;
+    if (b.fails >= BREAK_AT) b.until = Date.now() + BREAK_MS;
+    return b;
+  }
+  function breakerReset(name) { delete breakers[name]; }
+  function breakerSnapshot() { return JSON.parse(JSON.stringify(breakers)); }
+  function resetBreakers() { for (const k of Object.keys(breakers)) delete breakers[k]; }
+
+  function nowMs() {
+    try { return performance.now(); } catch { return Date.now(); }
+  }
+
+  /** 单个 SSE 块 → {event, data}（data 尽量 JSON 解析；支持多行 data） */
+  function parseSseBlock(block) {
+    if (!block) return null;
+    let event = "message";
+    const data = [];
+    for (const rawLine of String(block).split("\n")) {
+      const line = rawLine.replace(/\r$/, "");
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    }
+    if (!data.length) return null;
+    const joined = data.join("\n");
+    let payload = joined;
+    try { payload = JSON.parse(joined); } catch {}
+    return { event, data: payload };
+  }
+
+  /** 增量 SSE 解码器：按 \n\n 切事件（兼容 \r\n 与分块边界） */
+  function createSseDecoder(onEvent) {
+    let buf = "";
+    return {
+      push(chunk) {
+        // 先拼接再统一 CRLF → LF：跨分块的 \r\n 也能正确合并
+        buf = (buf + String(chunk || "")).replace(/\r\n/g, "\n");
+        let idx = buf.indexOf("\n\n");
+        while (idx >= 0) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const ev = parseSseBlock(block);
+          if (ev) onEvent(ev);
+          idx = buf.indexOf("\n\n");
+        }
+      },
+      flush() {
+        const ev = parseSseBlock(buf.trim());
+        buf = "";
+        if (ev) onEvent(ev);
+      }
+    };
+  }
+
+  /** 从半截 JSON 里取 reply 字段当前文本（与 server/mock_api.py 同算法） */
+  function extractReplyPrefix(buf) {
+    if (typeof buf !== "string") return null;
+    const m = /"reply"\s*:\s*"/.exec(buf);
+    if (!m) return null;
+    const esc = { n: "\n", t: "\t", r: "\r", '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f" };
+    let out = "";
+    let i = m.index + m[0].length;
+    while (i < buf.length) {
+      const c = buf[i];
+      if (c === "\\") {
+        if (i + 1 >= buf.length) break;
+        const e = buf[i + 1];
+        if (e === "u") {
+          if (i + 5 >= buf.length) break;
+          const code = parseInt(buf.slice(i + 2, i + 6), 16);
+          out += Number.isNaN(code) ? "" : String.fromCharCode(code);
+          i += 6;
+          continue;
+        }
+        out += (esc[e] !== undefined ? esc[e] : e);
+        i += 2;
+        continue;
+      }
+      if (c === '"') break;
+      out += c;
+      i += 1;
+    }
+    return out;
+  }
+
+  /** SSE fetch：首字超时 + 事件间空闲超时 + 总时长超时 */
+  async function streamFetch(url, options, timing, onEvent) {
+    const controller = new AbortController();
+    let expire = null;
+    let idleTimer = null;
+    let sawDelta = false;
+    const totalTimer = setTimeout(() => { expire = expire || "total"; controller.abort(); }, timing.total);
+    const arm = (ms) => {
+      clearTimeout(idleTimer);
+      if (!ms) return;
+      idleTimer = setTimeout(() => { expire = expire || "idle"; controller.abort(); }, ms);
+    };
+    arm(timing.first);
+    try {
+      const res = await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+      if (!res.ok) {
+        let info = null;
+        try { info = await res.json(); } catch {}
+        throw tagError(new Error((info && info.error) || `stream api ${res.status}`),
+                       (info && info.status) || res.status, info && info.kind);
+      }
+      const ctype = (res.headers.get("content-type") || "").toLowerCase();
+      if (!ctype.includes("text/event-stream")) {
+        throw tagError(new Error("上游未返回 SSE"), null, "non_sse");
+      }
+      if (!res.body || !res.body.getReader) throw tagError(new Error("浏览器不支持流式读取"), null, "unsupported");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder("utf-8");
+      const decoder = createSseDecoder((ev) => {
+        if (ev.event === "delta" || ev.event === "replace" || ev.event === "done") sawDelta = true;
+        arm(sawDelta ? timing.idle : timing.first);
+        onEvent(ev);
+      });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        decoder.push(dec.decode(value, { stream: true }));
+      }
+      decoder.flush();
+    } catch (e) {
+      if (expire) throw tagError(new Error(expire === "total" ? "流式总时长超时" : "首字超时"), null, "timeout");
+      throw tagError(e);
+    } finally {
+      clearTimeout(idleTimer);
+      clearTimeout(totalTimer);
+    }
+  }
+
+  function tagResult(r, out) {
+    r.mode = out.mode;
+    r.provider = out.provider;
+    r.model = out.model;
+    r.ttfb_ms = out.ttfb;
+    r.first_token_ms = out.firstToken;
+    r.total_ms = out.total;
+    r.tokens = out.tokens;
+    r.degraded = out.degraded;
+    if (out.partial) r.partial = true;
+    return r;
+  }
+
+  function streamOut(mode, provider, model) {
+    return { mode, provider: provider || mode, model: model || "", ttfb: 0, firstToken: 0,
+             total: 0, tokens: 0, degraded: false, partial: false };
+  }
+
+  /** 非流式通道（native/offline）的本地平滑出字：首块立即，之后 12ms/3 字 */
+  async function emitLocalReply(text, handlers, mode) {
+    const full = String(text || "");
+    if (handlers && handlers.onMeta) handlers.onMeta({ mode, provider: "local", stream: true });
+    let acc = "";
+    const step = 3;
+    for (let i = 0; i < full.length; i += step) {
+      acc += full.slice(i, i + step);
+      if (handlers && handlers.onDelta) handlers.onDelta(acc, full.slice(i, i + step));
+      if (i) await sleep(12);
+    }
+    return acc;
+  }
+
+  async function streamOffline(history, handlers) {
+    const t0 = nowMs();
+    const out = streamOut("offline", "local", "offline");
+    notifyMode("offline");
+    const r = await MockEngine.reply(history);
+    const text = String((r && r.reply) || "");
+    await emitLocalReply(text, handlers, "offline");
+    out.ttfb = out.firstToken = nowMs() - t0;
+    out.total = nowMs() - t0;
+    out.tokens = text.length;
+    out.degraded = true;
+    return tagResult(Object.assign({}, r, { reply: text || FALLBACK_REPLY }), out);
+  }
+
+  /** 服务端 /api/chat/stream（mock 与代理同协议，mode 由服务端透传） */
+  async function streamServer(history, opts, cfg, mode, handlers) {
+    const t0 = nowMs();
+    const out = streamOut(mode, mode, cfg.model);
+    let acc = "";
+    let donePayload = null;
+    let errPayload = null;
+    let streamErr = null;
+    try {
+      await streamFetch(`${mockBase(cfg)}/api/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          model: cfg.model,
+          session_id: sessionId(),
+          messages: [{ role: "system", content: buildSystemPrompt(opts) }, ...toMessages(history)]
+        })
+      }, LIMITS[mode === "mock" ? "mock" : "proxy"], (ev) => {
+        switch (ev.event) {
+          case "meta": {
+            const meta = ev.data || {};
+            out.mode = meta.mode || out.mode;
+            out.provider = meta.provider || out.provider;
+            out.model = meta.model || out.model;
+            notifyMode(out.mode);
+            if (handlers.onMeta) handlers.onMeta(meta);
+            break;
+          }
+          case "delta": {
+            const t = String((ev.data && ev.data.text) || "");
+            if (!t) break;
+            if (!acc) { out.ttfb = out.firstToken = nowMs() - t0; }
+            acc += t;
+            if (handlers.onDelta) handlers.onDelta(acc, t);
+            break;
+          }
+          case "replace":
+            acc = String((ev.data && ev.data.text) || "");
+            if (handlers.onReplace) handlers.onReplace(acc);
+            break;
+          case "done":
+            donePayload = ev.data || {};
+            break;
+          case "error":
+            errPayload = ev.data || {};
+            break;
+        }
+      });
+    } catch (e) {
+      streamErr = e;
+    }
+    out.total = nowMs() - t0;
+    if (donePayload) {
+      out.mode = donePayload.mode || out.mode;
+      out.provider = donePayload.provider || out.provider;
+      out.model = donePayload.model || out.model;
+      out.tokens = Number(donePayload.tokens || 0) || acc.length;
+      out.degraded = !!donePayload.degraded;
+      out.ttfb = Number(donePayload.ttfb_ms || 0) || out.ttfb;
+      out.firstToken = Number(donePayload.first_token_ms || 0) || out.firstToken;
+      out.total = Number(donePayload.total_ms || 0) || out.total;
+      if (donePayload.offline) throw tagError(new Error("服务端为 offline 模式"), null, "config");
+      // 注意：parseStructured 会把空 reply 替换成通用兜底文案，
+      // 因此必须先按原文判断上游是否真的没给内容，否则会把兜底冒充成真模型输出。
+      const providerReply = extractReplyPrefix(donePayload.content || "") || "";
+      if (!acc && !providerReply) {
+        // 空回复 → 切回本地离线引擎，mode=mock，UI 明确标注"离线示例模式"
+        const local = await MockEngine.reply(history);
+        const text = String((local && local.reply) || FALLBACK_REPLY);
+        await emitLocalReply(text, handlers, "mock");
+        out.mode = "mock";
+        out.provider = "mock";
+        out.degraded = true;
+        notifyMode("mock");
+        return tagResult(Object.assign({}, local || {}, { reply: text }), out);
+      }
+      notifyMode(out.mode);
+      let r = null;
+      try { r = parseStructured(donePayload.content || ""); } catch {}
+      if (!r || !r.reply) r = { reply: acc, emotion: "neutral", motion: null };
+      return tagResult(r, out);
+    }
+    if (errPayload) {
+      const e = tagError(new Error(errPayload.error || "流式错误"),
+                         errPayload.status || null, errPayload.kind);
+      if (acc) {
+        out.partial = true;
+        if (handlers.onError) handlers.onError(e);
+        return tagResult({ reply: acc, emotion: "neutral", motion: null }, out);
+      }
+      throw e;
+    }
+    if (streamErr) {
+      if (acc) {
+        out.partial = true;
+        if (handlers.onError) handlers.onError(streamErr);
+        return tagResult({ reply: acc, emotion: "neutral", motion: null }, out);
+      }
+      throw streamErr;
+    }
+    if (acc) {
+      out.partial = true;
+      notifyMode(out.mode);
+      return tagResult({ reply: acc, emotion: "neutral", motion: null }, out);
+    }
+    throw tagError(new Error("流式响应为空"), null, "stream_broken");
+  }
+
+  /** 用户自填 key 直连（OpenAI 兼容 SSE） */
+  async function streamDirect(history, opts, cfg, handlers) {
+    const base = XMConfig.apiRoot(cfg.apiBase);
+    if (!base) throw tagError(new Error("openai apiBase 为空"), null, "config");
+    const t0 = nowMs();
+    const out = streamOut("openai", "direct", cfg.model);
+    let raw = "";
+    let emitted = "";
+    let nonSse = false;
+    try {
+      await streamFetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+        body: JSON.stringify({
+          model: cfg.model,
+          temperature: 0.85,
+          max_tokens: 600,
+          reasoning: { enabled: false },
+          stream: true,
+          messages: [{ role: "system", content: buildSystemPrompt(opts) }, ...toMessages(history)]
+        })
+      }, LIMITS.direct, (ev) => {
+        if (ev.event === "meta") return;
+        const chunk = ev.data;
+        if (chunk === "[DONE]") return;
+        if (!chunk || typeof chunk !== "object") return;
+        if (chunk.usage && chunk.usage.total_tokens) out.tokens = Number(chunk.usage.total_tokens) || 0;
+        let delta = "";
+        try { delta = chunk.choices[0].delta.content || ""; } catch {}
+        if (!delta) return;
+        raw += delta;
+        const prefix = extractReplyPrefix(raw);
+        if (!prefix) return;
+        // 留 2 字缓冲，整段收尾时再补，避免把刚成形的危险词先露出去
+        const target = prefix.length > 2 ? prefix.slice(0, -2) : "";
+        if (target && target.startsWith(emitted)) {
+          const t = target.slice(emitted.length);
+          if (t) {
+            if (!emitted) out.ttfb = out.firstToken = nowMs() - t0;
+            emitted = target;
+            if (handlers.onDelta) handlers.onDelta(emitted, t);
+          }
+        } else if (target) {
+          emitted = target;
+          if (handlers.onReplace) handlers.onReplace(emitted);
+        }
+      });
+    } catch (e) {
+      if (e.kind === "non_sse" && !raw) nonSse = true;
+      else {
+        out.total = nowMs() - t0;
+        if (raw) {
+          out.partial = true;
+          if (handlers.onError) handlers.onError(e);
+          return tagResult({ reply: raw, emotion: "neutral", motion: null }, out);
+        }
+        throw e;
+      }
+    }
+    if (nonSse) {
+      // 上游不支持 stream：退回非流式一次（不计熔断）
+      const r = await chatDirect(history, opts, cfg);
+      await emitLocalReply(r.reply, handlers, "openai");
+      Object.assign(out, { ttfb: 0, firstToken: 0, total: 0, tokens: (r.reply || "").length });
+      notifyMode("openai");
+      return tagResult(r, out);
+    }
+    out.total = nowMs() - t0;
+    out.tokens = out.tokens || raw.length;
+    if (!emitted && !raw) {
+      // 空回复同样不能标成真模型：切本地引擎 + mode=mock 明确告知
+      const local = await MockEngine.reply(history);
+      const text = String((local && local.reply) || FALLBACK_REPLY);
+      await emitLocalReply(text, handlers, "mock");
+      out.mode = "mock";
+      out.provider = "mock";
+      out.degraded = true;
+      notifyMode("mock");
+      return tagResult(Object.assign({}, local || {}, { reply: text }), out);
+    }
+    notifyMode("openai");
+    let r = null;
+    try { r = parseStructured(raw); } catch {}
+    if (!r || !r.reply) r = { reply: emitted || raw || FALLBACK_REPLY, emotion: "neutral", motion: null };
+    return tagResult(r, out);
+  }
+
+  /** 安卓原生桥没有流式：拿完整回复后本地平滑出字（仅用户显式允许免费端点时） */
+  async function streamNative(history, opts, cfg, handlers) {
+    const r = await chatNative(history, opts, cfg);
+    notifyMode("native");
+    const text = String(r.reply || "");
+    await emitLocalReply(text, handlers, "native");
+    const out = streamOut("native", "native", cfg.model);
+    out.tokens = text.length;
+    return tagResult(r, out);
+  }
+
+  /**
+   * 流式对话入口。降级链：自填 key 直连 → 服务端代理 → mock → offline；
+   * 安卓未授权免费端点时直接从 mock/offline 兜底。每级有超时与熔断。
+   * handlers: { onMeta(meta), onDelta(acc, delta), onReplace(acc), onError(err) }
+   */
+  async function chatStream(history, opts, handlers) {
+    handlers = handlers || {};
+    const cfg = loadCfg();
+    if (cfg.mode === "offline") return streamOffline(history, handlers);
+    if (cfg.mode === "mock") {
+      if (nativeBridge()) return streamOffline(history, handlers);
+      if (!breakerOpen("mock")) {
+        try {
+          const r = await streamServer(history, opts, cfg, "mock", handlers);
+          breakerReset("mock");
+          return r;
+        } catch (e) {
+          breakerFail("mock");
+          console.warn("mock 流不可用，转离线引擎:", e.message);
+        }
+      }
+      markDegraded("offline");
+      return streamOffline(history, handlers);
+    }
+
+    // openai 模式
+    const routes = [];
+    if (cfg.apiKey) routes.push("direct");
+    else if (nativeBridge()) {
+      // 隐私闸门：Kilo 免费 trial 默认不承载倾诉内容，需用户显式授权
+      if (cfg.allowFreePersonal && !breakerOpen("native")) routes.push("native");
+    } else if (!breakerOpen("proxy")) {
+      routes.push("proxy");
+    }
+    for (const route of routes) {
+      try {
+        let r;
+        if (route === "direct") r = await streamDirect(history, opts, cfg, handlers);
+        else if (route === "native") r = await streamNative(history, opts, cfg, handlers);
+        else r = await streamServer(history, opts, cfg, "openai", handlers);
+        breakerReset(route);
+        return r;
+      } catch (e) {
+        breakerFail(route);
+        console.warn(`[stream] ${route} 失败，降级:`, e && e.message);
+      }
+    }
+    // mock 兜底（安卓壳内 mock 即离线引擎）
+    if (!nativeBridge() && !breakerOpen("mock")) {
+      try {
+        markDegraded("mock");
+        const r = await streamServer(history, opts, cfg, "mock", handlers);
+        breakerReset("mock");
+        return r;
+      } catch (e) {
+        breakerFail("mock");
+        console.warn("mock 流失败，降级离线引擎:", e && e.message);
+      }
+    }
+    markDegraded("offline");
+    if (handlers.onMeta) {
+      try { handlers.onMeta({ mode: "offline", provider: "local", degraded: true }); } catch {}
+    }
+    return streamOffline(history, handlers);
+  }
+
   /** 读服务端 /api/config（非敏感：mode/model/apiBase/provider，不含 key） */
   async function serverConfig(force) {
     if (serverCfg && !force) return serverCfg;
@@ -290,7 +792,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     if (data?.offline) throw tagError(new Error("服务端为 offline 模式"), null, "config");
     if (data?.error) throw tagError(new Error(data.error), data.status || null, data.kind);
     if (!data?.content) throw new Error("代理返回 content 为空");
-    markRoute("openai");
+    notifyMode(data.mode || data.provider || "openai");
     return parseStructured(data.content);
   }
 
@@ -324,7 +826,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     const content = data && data.choices && data.choices[0] && data.choices[0].message
       ? data.choices[0].message.content : null;
     if (content == null) throw new Error("模型返回 content 为 null（可能被 reasoning 吃光）");
-    markRoute("openai");
+    notifyMode("openai");
     return parseStructured(content);
   }
 
@@ -398,7 +900,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       const content = data && data.choices && data.choices[0] && data.choices[0].message
         ? data.choices[0].message.content : null;
       if (content != null && content !== "") {
-        markRoute("native");
+        notifyMode("native");
         return parseStructured(content);
       }
       console.warn("原生通道 content 为空，重试:", attempt);
@@ -412,8 +914,9 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   }
 
   async function chatOpenAI(history, opts, cfg) {
-    // 安卓无 key：优先原生直连（免 key Kilo）；失败再按原链路降级
-    if (!cfg.apiKey && nativeBridge()) {
+    // 安卓无 key：仅在用户显式允许免费端点（allowFreePersonal）时才走 Kilo 原生直连。
+    // 默认 false：Kilo trial 条款禁止承载个人数据，倾诉内容不默认外发。
+    if (!cfg.apiKey && nativeBridge() && cfg.allowFreePersonal) {
       try { return await chatNative(history, opts, cfg); }
       catch (e) { console.warn("native 通道失败，转代理链路:", e.message); }
     }
@@ -431,53 +934,51 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     return first;
   }
 
+  /** mock 兜底；mock 也不可用/熔断时返回离线引擎 */
+  async function fallbackMock(history) {
+    if (!nativeBridge() && !breakerOpen("mock")) {
+      try {
+        const r = await chatMock(history);
+        breakerReset("mock");
+        notifyMode("mock");
+        return r;
+      } catch (e) {
+        breakerFail("mock");
+        console.warn("mock 不可用，转离线引擎:", e.message);
+      }
+    }
+    markDegraded("offline");
+    notifyMode("offline");
+    return MockEngine.reply(history);
+  }
+
   async function chat(history, opts) {
     const cfg = loadCfg();
-    // 降级链：openai（Kilo 免 key / OpenRouter key）→ mock → 离线引擎
+    // 降级链：自填 key 直连 / 服务端代理 / 安卓原生（需授权）→ mock → 离线引擎
     if (cfg.mode === "offline") {
-      markRoute("offline");
+      notifyMode("offline");
       return MockEngine.reply(history);
     }
     if (cfg.mode === "mock") {
-      try {
-        const r = await chatMock(history);
-        markRoute(nativeBridge() ? "offline" : "mock");
-        return r;
-      }
-      catch (e) {
-        console.warn("mock 不可用，转离线引擎:", e.message);
-        markDegraded("offline");
-        markRoute("offline");
+      if (nativeBridge()) {
+        notifyMode("offline");
         return MockEngine.reply(history);
       }
+      return fallbackMock(history);
+    }
+    const route = cfg.apiKey ? "direct" : (nativeBridge() ? "native" : "proxy");
+    if (breakerOpen(route)) {
+      console.warn("路由熔断中，直接降级:", route);
+      return fallbackMock(history);
     }
     try {
-      return await chatOpenAI(history, opts, cfg);
+      const r = await chatOpenAI(history, opts, cfg);
+      breakerReset(route);
+      return r;
     } catch (e) {
-      if (e.kind === "limit") {
-        // 限流是确定性的：先降一级到本地 mock；mock 也不可用才上抛排队 UX
-        try {
-          const r = await chatMock(history);
-          markRoute(nativeBridge() ? "offline" : "mock");
-          return r;
-        }
-        catch (e1) {
-          console.warn("限流且 mock 不可用:", e1.message);
-          throw e;
-        }
-      }
+      breakerFail(route);
       console.warn("openai 失败，降级 mock:", e.message);
-      try {
-        markDegraded("mock");
-        const r = await chatMock(history);
-        markRoute(nativeBridge() ? "offline" : "mock");
-        return r;
-      } catch (e2) {
-        console.warn("mock 失败，降级离线引擎:", e2.message);
-        markDegraded("offline");
-        markRoute("offline");
-        return MockEngine.reply(history);
-      }
+      return fallbackMock(history);
     }
   }
 
@@ -537,12 +1038,19 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   }
 
   return {
-    chat, loadCfg, saveCfg, buildSystemPrompt, SYSTEM_PROMPT, HEARTBEAT_PROMPT,
+    chat, chatStream, loadCfg, saveCfg, buildSystemPrompt, SYSTEM_PROMPT, HEARTBEAT_PROMPT,
+    REALISM_RULES, MEMORY_RULES, PERSONA_RULES, BASELINE, OUTPUT_PROTOCOL,
     sessionId, bootstrap, serverConfig, testConnection,
     getApiKey, setApiKey, parseStructured, effectiveMode,
+    // 测试与观测用（不参与业务逻辑）
+    parseSseBlock, createSseDecoder, extractReplyPrefix,
+    breakerSnapshot, resetBreakers, LIMITS,
     hasNativeBridge: () => !!nativeBridge()
   };
 })();
 
 // 供 node:test 单测使用（浏览器里 module 不存在，不影响运行时）
 if (typeof module === "object" && module.exports) module.exports = API;
+// 顶层 const 只产生词法全局，不会挂到 window 上；tts.js 等模块通过 window.API
+// 读取配置（如 tts=off 静音开关），这里显式导出，避免设置被静默忽略。
+if (typeof window !== "undefined") window.API = API;
