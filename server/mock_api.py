@@ -1049,16 +1049,18 @@ def make_reply(messages, session_id=None):
         for k in ("大事", "宠物"):
             if k in memories and sess.setdefault("memory_hits", {}).get(k) is None:
                 _STATE.mark_recall(session_id, k, turn)
-    if "昵称" not in memories and turn <= ONBOARD_NAME_TURNS:
+    # W11 hook 优先级重排：主动回提（用户提到存过的记忆）> 固定引导 > 常规随机。
+    # 原顺序（引导 > 回提）会让前 4/8 轮的新手引导抢走本该"被记住"的时刻——
+    # 用户刚提完记忆却听到"还不知道怎么称呼你"，真人感直接崩。回提一旦命中就让位。
+    hook, hit_key = _pick_recall(memories, mem_updates, topic, user_text, sess, turn)
+    if hook is not None:
+        _STATE.mark_recall(session_id, hit_key, turn)
+    elif "昵称" not in memories and turn <= ONBOARD_NAME_TURNS:
         hook = ONBOARD_NAME_HOOK
     elif "大事" not in memories and turn <= ONBOARD_EVENT_TURNS:
         hook = ONBOARD_EVENT_HOOK
     else:
-        hook, hit_key = _pick_recall(memories, mem_updates, topic, user_text, sess, turn)
-        if hook is not None:
-            _STATE.mark_recall(session_id, hit_key, turn)
-        else:
-            hook = HOOKS.get(topic) if random.random() < 0.55 else None
+        hook = HOOKS.get(topic) if random.random() < 0.55 else None
     return {"reply": reply, "emotion": emo, "motion": motion,
             "memory_updates": mem_updates, "hook": hook, "crisis": False}
 
