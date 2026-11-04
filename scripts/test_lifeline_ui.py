@@ -21,9 +21,15 @@ def _load_env():
             ["bash", "-c",
              f'. "{env_sh}" >/dev/null 2>&1; echo "$XIAOMAN_HOST|$XIAOMAN_WEB_PORT|$XIAOMAN_MOCK_PORT|$XIAOMAN_TTS_PORT"'],
             capture_output=True, text=True, timeout=10, check=True).stdout.strip().split("|")
-        return out[0], int(out[1]), int(out[2]), int(out[3])
+        return (os.environ.get("XIAOMAN_HOST") or out[0],
+                int(os.environ.get("XIAOMAN_WEB_PORT") or out[1]),
+                int(os.environ.get("XIAOMAN_MOCK_PORT") or out[2]),
+                int(os.environ.get("XIAOMAN_TTS_PORT") or out[3]))
     except Exception:
-        return "127.0.0.1", 8901, 8902, 8903
+        return (os.environ.get("XIAOMAN_HOST", "127.0.0.1"),
+                int(os.environ.get("XIAOMAN_WEB_PORT", 8901)),
+                int(os.environ.get("XIAOMAN_MOCK_PORT", 8902)),
+                int(os.environ.get("XIAOMAN_TTS_PORT", 8903)))
 
 
 _HOST, _WEB_PORT, _MOCK_PORT, _TTS_PORT = _load_env()

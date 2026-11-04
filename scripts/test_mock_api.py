@@ -11,9 +11,11 @@ def _load_env():
         out = subprocess.run(
             ["bash", "-c", f'. "{env_sh}" >/dev/null 2>&1; echo "$XIAOMAN_HOST|$XIAOMAN_MOCK_PORT"'],
             capture_output=True, text=True, timeout=10, check=True).stdout.strip().split("|")
-        return out[0], int(out[1])
+        return (os.environ.get("XIAOMAN_HOST") or out[0],
+                int(os.environ.get("XIAOMAN_MOCK_PORT") or out[1]))
     except Exception:
-        return "127.0.0.1", 8902
+        return (os.environ.get("XIAOMAN_HOST", "127.0.0.1"),
+                int(os.environ.get("XIAOMAN_MOCK_PORT", 8902)))
 
 
 _HOST, _PORT = _load_env()
