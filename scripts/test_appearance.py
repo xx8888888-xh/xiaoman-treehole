@@ -87,7 +87,8 @@ async def set_preset(pg, name):
 
 async def main():
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        # 用户要求：自动化测试禁止发声（TTS_MUTED.flag）
+        browser = await p.chromium.launch(headless=True, args=["--mute-audio"])
         # ---------- 1. 首次启动（无存储）默认极简，首帧即生效 ----------
         ctx = await browser.new_context(viewport={"width": 414, "height": 860})
         pg = await ctx.new_page()

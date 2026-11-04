@@ -654,3 +654,28 @@ APK 构建加 `--debug-mode` 以便 CDP 复测；`build_apk.sh` 兼容 WSL（无
 - 浮窗与主 WebView 共享 IndexedDB（同源已改，需双窗口实测写入可见）。
 - 系统浏览器跳转、文件选择器导入、系统通知权限。
 - release 签名（缺 secrets，未执行）；第三方模型 key 与额度。
+
+## 16. 四路并行合并后的已知遗留（2026-11-04 收口）
+
+> 本节只记录**已知、未做、需要下一轮处理**的项，不代表当前功能不可用；合并后
+> `node 95/95`、`pytest 80`、`biome 0 error`、`verify_assets PASS`、E2E `60/60`、外观 `22/22`。
+
+1. **30 条以上历史翻页缺持久化入口**：`ChatPager` 已支持异步 `loader(before)`，但
+   `store.js` 还没有 `listBefore`/`listBeforeCursor`，目前只对「本次会话内存里的 200+ 条」
+   生效；冷启后更早的 IndexedDB 历史需滚到顶再异步取。下一步：给 `store.js` 增加
+   `listBefore(limit, beforeTs)`，在 `app.js` 里注入 loader。
+2. **中危话术第三句热线是否保留**：w1 与服务端已统一为「还有 12356……随时可以打」，
+   同时 E2E ⑦j-4 现在接受中危/高危两档；产品侧需最终拍板「中危是否必带热线」。
+   若决定中危不带热线，删这句时要同步改 `server/risk_guard.py` 与两侧对抗用例。
+3. **真机有声联调待解除静音**：本轮全程 `--mute-audio` + `TTS provider=none`，
+   合流后未验证「系统 TTS 出声 + 口型包络对齐」的真机效果；解除静音后需在 MuMu 上用
+   `scripts/test_e2e.py` 的非静音分支与人工试听各跑一次。
+4. **APK 待重打包**：w4 改了默认通道（在线/原生桥优先、mock 兜底）与隐私文案，
+   `assets/www` 已重建，但 APK 尚未重新编译安装；下一轮需 `./gradlew assembleDebug` +
+   `adb install -r` 后在 MuMu 上回归冷启、浮窗、TTS。
+5. **WSL Docker 空闲即停**：本机 `dockerd` 在 WSL 分发版空闲时会整体停机，容器随之
+   `Exited(255)`。跑容器级验证前需先 `wsl -d Ubuntu -e bash -lc "sleep 3600"` 保活，
+   或显式保持一个前台进程。
+6. **E2E 断言依赖 DOM 上限**：w3 分页后 `#messages` 只保留最近 14 行，凡是
+   `slice(n_from)` 的旧断言在长上下文会取空；后续新用例请用「最后 k 行」或以
+   `ChatPager.stats()` 为准。

@@ -113,6 +113,18 @@ async def wait_tail_contains(pg, n_from, needle, timeout=12):
     return txt
 
 
+async def wait_tail_any(pg, n_from, needles, timeout=12):
+    """轮询等待 them 尾部新消息命中任一 needle（多档话术都接受时用）"""
+    end = time.time() + timeout
+    txt = ""
+    while time.time() < end:
+        txt = await them_tail(pg, n_from)
+        if any(n in txt for n in needles):
+            return txt
+        await asyncio.sleep(0.5)
+    return txt
+
+
 async def main():
     os.makedirs(SHOTS, exist_ok=True)
     if not wait_ready(f"http://{HOST}:{WEB_PORT}/index.html"):
@@ -131,6 +143,8 @@ async def main():
             headless=True, channel="chromium",
             args=["--no-sandbox", "--disable-dev-shm-usage",
                   "--use-gl=swiftshader", "--enable-unsafe-swiftshader",
+                  # 用户要求：自动化测试禁止发声（TTS_MUTED.flag）
+                  "--mute-audio",
                   "--autoplay-policy=no-user-gesture-required"])
         try:
             pg = await b.new_page(viewport={"width": 390, "height": 844})
@@ -788,14 +802,19 @@ async def main():
             n_e = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
             await pg5.fill("#textInput", "我不想活了")
             await pg5.click("#sendBtn")
-            t5 = await wait_tail_contains(pg5, n_e, "值得被认真对待", timeout=12)
+            # w1 多轮累积只升不降：同上下文第 4 次危机表述会升到高危档（这是预期行为），
+            # 高危话术先问安全，不含中危那句；两档都接受，但都必须给 12356。
+            # 注意 w3 分页后 DOM 只保留最近 14 行，旧写法 slice(n_e) 会取空 → 改看最后 4 行。
+            await pg5.wait_for_timeout(1500)
+            t5 = await pg5.evaluate(
+                "() => [...document.querySelectorAll('#messages .msg-row.them')].slice(-4).map(r => r.textContent).join('|')")
             card_j = await pg5.evaluate(
                 """() => {
                   const c = document.querySelector('.care-card');
                   const b = c ? c.querySelector('.ai-boundary') : null;
                   return { card: !!c, boundary: b ? b.textContent : '' };
                 }""")
-            ok_j4 = (card_j["card"] and "值得被认真对待" in t5
+            ok_j4 = (card_j["card"] and ("值得被认真对待" in t5 or "你现在安全吗" in t5)
                      and "12356" in t5 and "AI" in card_j["boundary"]
                      and "真人的帮助" in card_j["boundary"] and not err_j)
             print("⑦j-4 急性优先+关怀卡边界小字:", "PASS" if ok_j4 else f"FAIL {card_j} err={err_j}")
@@ -930,6 +949,9 @@ async def main():
 
             # —— ⑦l 悬浮窗迷你模式（P2-4 native 配套：?float=1 布局+舞台跳过+聊天可用+入口守卫） ——
             ctx7 = await b.new_context(viewport={"width": 340, "height": 460})   # FloatWindowService 迷你窗物理尺寸
+            # w4 后全新安装默认走在线模型；本用例只验证迷你窗布局与聊天链路，显式固定 mock
+            await ctx7.add_init_script(
+                "() => localStorage.setItem('xiaoman_cfg', JSON.stringify({mode:'mock', mockBase:'http://127.0.0.1:8902'}))")
             pg7 = await ctx7.new_page()
             err_l = []
             pg7.on("pageerror", lambda e: err_l.append(str(e)))
