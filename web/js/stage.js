@@ -55,6 +55,8 @@ const Stage = (() => {
   let lastTs = 0;
   let resizeObs = null;
   let fallbackImg = null;     // 静态/剪影兜底图（容器尺寸变化时重绘，不再请求网络）
+  let envBound = false;       // 环境监听（hidden/blur/pagehide）只绑定一次
+  let pausedByEnv = false;    // 页面不可见/窗口失焦期间暂停，恢复时清
 
   /** 纹理档位：按 DPR + 画布可视尺寸 + 12MB 预算选 s050/s070（首屏只下载当前档）。
    *  与引擎内 pickTier 同一口径（预算含画布后备缓冲），前端先算出来便于探针/E2E。 */
@@ -196,7 +198,7 @@ const Stage = (() => {
 
   function startWander() {
     stopWander();
-    if (!puppet || !motionEnabled) return;
+    if (!puppet || !motionEnabled || envBlocked()) return;
     wanderTimer = setTimeout(() => {
       wanderTimer = null;
       if (!puppet || !motionEnabled) return;
@@ -210,7 +212,87 @@ const Stage = (() => {
     wanderTimer = null;
   }
 
-  /* ---------- 渲染循环（唯一 rAF；零动画时不得存在） ---------- */
+  /* ---------- 环境暂停（耗电 P0）----------
+   * 零动画、document.hidden、窗口失焦三种情况下都不允许 rAF 常驻：
+   * 暂停时同时停自家循环与（宿主流可能残留的）PixiJS 共享 ticker，
+   * 恢复时只在「允许动画且分层渲染」时按需重启，其余情况只补一帧。 */
+  function envBlocked() {
+    return pausedByEnv || (typeof document !== "undefined" && document.hidden === true);
+  }
+
+  function sharedTicker() {
+    const P = typeof window !== "undefined" ? window.PIXI : null;
+    return P && P.Ticker && P.Ticker.shared ? P.Ticker.shared : null;
+  }
+
+  function stopSharedTicker() {
+    const t = sharedTicker();
+    if (!t) return;
+    try { t.autoStart = false; t.stop(); } catch (e) { /* 忽略 */ }
+  }
+
+  function startSharedTicker() {
+    const t = sharedTicker();
+    if (!t) return;
+    try { t.autoStart = true; t.start(); } catch (e) { /* 忽略 */ }
+  }
+
+  function pauseForEnv(why) {
+    if (pausedByEnv) return;
+    pausedByEnv = true;
+    stopLoop();
+    stopWander();
+    stopSharedTicker();
+    if (freezeTimer) clearTimeout(freezeTimer);
+    freezeTimer = null;
+    if (puppet && mode === "layers") renderOnce();   // 定格在暂停瞬间的最后一帧
+    console.log("[probe] stage-pause=" + why);
+  }
+
+  function resumeForEnv(why) {
+    pausedByEnv = false;
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (!puppet || mode !== "layers") { renderOnce(); return; }
+    if (motionEnabled) {
+      puppet.setAutoIdle(true);
+      try { puppet.fit(); } catch (e) { /* 布局尺寸可能刚恢复，fit 失败不阻断 */ }
+      startSharedTicker();
+      startWander();
+      startLoop();
+    } else {
+      freezeFrame();
+    }
+    console.log("[probe] stage-resume=" + why);
+  }
+
+  function onVisibility() {
+    if (document.hidden) pauseForEnv("hidden");
+    else resumeForEnv("visible");
+  }
+
+  function onBlur() { pauseForEnv("blur"); }
+  function onFocus() { resumeForEnv("focus"); }
+  function onPageHide(e) { if (!e || !e.persisted) destroy(); }
+
+  function bindEnv() {
+    if (envBound || typeof document === "undefined") return;
+    envBound = true;
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pagehide", onPageHide);
+  }
+
+  function unbindEnv() {
+    if (!envBound || typeof document === "undefined") return;
+    envBound = false;
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("blur", onBlur);
+    window.removeEventListener("focus", onFocus);
+    window.removeEventListener("pagehide", onPageHide);
+  }
+
+  /* ---------- 渲染循环（唯一 rAF；零动画/不可见时不得存在） ---------- */
   function stopLoop() {
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
@@ -218,7 +300,7 @@ const Stage = (() => {
   }
 
   function startLoop() {
-    if (rafId || !puppet || mode !== "layers" || !motionEnabled) return;
+    if (rafId || !puppet || mode !== "layers" || !motionEnabled || envBlocked()) return;
     lastTs = 0;
     const tick = (ts) => {
       rafId = null;
@@ -245,6 +327,7 @@ const Stage = (() => {
   function freezeFrame() {
     stopLoop();
     stopWander();
+    stopSharedTicker();
     if (!puppet) return;
     puppet.setAutoIdle(false);
     renderOnce();
@@ -258,6 +341,7 @@ const Stage = (() => {
 
   async function mount(container) {
     host = container;
+    bindEnv();
     showNote(container);
     try {
       await ensureVendor();
@@ -481,10 +565,11 @@ const Stage = (() => {
     startLoop();
   }
 
-  /** 销毁舞台：停循环/漫游/计时器、断开尺寸监听、移除画布 */
+  /** 卸载舞台：停循环/漫游/计时器、断开尺寸监听、销毁实例、移除画布 */
   function unmount() {
     stopWander();
     stopLoop();
+    stopSharedTicker();
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = null;
     if (resizeObs) {
@@ -492,13 +577,23 @@ const Stage = (() => {
       resizeObs = null;
     }
     if (puppet) {
-      try { puppet.stop(); } catch (e) { /* 忽略 */ }
+      try { puppet.stop(); } catch (e) { /* 忽略 */ }   // 引擎自带的 rAF（若曾启动）
       puppet = null;
     }
     if (canvas && canvas.parentElement) canvas.parentElement.removeChild(canvas);
     canvas = null;
+    pausedByEnv = false;
     mode = "idle";
     window.__stageMode = "idle";
+  }
+
+  /** 真正卸载路径（pagehide / 页面切换）：卸载舞台并解绑环境监听，之后不再有任何 rAF */
+  function destroy() {
+    unmount();
+    unbindEnv();
+    host = null;
+    fallbackImg = null;
+    activeTier = null;
   }
 
   /** 挂件头部特写：CSS 放大画布并上移，让脸部落在圆形框内（不改引擎坐标） */
@@ -554,13 +649,14 @@ const Stage = (() => {
   }
 
   return {
-    mount, unmount, setEmotion, playMotion, lipFrame, focusHead, restoreView, setMotionEnabled,
+    mount, unmount, destroy, setEmotion, playMotion, lipFrame, focusHead, restoreView, setMotionEnabled,
     /** 单测/探针：纹理档位、模型源、本次挂载档位与实际模式 */
     _pickTier: pickTier,
     _modelUrl: modelUrl,
     _tier: () => activeTier,
     _mode: () => mode,
     _rafActive: () => rafId !== null,
+    _envPaused: () => pausedByEnv,
     _emotionFor: emotionFor,
     _motionFor: motionFor,
     _vramFor: vramFor,

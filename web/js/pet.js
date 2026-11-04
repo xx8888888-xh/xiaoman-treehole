@@ -48,6 +48,8 @@
   let rafId = null;
   let lastTs = 0;
   let freezeTimer = 0;
+  let watchdogTimer = 0;
+  let envPaused = false;   // 页面不可见/窗口失焦期间暂停（收起桌宠时也走这里）
 
   function log(msg) {
     try { console.log("[probe] " + msg); } catch (e) { /* 忽略 */ }
@@ -145,8 +147,33 @@
     lastTs = 0;
   }
 
+  /* ---------- 环境暂停（耗电 P0） ----------
+   * 桌宠窗口被收起（GONE → document.hidden）、窗口失焦、页面切换时停掉 rAF；
+   * 恢复可见/聚焦后按需重启，零动画（motion=off）下永不启动。 */
+  function envBlocked() {
+    return envPaused || (typeof document !== "undefined" && document.hidden === true);
+  }
+
+  function pauseForEnv(why) {
+    if (envPaused) return;
+    envPaused = true;
+    stopLoop();
+    clearTimeout(repaintTimer);
+    repaintTimer = 0;
+    log("pet-pause:" + why);
+  }
+
+  function resumeForEnv(why) {
+    envPaused = false;
+    if (document.hidden) return;
+    if (!mounted || !puppet) return;
+    if (motion) startLoop();
+    else renderOnce();
+    log("pet-resume:" + why);
+  }
+
   function startLoop() {
-    if (rafId || !puppet || !motion) return;
+    if (rafId || !puppet || !motion || envBlocked()) return;
     lastTs = 0;
     const tick = (ts) => {
       rafId = null;
@@ -228,7 +255,7 @@
    * 通过 evaluateJavascript 调用本函数，把尺寸重置 + 立刻补一帧。
    */
   function repaint(why) {
-    if (!mounted) return;
+    if (!mounted || envBlocked()) return;   // 不可见时不排 rAF；恢复可见由 visibilitychange 补帧
     clearTimeout(repaintTimer);
     log("pet-repaint:" + (why || "manual"));
     repaintTimer = setTimeout(() => {
@@ -239,8 +266,9 @@
 
   /** 看门狗：rAF 被系统暂停时（窗口不可见/被移动）重新拉起并补一帧 */
   function startWatchdog() {
-    setInterval(() => {
-      if (!mounted || !puppet || !motion) return;
+    clearInterval(watchdogTimer);
+    watchdogTimer = setInterval(() => {
+      if (!mounted || !puppet || !motion || envBlocked()) return;
       if (Date.now() - lastPaintAt > 2500) {
         log("pet-watchdog");
         startLoop();
@@ -367,12 +395,39 @@
     downPoint = null;
   }
 
+  /** 真正卸载（pagehide / 桌宠窗被原生销毁）：停循环与全部定时器、销毁实例、移除画布 */
+  function destroy() {
+    mounted = false;
+    stopLoop();
+    clearTimeout(repaintTimer); repaintTimer = 0;
+    clearTimeout(freezeTimer); freezeTimer = 0;
+    clearTimeout(pressTimer); pressTimer = 0;
+    clearTimeout(tipTimer); tipTimer = 0;
+    clearInterval(reminderTimer); reminderTimer = 0;
+    clearInterval(styleTimer); styleTimer = 0;
+    clearInterval(watchdogTimer); watchdogTimer = 0;
+    window.removeEventListener("appearance:change", syncAppearance);
+    try { showMenu(false); } catch (e) { /* 忽略 */ }
+    if (puppet) {
+      try { puppet.stop(); } catch (e) { /* 忽略 */ }
+      puppet = null;
+    }
+    if (canvas && canvas.parentElement) canvas.parentElement.removeChild(canvas);
+    canvas = null;
+    envPaused = false;
+    log("pet-destroy");
+  }
+
   // 渲染异常只记录不抛出：桌宠挂掉也要保留悬浮层可用
   window.addEventListener("error", (e) => log("pet-js-error " + (e && e.message)));
-  // 窗口从不可见恢复（面板收起/系统回收后回来）时补帧，否则会停在空白帧
+  // 窗口从不可见恢复（面板收起/系统回收后回来）时按需重启并补帧，否则会停在空白帧
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) repaint("visibility");
+    if (document.hidden) pauseForEnv("hidden");
+    else { resumeForEnv("visible"); repaint("visibility"); }
   });
+  window.addEventListener("blur", () => pauseForEnv("blur"));
+  window.addEventListener("focus", () => { resumeForEnv("focus"); repaint("focus"); });
+  window.addEventListener("pagehide", (e) => { if (!e || !e.persisted) destroy(); });
   window.addEventListener("pageshow", () => repaint("pageshow"));
   document.addEventListener("pointerdown", onDown, true);
   document.addEventListener("pointermove", onMove, true);
@@ -434,6 +489,7 @@
     tap(ratio) { interact(typeof ratio === "number" ? ratio : 0.4); },
     openPanel,
     close: closePet,
+    destroy,
     tickReminders,
     repaint,
     state() {
