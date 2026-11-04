@@ -68,4 +68,8 @@ with open(path, "w", encoding="utf-8") as f:
 print(f"ASSETS_MANIFEST files={len(files)} bytes={total} path={path}")
 PY
 
+# 生成后自检：发布目录必须与工作树逐文件一致（同一排除口径），否则立刻失败，
+# 避免把半同步/过期副本挂给容器或打进 APK。
+python3 "$ROOT/scripts/verify_assets.py" --src "$SRC" --dst "$DST"
+
 echo "ASSETS_SYNCED $(du -sh "$DST" | cut -f1) -> $DST"
