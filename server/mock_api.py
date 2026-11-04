@@ -32,7 +32,7 @@ from urllib import request as urlrequest
 import xm_config
 import credentials
 import risk_guard
-from log_redact import redact_log_line
+from log_redact import mask_sensitive, redact_log_line
 
 # ---------------- 日志配置 ----------------
 logging.basicConfig(
@@ -849,7 +849,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _error(self, code, message):
         """统一 JSON 错误格式，不泄露内部异常细节"""
-        logger.error("HTTP %d: %s", code, redact_log_line(message))
+        logger.error("HTTP %d: %s", code, mask_sensitive(message))
         self._json({"error": message}, code)
 
     def _read_body(self):
