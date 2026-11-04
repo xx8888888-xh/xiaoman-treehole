@@ -17,6 +17,7 @@ const ChatPager = (() => {
   const VIEW = PAGE + BUFFER;
   const EDGE = 24;          // 距顶多少 px 触发向上翻页
   const BOTTOM_GAP = 48;    // 距底多少 px 视为「贴着底部」
+  const FOLLOW_SLACK = 96;  // 原本贴底时，容忍内容增高后 1 行内的偏移仍继续跟随
   const THROTTLE = 250;     // 翻页节流（scroll 事件会因 scrollTop 回填再次触发）
 
   let host = null, typing = null, scroll = null, build = null, doc = null;
@@ -27,6 +28,7 @@ const ChatPager = (() => {
   let busy = false;         // 正在异步翻页（占位条保持显示）
   let exhausted = false;    // loader 已确认为空：到底了
   let lastEdgeAt = 0;
+  let pinned = true;        // 是否"跟着最新"：仅在用户手动上滚时置 false
   let topBar = null, bottomBar = null;
 
   function el(tag, cls, text) {
@@ -49,6 +51,7 @@ const ChatPager = (() => {
     busy = false;
     exhausted = false;
     lastEdgeAt = 0;
+    pinned = true;
     // 两条占位条常驻 DOM（用 hidden 切换显隐）：翻页期间只改文字，不重建节点
     topBar = el("div", "msg-row window-tip hidden", "更早的消息");
     bottomBar = el("div", "msg-row window-tip hidden", "新消息");
@@ -74,10 +77,14 @@ const ChatPager = (() => {
     scroll.parentElement.classList.toggle("is-scrolled", (scroll.scrollTop || 0) > 4);
   }
 
-  /** 是否贴着底部（没有布局信息时按 true 处理，保持旧行为） */
+  /** 离底部的滚动距离（没有布局信息时按 0，保持旧行为） */
+  function scrollGap() {
+    if (!scroll || !scroll.scrollHeight) return 0;
+    return scroll.scrollHeight - scroll.scrollTop - (scroll.clientHeight || 0);
+  }
+
   function nearBottom() {
-    if (!scroll || !scroll.scrollHeight) return true;
-    return scroll.scrollHeight - scroll.scrollTop - (scroll.clientHeight || 0) <= BOTTOM_GAP;
+    return scrollGap() <= BOTTOM_GAP;
   }
 
   /**
@@ -135,7 +142,8 @@ const ChatPager = (() => {
   function push(rec) {
     const handle = { rec, el: null };
     recs.push(rec);
-    if (nearBottom()) {
+    // pinned：原本停在底部；容忍内容增高导致的半行级偏移，避免新消息悄悄不显示
+    if (nearBottom() || (pinned && scrollGap() <= FOLLOW_SLACK)) {
       const total = recs.length;
       // 增量滑窗：窗口已满且只需前移 1 行时，只删首行/建末行（原来整页重建 14 行）
       if (total > VIEW && rendered.length === VIEW && start === total - VIEW - 1) {
@@ -165,6 +173,7 @@ const ChatPager = (() => {
    *  loader 收到窗口里最旧的一条记录（游标 {at,id}），由数据层据此取 strictly older。 */
   async function older() {
     if (busy || !recs.length) return false;
+    pinned = false;                 // 主动看历史：暂停跟随最新
     if (start > 0) {
       start = Math.max(0, start - PAGE);
       render("keep");
@@ -192,16 +201,18 @@ const ChatPager = (() => {
   /** 回到最新（点击底栏或滚到底部自动触发） */
   function jumpLatest() {
     start = Math.max(0, recs.length - VIEW);
+    pinned = true;
     render("bottom");
   }
 
   function onScroll() {
     if (busy || !scroll) return;
+    pinned = nearBottom();          // 用户手动上滚即解除"跟随最新"
     const now = Date.now();
     if (now - lastEdgeAt < THROTTLE) return;
     lastEdgeAt = now;
     if (scroll.scrollTop <= EDGE) { older(); return; }
-    if (nearBottom() && start + VIEW < recs.length) jumpLatest();
+    if (pinned && start + VIEW < recs.length) jumpLatest();
   }
 
   /** 语音已播标记：记录写到数据里，重渲染也不会丢；节点在窗口内则原地换新 */
