@@ -16,6 +16,7 @@
     apiBase: "",
     model: "nvidia/nemotron-3.5-lightning:free",
     ttsBase: "http://127.0.0.1:8903",
+    ttsServer: "",         // 远程语音显式地址：默认空 = provider 关闭（不请求任何外部服务）
     mockBase: "http://127.0.0.1:8902",
     tts: "server",
     voice: "zh-CN-XiaoyiNeural",
@@ -48,6 +49,7 @@
     cfg.apiBase = trimUrl(raw.apiBase);
     cfg.model = String(raw.model || DEFAULTS.model).trim();
     cfg.ttsBase = trimUrl(raw.ttsBase || DEFAULTS.ttsBase);
+    cfg.ttsServer = trimUrl(raw.ttsServer || "");
     cfg.mockBase = trimUrl(raw.mockBase || DEFAULTS.mockBase);
     cfg.tts = ["server", "browser", "off"].indexOf(raw.tts) >= 0 ? raw.tts : DEFAULTS.tts;
     cfg.voice = String(raw.voice || DEFAULTS.voice).trim();

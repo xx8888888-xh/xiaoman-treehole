@@ -16,7 +16,9 @@ const Stage = (() => {
   let lipHold = 0;            // 剩余保持帧（无分析器时的兜底）
   let resizeHandler = null;   // resize 监听引用，用于销毁
   // 极简模式/关动画：停 ticker，画面定格；生动模式恢复（含呼吸/眨眼/视线漫游）
-  let motionEnabled = !(window.Appearance && !Appearance.get().motion);
+  let motionEnabled = typeof window !== "undefined" && window.Appearance
+    ? !Appearance.get().motion
+    : true;
   const MOODS = { happy: "开心", sad: "有点难过", gentle: "温柔模式", surprised: "诶？", shy: "脸红了", neutral: "在听你说" };
 
   /* ---------- 渲染库按需加载（首屏 TTI 关键） ----------
@@ -241,12 +243,26 @@ const Stage = (() => {
     }
   }
 
-  /** TTS 播放期间的口型喂入（level 来自音频包络关键帧；<0 = 无音频，只做轻微呼吸） */
-  function lipFrame(level) {
-    if (level < 0) { lipHold = 0; lipOpen = 0.02; return; }
-    lipOpen = 0.04 + level * 0.55;   // 极简模式幅度小，避免"夸张张嘴"
-    lipHold = 6;
+  /** 纯函数：TTS 包络 level → 口型目标（<0=无音频 → 静止；极简模式连呼吸都停） */
+  function lipFor(level, motion) {
+    if (typeof level !== "number" || !isFinite(level) || level <= 0) return 0;
+    if (!motion) return 0;
+    return Math.min(1, 0.04 + Math.min(1, level) * 0.55);
   }
 
-  return { mount, unmount, setEmotion, playMotion, lipFrame, focusHead, restoreView, setMotionEnabled };
+  /** TTS 播放期间的口型喂入（level 来自音频包络关键帧；<0 = 无音频，静止） */
+  function lipFrame(level) {
+    const target = lipFor(level, motionEnabled);
+    lipOpen = target;
+    lipHold = target > 0 ? 6 : 0;
+  }
+
+  return {
+    mount, unmount, setEmotion, playMotion, lipFrame, focusHead, restoreView, setMotionEnabled,
+    /** 单测入口：口型目标纯函数与当前内部状态 */
+    _lipFor: lipFor,
+    _lipState: () => ({ lipOpen, lipHold })
+  };
 })();
+
+if (typeof module === "object" && module.exports) module.exports = Stage;

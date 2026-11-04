@@ -1083,7 +1083,7 @@ const App = (() => {
       $("cfgApi").value = cfg.apiBase || "";
       $("cfgApiKey").value = API.getApiKey();
       $("cfgModel").value = cfg.model || "";
-      $("cfgTtsBase").value = cfg.ttsBase || "";
+      $("cfgTtsBase").value = cfg.ttsServer || "";
       $("cfgTts").value = cfg.tts || "server";
       $("cfgVoice").value = cfg.voice || "zh-CN-XiaoyiNeural";
       $("cfgRate").value = cfg.ttsRate || "normal";
@@ -1101,6 +1101,7 @@ const App = (() => {
           apiBase: $("cfgApi").value.trim(),
           model: $("cfgModel").value.trim(),
           ttsBase: $("cfgTtsBase").value.trim(),
+          ttsServer: $("cfgTtsBase").value.trim(),   // 远程语音显式启用（默认关闭）
           tts: $("cfgTts").value,
           voice: $("cfgVoice").value,
           ttsRate: $("cfgRate").value
