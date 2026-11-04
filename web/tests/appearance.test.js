@@ -32,8 +32,11 @@ function contrast(a, b) {
 function varsOf(block) {
   const out = {};
   const re = /--([\w-]+)\s*:\s*(#[0-9A-Fa-f]{6})\s*;/g;
-  let m;
-  while ((m = re.exec(block))) out[m[1]] = m[2];
+  let m = re.exec(block);
+  while (m) {
+    out[m[1]] = m[2];
+    m = re.exec(block);
+  }
   return out;
 }
 const ROOT_VARS = varsOf(CSS.match(/:root\s*\{([\s\S]*?)\}/)[1]);
