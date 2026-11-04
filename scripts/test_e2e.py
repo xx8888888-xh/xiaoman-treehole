@@ -788,15 +788,21 @@ async def main():
             n_e = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
             await pg5.fill("#textInput", "我不想活了")
             await pg5.click("#sendBtn")
-            t5 = await wait_tail_contains(pg5, n_e, "值得被认真对待", timeout=12)
-            card_j = await pg5.evaluate(
-                """() => {
-                  const c = document.querySelector('.care-card');
-                  const b = c ? c.querySelector('.ai-boundary') : null;
-                  return { card: !!c, boundary: b ? b.textContent : '' };
-                }""")
-            ok_j4 = (card_j["card"] and "值得被认真对待" in t5
-                     and "12356" in t5 and "AI" in card_j["boundary"]
+            # 关怀卡走 ChatPager 分页重建，不能再靠「them 行号切片」取样；直接轮询卡内容
+            card_j = {"card": False, "text": "", "boundary": ""}
+            end_j = time.time() + 18
+            while time.time() < end_j:
+                card_j = await pg5.evaluate(
+                    """() => {
+                      const c = document.querySelector('.care-card');
+                      const b = c ? c.querySelector('.ai-boundary') : null;
+                      return { card: !!c, text: c ? c.textContent : '', boundary: b ? b.textContent : '' };
+                    }""")
+                if card_j["card"] and "值得被认真对待" in card_j["text"] and "12356" in card_j["text"]:
+                    break
+                await asyncio.sleep(0.5)
+            ok_j4 = (card_j["card"] and "值得被认真对待" in card_j["text"]
+                     and "12356" in card_j["text"] and "AI" in card_j["boundary"]
                      and "真人的帮助" in card_j["boundary"] and not err_j)
             print("⑦j-4 急性优先+关怀卡边界小字:", "PASS" if ok_j4 else f"FAIL {card_j} err={err_j}")
             check("⑦j-4 急性优先+关怀卡边界小字", ok_j4)
