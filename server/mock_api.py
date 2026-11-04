@@ -32,6 +32,7 @@ from urllib import request as urlrequest
 import xm_config
 import credentials
 import risk_guard
+from log_redact import redact_log_line
 
 # ---------------- 日志配置 ----------------
 logging.basicConfig(
@@ -826,8 +827,9 @@ def make_reply(messages, session_id=None):
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # 记录访问日志：时间、方法、路径、状态码
-        logger.info("%s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
+        # 记录访问日志：时间、方法、路径、状态码；查询串/密钥/手机号/长文本先脱敏
+        logger.info("%s - - [%s] %s", self.address_string(), self.log_date_time_string(),
+                    redact_log_line(format % args))
 
     def _cors(self):
         """CORS 白名单（默认仅 http://127.0.0.1:8901）；未命中不发 ACAO"""
@@ -847,7 +849,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _error(self, code, message):
         """统一 JSON 错误格式，不泄露内部异常细节"""
-        logger.error("HTTP %d: %s", code, message)
+        logger.error("HTTP %d: %s", code, redact_log_line(message))
         self._json({"error": message}, code)
 
     def _read_body(self):
