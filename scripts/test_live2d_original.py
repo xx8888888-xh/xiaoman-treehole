@@ -50,6 +50,14 @@ def new_page(browser, theme="light", app_prefs=None, routes=None):
     script = "try{localStorage.setItem('xiaoman_theme', %s); localStorage.setItem('xiaoman_appearance_v1', %s);}catch(e){}" % (
         json.dumps(theme), json.dumps(json.dumps(app_prefs or appearance())))
     page.add_init_script(script)
+    # 全局 rAF 计数器：只统计「真正执行了的回调」，覆盖自家循环与任何第三方 ticker
+    page.add_init_script("""(function () {
+      window.__rafCount = 0;
+      var raf = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = function (cb) {
+        return raf(function (t) { window.__rafCount += 1; cb(t); });
+      };
+    })();""")
     if routes:
         page.route("**/*", routes)
     return ctx, page, logs
@@ -185,7 +193,13 @@ def run(base_url, out_dir):
           motion: document.documentElement.dataset.motion,
         })""")
         rep.check("零动画：html data-motion=off", idle["motion"] == "off")
-        rep.check("零动画：舞台无残留 rAF/ticker", idle["raf"] is False, str(idle))
+        # 只看 Stage._rafActive() 会漏掉第三方/共享 ticker：用全局 rAF 计数实测 1s
+        n0 = page.evaluate("window.__rafCount = 0; 0")
+        page.wait_for_timeout(1000)
+        n1 = page.evaluate("window.__rafCount")
+        rep.check("零动画：1s 内全局 rAF 回调为 0（非仅自家 _rafActive）", n1 == 0,
+                  "global_raf=%d own=%s" % (n1, idle["raf"]))
+        rep.check("零动画：舞台自家 rAF 亦为关闭", idle["raf"] is False, str(idle))
         a = page.evaluate("document.querySelector('#stage canvas').toDataURL()")
         page.wait_for_timeout(1000)
         b = page.evaluate("document.querySelector('#stage canvas').toDataURL()")
