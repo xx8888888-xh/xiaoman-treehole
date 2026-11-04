@@ -759,6 +759,135 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
 }
 .pending-close:hover { background: var(--surface); }
 
+/* ---------- 首次使用：空状态 + 三个快捷入口（零动画） ---------- */
+.empty-state {
+  margin: var(--space-4) 0 var(--space-2);
+  padding: var(--space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  text-align: left;
+}
+.empty-title { font-size: var(--text-subtitle); font-weight: 600; color: var(--text); }
+.empty-sub {
+  margin-top: var(--space-2);
+  font-size: var(--text-caption);
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.quick-starts { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.quick-chip {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+.quick-chip:hover { background: var(--surface-2); }
+
+/* ---------- 需要用户行动的错误提示（记录读不出来 / 存储满） ---------- */
+.notice-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  background: var(--crisis-soft);
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font-size: var(--text-caption);
+  line-height: 1.5;
+  text-align: left;
+}
+.notice-bar #noticeText { flex: 1; }
+
+/* ---------- 提醒：新建 / 编辑 / 记录 ---------- */
+.reminder-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.reminder-form input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-label);
+}
+.reminder-form input:focus { outline: none; box-shadow: var(--focus-ring); }
+.reminder-form-actions { display: flex; gap: var(--space-2); }
+.reminder-form-actions .solid-btn,
+.reminder-form-actions .ghost-btn { margin-top: 0; flex: 1; }
+.reminder-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--text-label);
+  line-height: 1.5;
+  color: var(--text);
+  text-align: left;
+}
+.reminder-item + .reminder-item { margin-top: var(--space-2); }
+.reminder-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.reminder-item.done { color: var(--text-2); background: transparent; border-style: dashed; }
+.r-edit {
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-caption);
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.r-edit:hover { background: var(--surface-2); }
+
+/* ---------- 小本本（统计） ---------- */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-3);
+}
+.stat-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  text-align: left;
+}
+.stat-num { font-size: var(--text-subtitle); font-weight: 600; color: var(--text); }
+.stat-cell span { font-size: var(--text-caption); color: var(--text-2); }
+.stats-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  min-height: 56px;
+  padding: var(--space-1) 0 var(--space-3);
+}
+.bar-col { display: flex; flex: 1; flex-direction: column; align-items: center; gap: 2px; }
+.bar { width: 100%; max-width: 24px; background: var(--accent); border-radius: 3px 3px 0 0; }
+.bar.zero { background: var(--surface-2); }
+.bar-col em { font-style: normal; font-size: 11px; color: var(--text-3); }
+.settings-switch-field .mini { margin-top: var(--space-2); }
+
 /* ---------- 倾诉记录导出/导入 ---------- */
 .backup-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
 .backup-actions .ghost-btn { flex: 1 1 46%; margin-top: 0; }

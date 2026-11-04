@@ -59,8 +59,24 @@
           <div class="bubble them typing">正在想…</div>
         </div>
       </div>
+      <!-- 首次使用引导：没有聊天记录时显示；发出第一条后自动收起 -->
+      <div id="emptyState" class="empty-state hidden">
+        <p class="empty-title">这里只有你和小满</p>
+        <p class="empty-sub">不用组织语言，想到什么说什么。小满会记住你在意的人和事，也会在你定好的时间提醒你。</p>
+        <div class="quick-starts" role="group" aria-label="第一次使用可以从这里开始">
+          <button class="quick-chip" id="quickSay" type="button">随便说一句</button>
+          <button class="quick-chip" id="quickRemind" type="button">定个提醒</button>
+          <button class="quick-chip" id="quickMemory" type="button">小满记得什么</button>
+        </div>
+      </div>
     </div>
     <div class="hook-bar hidden" id="hookBar"></div>
+    <!-- 本机记录读不出来 / 存储满：给出可操作的提示，不白屏 -->
+    <div class="notice-bar hidden" id="noticeBar" role="alert">
+      <span id="noticeText"></span>
+      <button class="pending-btn hidden" id="noticeRetry">重试</button>
+      <button class="pending-close" id="noticeClose" aria-label="关闭提示">✕</button>
+    </div>
     <!-- 429/断网排队提示：安静、可关闭；只有存在未回复消息时出现 -->
     <div class="pending-bar hidden" id="pendingBar" role="status" aria-live="polite">
       <span id="pendingText">还有 1 条没回</span>
@@ -93,6 +109,7 @@
       <div class="drawer-head"><h2 id="memoryDrawerTitle">小满记得的事</h2><button class="icon-btn" id="memoryClose" aria-label="关闭">✕</button></div>
       <p class="drawer-sub">称呼、人物、事件会记在这台手机上。开启在线对话时，聊天内容会经服务器转发给第三方模型；选离线模式则只在本地。</p>
       <div id="reminderList"></div>
+      <div id="statsBox"></div>
       <div class="chips" id="memoryChips"></div>
       <button class="solid-btn" id="cardBtn">生成我们的友谊卡片</button>
       <button class="ghost-btn" id="memoryClear">清空记忆</button>
@@ -160,11 +177,12 @@
       <p class="mini" id="cfgTestResult" role="status" aria-live="polite"></p>
       <label class="field"><span>语音回复</span>
         <select id="cfgTts">
-          <option value="server">服务端语音（自然）</option>
+          <option value="server">服务端语音（自然，需配置地址）</option>
           <option value="browser">本机语音（离线）</option>
           <option value="off">关闭</option>
         </select>
       </label>
+      <p class="mini" id="ttsHint" role="status" aria-live="polite"></p>
       <label class="field"><span>说话音色</span>
         <select id="cfgVoice">
           <option value="zh-CN-XiaoyiNeural">小艺 · 元气少女</option>
@@ -172,6 +190,7 @@
           <option value="zh-CN-XiaoyuanNeural">小圆 · 甜妹</option>
         </select>
       </label>
+      <p class="mini" id="voiceHint">音色只在「服务端语音」真正出声时生效；本机语音使用系统音色。</p>
       <label class="field"><span>语速</span>
         <select id="cfgRate">
           <option value="slow">慢一点</option>
@@ -179,6 +198,15 @@
           <option value="fast">快一点</option>
         </select>
       </label>
+      <div class="field settings-switch-field">
+        <span>陪伴方式</span>
+        <div class="ap-switches">
+          <label class="switch"><input type="checkbox" id="cfgHeartbeat" role="switch"><span>主动问候</span></label>
+          <label class="switch"><input type="checkbox" id="cfgAllowFree" role="switch"><span>允许免费通道</span></label>
+        </div>
+        <p class="mini" id="heartbeatHint">关掉后小满不会主动找你；你自己定的提醒仍会照常送达。</p>
+        <p class="mini" id="allowFreeHint">「允许免费通道」仅在安卓免 Key 环境生效：默认关闭，避免把倾诉内容发给有使用限制的免费额度。</p>
+      </div>
       <div class="field backup-field">
         <span>倾诉记录</span>
         <div class="backup-actions">
@@ -214,6 +242,7 @@
 <!-- Live2D 渲染库（约 900KB）改为 stage.js 里按需加载：
      先把输入/历史/开场交给用户（TTI），舞台随后补上，不阻塞首屏 -->
 <script src="js/config.js"></script>
+<script src="js/errors.js"></script>
 <script src="js/store.js"></script>
 <script src="js/risk.js"></script>
 <script src="js/api.js"></script>
