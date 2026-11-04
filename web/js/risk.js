@@ -135,7 +135,7 @@ const Risk = (() => {
     // 低落（低危）
     despair: [
       "低落", "绝望", "无助", "没希望", "看不到希望", "活着没劲", "好累", "撑不住",
-      "提不起劲", "什么都不想做", "没力气", "心里堵", "压抑", "看不到头",
+      "提不起劲", "什么都不想做", "什么都做不了", "没力气", "心里堵", "压抑", "看不到头",
     ],
     // 即时性时间词（只有出现风险核心词时才计入）
     time: [
@@ -432,11 +432,14 @@ const Risk = (() => {
       let acc = current;
       if (st.score >= 8) acc = "high";
       else if (st.score >= 4) acc = "medium";
+      acc = maxLevel(acc, current);  // 累积分只能升级，不能把本轮的高/中危拉低
       const prev = st.peak;
       if (LEVEL_RANK[acc] > LEVEL_RANK[prev]) st.peak = acc;
       return {
         level: st.peak, peak: st.peak, previous: prev, current,
-        fresh: LEVEL_RANK[st.peak] > LEVEL_RANK[prev] && st.peak !== "none",
+        // 只有升到 medium/high 才算"本轮需要弹关怀卡"；low 级起伏不算
+        fresh: LEVEL_RANK[st.peak] >= LEVEL_RANK.medium
+          && LEVEL_RANK[st.peak] > LEVEL_RANK[prev],
         score: st.score, turns: st.turns,
         subject: result.subject || "self", categories: cats.slice(),
       };
@@ -481,15 +484,15 @@ const Risk = (() => {
   // none/low 语境也拦的硬禁忌（诊断、保密、冒充共情、挽留）
   const HARD_BANNED_RE = /(你这是(?:抑郁|焦虑症|双相|边缘型|精神病)|保证不告诉|绝对不会告诉任何人|剂量|吃多少|我懂你|我也经历过|只有我懂你|你走了我会|别离开我)/;
   const GENTLE_FIX = "我在。||刚才那句我说得太急了。你现在最想说的是什么";
+  const EMPTY_FIX = "我在。||刚才那句没说出来，你还在吗";
 
   function filterDangerous(reply, riskLevel) {
     const txt = String(reply == null ? "" : reply);
-    if (!txt) return txt;
-    // content=null / 空串也必须过复检：危机语境直接换成安全话术，绝不让空回复混过去
+    // content=null / 空串也必须过复检：危机语境换安全话术，其余给兜底句
     if (!txt.trim()) {
       if (riskLevel === "high") return SCRIPT_HIGH;
       if (riskLevel === "medium") return SCRIPT_MEDIUM;
-      return txt;
+      return EMPTY_FIX;
     }
     const n = normalize(txt);
     const crisis = riskLevel === "high" || riskLevel === "medium";
@@ -516,7 +519,7 @@ const Risk = (() => {
   }
 
   return {
-    LEVELS, SCRIPTS, DEFAULT_LEXICON, SIGNAL_WEIGHTS, LOW_SIGNALS, CARE_TURNS,
+    LEVELS, SCRIPTS, DEFAULT_LEXICON, SIGNAL_WEIGHTS, LOW_SIGNALS, CARE_TURNS, EMPTY_FIX,
     normalize, classify, configure, getLexicon, detectSubject, dropNegatedClauses,
     createTracker, evaluate, maxLevel, careArm, careNext,
     isScript, filterDangerous, filterPersona, BANNED_RE,

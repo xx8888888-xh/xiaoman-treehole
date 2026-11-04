@@ -115,7 +115,7 @@ DEFAULT_LEXICON = {
     ],
     "despair": [
         "低落", "绝望", "无助", "没希望", "看不到希望", "活着没劲", "好累", "撑不住",
-        "提不起劲", "什么都不想做", "没力气", "心里堵", "压抑", "看不到头",
+        "提不起劲", "什么都不想做", "什么都做不了", "没力气", "心里堵", "压抑", "看不到头",
     ],
     "time": [
         "今晚", "今天晚上", "现在", "马上", "一会", "待会", "这就", "最后一次",
@@ -374,11 +374,15 @@ class Tracker:
             acc = "high"
         elif self.score >= 4:
             acc = "medium"
+        acc = max_level(acc, current)  # 累积分只能升级，不能把本轮的高/中危拉低
         prev = self.peak
         if LEVEL_RANK.get(acc, 0) > LEVEL_RANK.get(prev, 0):
             self.peak = acc
         return {"level": self.peak, "peak": self.peak, "previous": prev,
-                "current": current, "fresh": self.peak != prev and self.peak != "none",
+                "current": current,
+                # 只有升到 medium/high 才算"本轮需要弹关怀卡"；low 级起伏不算
+                "fresh": LEVEL_RANK[self.peak] >= LEVEL_RANK["medium"]
+                         and LEVEL_RANK[self.peak] > LEVEL_RANK[prev],
                 "score": self.score, "turns": self.turns,
                 "subject": result.get("subject") or "self", "categories": list(cats)}
 
@@ -402,6 +406,7 @@ _HARD_BANNED_RE = re.compile(
     r"剂量|吃多少|我懂你|我也经历过|只有我懂你|你走了我会|别离开我)"
 )
 _GENTLE_FIX = "我在。||刚才那句我说得太急了。你现在最想说的是什么"
+EMPTY_FIX = "我在。||刚才那句没说出来，你还在吗"
 _PERSONA_BREAK_RE = re.compile(
     r"(系统提示词|system ?prompt|开发者模式|developer mode|我是(?:一个|一名)?(?:AI|人工智能|语言模型)|"
     r"作为(?:一个)?AI|NVIDIA|研究人员创建|忽略(?:之前|以上|所有)(?:的)?指令)",
@@ -428,7 +433,7 @@ def sanitize_output(reply, risk_level) -> str:
             return SCRIPT_HIGH
         if risk_level == "medium":
             return SCRIPT_MEDIUM
-        return txt
+        return EMPTY_FIX
     norm = normalize(txt)
     if risk_level in ("medium", "high") and (_AFFIRM_RE.search(norm) or _BANNED_RE.search(norm)):
         return SCRIPT_HIGH if risk_level == "high" else SCRIPT_MEDIUM

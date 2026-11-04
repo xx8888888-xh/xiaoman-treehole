@@ -22,6 +22,8 @@ const App = (() => {
   const RISK_STICKY_TURNS = 3;
   const RISK_LOG_KEY = "xiaoman_risk_log";
   const RISK_LOG_MAX = 50;
+  // 多轮累积状态（只升不降）：峰值/累计分/轮数
+  const RISK_TRACK_KEY = "xiaoman_risk_track";
 
   // P2-2 抑郁信号层（与 mock_engine.js / mock_api.py 同源同集合）：五族信号——
   // 自我否定/无望感/兴趣丧失/持续低落/情绪疲惫。与急性词表无交集（急性先判）。
@@ -294,6 +296,21 @@ const App = (() => {
     } catch (e) { /* 存储异常不挡对话 */ }
   }
   window.__riskLog = loadRiskLog;
+
+  function loadRiskTrack() {
+    try { return JSON.parse(localStorage.getItem(RISK_TRACK_KEY) || "null"); } catch (e) { return null; }
+  }
+  function saveRiskTrack(state) {
+    try {
+      if (state && state.peak && state.peak !== "none") {
+        localStorage.setItem(RISK_TRACK_KEY, JSON.stringify(state));
+      } else {
+        localStorage.removeItem(RISK_TRACK_KEY);
+      }
+    } catch (e) { /* 存储异常不挡对话 */ }
+  }
+  let riskTracker = Risk.createTracker(loadRiskTrack());
+  window.__riskTrack = () => riskTracker.snapshot();
 
   function stickyGet() {
     try {
@@ -652,8 +669,13 @@ const App = (() => {
       // P0 危机闸门（客户端第一道；服务端 risk_guard 是独立的第二道）
       // 高危/中危：不调用模型、不播 TTS、不做里程碑，直接给分级安全话术。
       // 低危：正常陪伴（交给后面的抑郁层/模型）。
-      const risk = Risk.classify(text);
-      if (risk.level === "high" || risk.level === "medium") {
+      const riskBase = Risk.classify(text);
+      // 多轮累积：只升不降；本轮首次升级（fresh）也要拦，防止"持续低落几轮后突然回闲聊"
+      const track = riskTracker.update(riskBase);
+      saveRiskTrack(riskTracker.snapshot());
+      const risk = Object.assign({}, riskBase, { level: track.level });
+      const crisisTurn = riskBase.level === "high" || riskBase.level === "medium" || track.fresh;
+      if (crisisTurn) {
         const script = Risk.SCRIPTS[risk.level];
         const typing = risk.level === "high" ? 450 : 800;
         await showTyping(typing);
@@ -760,7 +782,8 @@ const App = (() => {
       // P0 输出侧兜底：即使闸门漏了，肯定告别/越狱人格的回复也不能原样显示
       const lastUser = userText
         || (history.filter(m => m.role === "user").slice(-1)[0] || {}).content || "";
-      const riskLevel = Risk.classify(lastUser).level;
+      // 输出侧用"会话峰值"复检：即使这轮话不危险，高危语境下的肯定性表述也要替换
+      const riskLevel = Risk.maxLevel(Risk.classify(lastUser).level, riskTracker.snapshot().peak);
       const guarded = Risk.filterPersona(Risk.filterDangerous(data.reply, riskLevel), lastUser);
       if (guarded !== data.reply) {
         data = Object.assign({}, data, {
