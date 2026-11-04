@@ -498,10 +498,21 @@ const App = (() => {
   }
   window.__onDegrade = showDegrade;
 
+  // 语音不可用：不出声，但文字照常显示；只给一条可关闭的安静提示（不弹窗）
+  function showVoiceTip() {
+    try { if (sessionStorage.getItem("xiaoman_voice_tip_off") === "1") return; } catch (e) {}
+    const tip = $("voiceTip");
+    if (tip) tip.classList.remove("hidden");
+  }
+  window.__onVoiceUnavailable = showVoiceTip;
+
   // ---------- 渲染 ----------
-  function addMsg(text, who, opts = {}) {
-    // [probe] 渲染探针（logcat tag=XiaoManWeb）：只记方向与长度，不落内容（CI 验证迷你窗聊天链路）
-    try { console.log("[probe] msg " + who + " len=" + String(text == null ? "" : text).length); } catch (e) {}
+  // 长会话分页交给 ChatPager（chat_pager.js）：DOM 只保留当前页 + 缓冲，
+  // 这里只负责「一条记录 → 一个节点」的构造，重建时可重放（含语音标记）。
+  function buildRow(rec) {
+    const text = rec.text;
+    const who = rec.who;
+    const opts = rec.opts || {};
     const row = document.createElement("div");
     row.className = `msg-row ${who}`;
     if (opts.crisis) {
@@ -537,7 +548,7 @@ const App = (() => {
       const bubble = document.createElement("div");
       bubble.className = `bubble ${who}`;
       bubble.textContent = text;
-      if (opts.voice) {
+      if (opts.voice || rec.spoken) {
         const meta = document.createElement("span");
         meta.className = "meta";
         meta.textContent = "🔊 语音已播";
@@ -545,28 +556,13 @@ const App = (() => {
       }
       row.appendChild(bubble);
     }
-    $("typingRow").before(row);
-    windowTimeline();
-    $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
     return row;
   }
 
-  // 红队 P1-7：200 轮后 DOM 会堆到几百行。保留最近 WINDOW_MAX_ROWS 行，
-  // 更早的从 DOM 移除（完整记录仍在 IndexedDB，可导出），并在顶部留一条说明。
-  const WINDOW_MAX_ROWS = 80;
-  function windowTimeline() {
-    const parent = $("typingRow") && $("typingRow").parentElement;
-    if (!parent) return;
-    const oldTip = parent.querySelector(".window-tip");
-    if (oldTip) oldTip.remove();
-    const rows = [...parent.querySelectorAll(".msg-row")];
-    if (rows.length <= WINDOW_MAX_ROWS) return;
-    const cut = rows.length - WINDOW_MAX_ROWS;
-    for (let i = 0; i < cut; i++) rows[i].remove();
-    const tip = document.createElement("div");
-    tip.className = "msg-row window-tip";
-    tip.textContent = "更早的消息已收起 · 可在设置里导出完整记录";
-    parent.insertBefore(tip, rows[cut] || null);
+  function addMsg(text, who, opts = {}) {
+    // [probe] 渲染探针（logcat tag=XiaoManWeb）：只记方向与长度，不落内容（CI 验证迷你窗聊天链路）
+    try { console.log("[probe] msg " + who + " len=" + String(text == null ? "" : text).length); } catch (e) {}
+    return ChatPager.push({ text, who, opts });
   }
 
   function renderMem() {
@@ -872,16 +868,14 @@ const App = (() => {
       // 语音（只念最后一条短消息，避免长篇朗读）
       if (limitedParts.length) {
         const spoken = limitedParts[limitedParts.length - 1].replace(/[\uFF0C。！？~…]+$/g, "");
-        TTS.speak(spoken, Stage.lipFrame.bind(Stage), () => {
-          // 播放完成后在最后一条气泡标记语音已播（用 addMsg 返回的行引用，避免命中 typingRow）
-          const bubble = lastRow && lastRow.querySelector(".bubble");
-          if (bubble && !bubble.querySelector(".meta")) {
-            const meta = document.createElement("span");
-            meta.className = "meta";
-            meta.textContent = "🔊 语音已播";
-            bubble.appendChild(meta);
-          }
+        // speak 返回 { spoke, provider }：没出声只静默给提示，文字早已在屏幕上
+        const done = TTS.speak(spoken, Stage.lipFrame.bind(Stage), () => {
+          // 播放完成后在最后一条气泡标记语音已播（句柄写回记录，滑出窗口再回来也不丢）
+          ChatPager.markVoice(lastRow);
         });
+        if (done && typeof done.then === "function") {
+          done.then(res => { if (res && res.spoke === false) showVoiceTip(); }).catch(() => {});
+        }
       }
 
       // 留存钩子
@@ -1078,6 +1072,10 @@ const App = (() => {
       $("degradeBadge").classList.add("hidden");
       try { sessionStorage.setItem("xiaoman_degrade_off", "1"); } catch (e) {}
     });
+    $("voiceTipClose") && ($("voiceTipClose").onclick = () => {
+      $("voiceTip").classList.add("hidden");
+      try { sessionStorage.setItem("xiaoman_voice_tip_off", "1"); } catch (e) {}
+    });
     // 排队提示：再试一次 / 本次不再提醒
     $("pendingRetry") && ($("pendingRetry").onclick = () => retryPending());
     $("pendingClose") && ($("pendingClose").onclick = () => {
@@ -1119,7 +1117,7 @@ const App = (() => {
       $("cfgApi").value = cfg.apiBase || "";
       $("cfgApiKey").value = API.getApiKey();
       $("cfgModel").value = cfg.model || "";
-      $("cfgTtsBase").value = cfg.ttsBase || "";
+      $("cfgTtsBase").value = cfg.ttsServer || "";
       $("cfgTts").value = cfg.tts || "server";
       $("cfgVoice").value = cfg.voice || "zh-CN-XiaoyiNeural";
       $("cfgRate").value = cfg.ttsRate || "normal";
@@ -1137,6 +1135,7 @@ const App = (() => {
           apiBase: $("cfgApi").value.trim(),
           model: $("cfgModel").value.trim(),
           ttsBase: $("cfgTtsBase").value.trim(),
+          ttsServer: $("cfgTtsBase").value.trim(),   // 远程语音显式启用（默认关闭）
           tts: $("cfgTts").value,
           voice: $("cfgVoice").value,
           ttsRate: $("cfgRate").value
@@ -1266,6 +1265,16 @@ const App = (() => {
     try {
       bind(); console.log("[probe] bind ok ms=" + Math.round(performance.now()));
     } catch (e) { console.error("[probe] BIND_FAIL", e.message); return; }
+
+    // 1.5) 长会话分页窗口：只渲染当前页 + 缓冲（200 轮后 DOM 仍为常数）
+    try {
+      ChatPager.mount({
+        host: $("messages"),
+        typing: $("typingRow"),
+        scroll: $("chatScroll"),
+        build: buildRow
+      });
+    } catch (e) { console.warn("[probe] PAGER_FAIL", e.message); }
 
     // 2) 服务端默认配置改为非阻塞：慢网/离线时不再拖住首屏
     API.bootstrap().catch(e => console.warn("[probe] BOOTSTRAP_FAIL", e.message));
