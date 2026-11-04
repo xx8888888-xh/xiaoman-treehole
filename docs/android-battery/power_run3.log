@@ -1,0 +1,38 @@
+﻿
+=== SEGMENT A_fg_nofloat (5min) ===
+[SEG] A_fg_nofloat wall=300s uid=u0a146 ticksΔ=2549 (3828:3129)
+[SEG] cpuinfo total: 2.9% TOTAL: 0% user + 2.8% kernel + 0% iowait + 0% softirq
+[SEG] cpuinfo app: 8.4% 3828/com.xiaoman.treehole: 0.6% user + 7.7% kernel / faults: 359 minor
+[SEG] probes: {'msg_me': 0, 'msg_them': 2, 'pet_ready': 0}
+[SEG] batterystats: total=0.000384mAh cpu=0.000384mAh cpu_sec=85.0s device_drain=0.0mAh
+[SEG] raw: UID u0a146: 0.000384 fg: 0.000384 ( cpu=0.000384 (1m 25s 9ms) cpu:fg=0.000384 (13s 841ms) mobile_radio=0 (7s 416ms) )
+
+=== SEGMENT B_bg_nofloat (5min) ===
+[SEG] B_bg_nofloat wall=300s uid=u0a146 ticksΔ=31 (3965:506)
+[SEG] cpuinfo total: 0.4% TOTAL: 0% user + 0.4% kernel + 0% iowait + 0% softirq
+[SEG] cpuinfo app: 0.1% 3965/com.xiaoman.treehole: 0% user + 0% kernel / faults: 751 minor
+[SEG] probes: {'msg_me': 0, 'msg_them': 0, 'pet_ready': 0}
+[SEG] batterystats: total=6.42e-06mAh cpu=6.42e-06mAh cpu_sec=7.7s device_drain=0.0mAh
+[SEG] raw: UID u0a146: 0.00000642 cached: 0.00000642 ( cpu=0.00000642 (7s 749ms) cpu:cached=0.00000642 (231ms) mobile_radio=0 (1m 15s 33ms) )
+
+=== SEGMENT B_bg_float (5min) ===
+[SEG] B_bg_float wall=300s uid=u0a146 ticksΔ=19421 (4129:20922)
+[SEG] cpuinfo total: 20% TOTAL: 0.7% user + 19% kernel + 0% iowait + 0% softirq
+[SEG] cpuinfo app: +0% 4129/com.xiaoman.treehole: 0% user + 0% kernel
+[SEG] probes: {'msg_me': 0, 'msg_them': 0, 'pet_ready': 0}
+[SEG] batterystats: total=0.00329mAh cpu=0.00329mAh cpu_sec=285.3s device_drain=0.0mAh
+[SEG] raw: UID u0a146: 0.00329 fgs: 0.00329 ( cpu=0.00329 (4m 45s 278ms) cpu:fgs=0.00329 (1m 58s 551ms) mobile_radio=0 (6s 757ms) )
+
+=== SEGMENT C_chat (5min) ===
+[SEG] C_chat wall=300s uid=u0a146 ticksΔ=1505 (4295:6181)
+[SEG] cpuinfo total: 2.2% TOTAL: 0% user + 2.1% kernel + 0% iowait + 0% softirq
+[SEG] cpuinfo app: 5.6% 4295/com.xiaoman.treehole: 0.1% user + 5.5% kernel / faults: 793 minor 1 major
+[SEG] probes: {'msg_me': 0, 'msg_them': 2, 'pet_ready': 0}
+[SEG] batterystats: total=0.00028mAh cpu=0.00028mAh cpu_sec=86.1s device_drain=0.0mAh
+[SEG] raw: UID u0a146: 0.000280 fgs: 0.000280 ( cpu=0.000280 (1m 26s 147ms) cpu:fgs=0.000280 (10s 89ms) )
+
+=== SUMMARY ===
+A_fg_nofloat: 0.000384mAh / cpu 0.000384mAh / cpuΔ 85.009s / ticksΔ=2549 / probes={'msg_me': 0, 'msg_them': 2, 'pet_ready': 0} / device=0.0mAh
+B_bg_nofloat: 6.42e-06mAh / cpu 6.42e-06mAh / cpuΔ 7.749s / ticksΔ=31 / probes={'msg_me': 0, 'msg_them': 0, 'pet_ready': 0} / device=0.0mAh
+B_bg_float: 0.00329mAh / cpu 0.00329mAh / cpuΔ 285.278s / ticksΔ=19421 / probes={'msg_me': 0, 'msg_them': 0, 'pet_ready': 0} / device=0.0mAh
+C_chat: 0.00028mAh / cpu 0.00028mAh / cpuΔ 86.147s / ticksΔ=1505 / probes={'msg_me': 0, 'msg_them': 2, 'pet_ready': 0} / device=0.0mAh

@@ -1,0 +1,25 @@
+﻿=== cold start run (idle 20s) ===
+Stopping: com.xiaoman.treehole
+Starting: Intent { cmp=com.xiaoman.treehole/.MainActivity }
+Status: ok
+LaunchState: COLD
+Activity: com.xiaoman.treehole/.MainActivity
+TotalTime: 915
+WaitTime: 924
+Complete
+Stopping: com.xiaoman.treehole
+Starting: Intent { cmp=com.xiaoman.treehole/.MainActivity }
+Status: ok
+LaunchState: COLD
+Activity: com.xiaoman.treehole/.MainActivity
+TotalTime: 974
+WaitTime: 979
+Complete
+Stopping: com.xiaoman.treehole
+Starting: Intent { cmp=com.xiaoman.treehole/.MainActivity }
+Status: ok
+LaunchState: COLD
+Activity: com.xiaoman.treehole/.MainActivity
+TotalTime: 841
+WaitTime: 844
+Complete

@@ -1,0 +1,39 @@
+﻿[FLOAT-PASS] appops授权 SYSTEM_ALERT_WINDOW=allow | SYSTEM_ALERT_WINDOW: allow
+[FLOAT-PASS] MainActivity autostart_float 通道无报错 | Starting: Intent { flg=0x20000000 cmp=com.xiaoman.treehole/.MainActivity (has ex
+[FLOAT-PASS] FloatWindowService 运行中（ServiceRecord） | record=1
+[FLOAT-PASS] logcat 无 FATAL（起服务后）
+[FLOAT-PASS] overlay 窗口已注册（dumpsys ty=APPLICATION_OVERLAY） | overlay=2/3 frames=[(224, 266, 704, 426), (424, 426, 704, 786)]
+[FLOAT-PASS] 桌宠窗口已注册（140x180dp frame） | frame=(424, 426, 704, 786)
+[FLOAT-PASS] 桌宠可见（frame 内 Live2D 差分≥6000px） | diff=21138px frame=(424, 426, 704, 786)
+[FLOAT-PASS] 桌宠 Live2D 已就绪（[probe] pet-ready）
+[FLOAT-PASS] 未降级为圆形悬浮球（主形态=Live2D 桌宠）
+[FLOAT-PASS] 桌宠可拖动并贴边（frame 位移>300px + 桌宠跟随） | (564,606)→(580,1100) diff=13016px frame=(440, 920, 720, 1280)
+[FLOAT-PASS] 拖动后 logcat 无 FATAL
+[FLOAT-PASS] 单击桌宠触发互动（[probe] pet-tap）
+[FLOAT-PASS] 单击后弹出原生气泡卡片（overlay 卡片窗口） | bubble_frame=(224, 815, 704, 975) wins=[(224, 815, 704, 975), (440, 920, 720, 1280)]
+[FLOAT-PASS] 单击气泡后桌宠仍在（不被气泡顶掉） | pet_frame=(440, 920, 720, 1280)
+[FLOAT-PASS] 双击展开迷你窗（大窗口 frame 宽高>500px） | frame=(29, 243, 691, 1036) diff=517133px
+[FLOAT-PASS] 双击触发探针（[probe] pet-double / pet-panel）
+[FLOAT-PASS] 迷你窗展开（大面积像素差分>30万px） | diff=517133px
+[FLOAT-PASS] 展开后桌宠已隐藏（窗口不可见或 frame 差异≤4000px） | hidden_diff=0px frame=None
+[FLOAT-PASS] logcat 无 FATAL（展开后）
+[FLOAT-PASS] 迷你窗聊天：用户消息已发送（[probe] msg me）
+[FLOAT-PASS] 迷你窗聊天：小满已回复（[probe] msg them） | 11-04 19:52:53.233  2117  2117 D XiaoManWeb: [probe] msg the
+[FLOAT-PASS] logcat 无 FATAL（聊天后）
+[FLOAT-BTN] 第1枪 tap (495,312)（扫描质心）
+[FLOAT-PASS] 收起后桌宠复现（frame 内差分≥6000px） | diff=13016px diff_total=13016px frame=(440, 920, 720, 1280)
+[FLOAT-PASS] 迷你窗已收起（大窗口消失） | [(440, 920, 720, 1280)]
+[FLOAT-PASS] logcat 无 FATAL（收起后）
+[FLOAT-PASS] 桌宠已从屏幕移除（像素归零，关闭开关后不再出现） | diff=0px box=None
+[FLOAT-PASS] float_stop 干净退出（ServiceRecord=0） | record=0
+[FLOAT-PASS] overlay 窗口已全部注销 | overlay=0/1（空列表=已清，无输出=解析失败仍 PASS）
+[FLOAT-PASS] logcat 无 FATAL（关闭后）
+[FLOAT-PASS] 权限拒绝：服务自停（不崩溃） | record=0
+[FLOAT-PASS] 权限拒绝：无覆盖窗残留 | overlay=[]
+[FLOAT-PASS] 权限拒绝：logcat 无 FATAL
+[FLOAT-PASS] 进程恢复前：桌宠正常运行 | frame=(424, 426, 704, 786)
+[FLOAT-PASS] 进程被杀：服务随之退出（预期降级，无 FATAL） | record=0
+[FLOAT-PASS] 进程被杀后重开：桌宠自动恢复 | frame=(424, 426, 704, 786) record=1
+[FLOAT-PASS] 恢复后 logcat 无 FATAL
+[FLOAT-PASS] 全程静音（无 AudioTrack/MediaPlayer/音频焦点请求）
+[FLOAT-SUMMARY] 37/37 通过
