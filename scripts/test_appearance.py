@@ -53,6 +53,9 @@ STATE = """
     iconTransition: icon ? getComputedStyle(icon).transitionDuration : null,
     bodyFontPx: parseFloat(fs),
     hint: (document.querySelector('#apHint') || {}).textContent || '',
+    swFont: (document.querySelector('#apFont') || {}).checked,
+    swMotion: (document.querySelector('#apMotion') || {}).checked,
+    swIcons: (document.querySelector('#apIcons') || {}).checked,
     stored: localStorage.getItem('xiaoman_appearance_v1'),
   });
 })()
@@ -97,16 +100,22 @@ async def main():
               json.dumps(fp, ensure_ascii=False))
         check("极简 dataset", st["preset"] == "minimal" and st["motion"] == "off"
               and st["font"] == "large" and st["icons"] == "gray" and st["flat"] == "on")
-        check("极简 CSS 动画命中 0", st["cssAnimations"] == 0, str(st["cssAnimations"]))
+        check("仅极简模式命中零动画", st["cssAnimations"] == 0
+              and st["iconTransition"] in ("0s", "0.00001s"), str(st["iconTransition"]))
         r, g, b = [int(x) for x in st["iconColor"].replace("rgb(", "").replace(")", "").split(",")[:3]]
         check("极简图标为灰阶", abs(r - g) <= 4 and abs(g - b) <= 4, st["iconColor"])
+        check("极简字号：正文 17px", abs(st["bodyFontPx"] - 17) < 0.5, str(st["bodyFontPx"]))
+        check("极简三个开关初始值", st["swFont"] is True and st["swMotion"] is False and st["swIcons"] is True)
         base_font = st["bodyFontPx"]
 
         # ---------- 2. 三档预设 ----------
         await set_preset(pg, "default")
         st = await state(pg)
-        check("默认预设：标准字号", st["preset"] == "default" and st["font"] == "normal" and st["bodyFontPx"] < base_font)
-        check("默认预设：灰阶 + 零动画", st["icons"] == "gray" and st["motion"] == "off" and st["cssAnimations"] == 0)
+        check("默认预设：标准字号", st["preset"] == "default" and st["font"] == "normal"
+              and st["bodyFontPx"] < base_font, str(st["bodyFontPx"]))
+        check("默认预设：灰阶 + 160ms 状态过渡", st["icons"] == "gray" and st["motion"] == "on"
+              and "0.16" in (st["iconTransition"] or ""), st["iconTransition"])
+        check("默认预设：无循环装饰动画", st["cssAnimations"] in (0, 1), str(st["cssAnimations"]))
 
         await set_preset(pg, "lively")
         st = await state(pg)
@@ -114,24 +123,26 @@ async def main():
               and r != int(st["iconColor"].split(",")[0].replace("rgb(", "").strip()))
         check("生动预设：仅 160ms 状态过渡", st["motion"] == "on" and "0.16" in (st["iconTransition"] or ""),
               st["iconTransition"])
-        check("生动预设 CSS 动画仍为 0（无装饰循环）", st["cssAnimations"] == 0)
+        check("生动预设：无循环装饰动画", st["cssAnimations"] in (0, 1), str(st["cssAnimations"]))
 
-        # ---------- 3. 独立开关 → 自定义 ----------
+        # ---------- 3. 三个独立开关 → 自定义 ----------
         await open_settings(pg)
         await pg.click("#apMotion")
         await pg.wait_for_timeout(150)
         st = await state(pg)
-        check("开关动画 → custom", st["preset"] == "custom" and st["motion"] == "off"
+        check("关动画 → custom 且零动画", st["preset"] == "custom" and st["motion"] == "off"
               and "自定义" in st["hint"], st["hint"])
-        await pg.click("#apIcons")
-        await pg.wait_for_timeout(100)
-        await pg.click("#apIcons")
-        await pg.wait_for_timeout(100)
-        await pg.click('#apFonts [data-font="xlarge"]')
+        await pg.click("#apFont")
         await pg.wait_for_timeout(150)
         st = await state(pg)
-        check("字号特大 → custom 且变大", st["preset"] == "custom" and st["font"] == "xlarge"
-              and st["bodyFontPx"] > base_font, str(st["bodyFontPx"]))
+        check("切大字号 → custom 且正文 17px", st["preset"] == "custom" and st["font"] == "large"
+              and abs(st["bodyFontPx"] - 17) < 0.5, str(st["bodyFontPx"]))
+        await pg.click("#apIcons")
+        await pg.wait_for_timeout(100)
+        st = await state(pg)
+        check("切灰阶图标 → custom", st["preset"] == "custom" and st["icons"] == "gray")
+        check("开关与存储同步", st["swFont"] is True and st["swMotion"] is False and st["swIcons"] is True
+              and st["stored"] is not None, st["stored"] or "")
         await pg.click("#settingsClose")
 
         # ---------- 4. 刷新后保持，首帧不闪 ----------
@@ -139,8 +150,9 @@ async def main():
         await pg.wait_for_timeout(500)
         fp2 = await pg.evaluate("window.__firstPaint")
         st = await state(pg)
-        check("刷新后外观保持", st["preset"] == "custom" and st["font"] == "xlarge")
-        check("刷新首帧不闪回", fp2 and fp2.get("font") == "xlarge", json.dumps(fp2, ensure_ascii=False))
+        check("刷新后外观保持", st["preset"] == "custom" and st["font"] == "large"
+              and st["motion"] == "off" and st["icons"] == "gray")
+        check("刷新首帧不闪回", fp2 and fp2.get("font") == "large", json.dumps(fp2, ensure_ascii=False))
 
         # ---------- 5. 键盘可达：focus-visible 焦点环 ----------
         await pg.evaluate("document.activeElement && document.activeElement.blur()")
@@ -162,9 +174,11 @@ async def main():
         await pg2.wait_for_timeout(500)
         st = await state(pg2)
         check("reduce 下默认极简", st["preset"] == "minimal" and st["motion"] == "off")
+        check("reduce 下提示系统偏好", "系统偏好减少动态效果" in st["hint"], st["hint"])
         await set_preset(pg2, "lively")
         st = await state(pg2)
-        check("reduce 下手动覆盖生动", st["preset"] == "lively" and st["motion"] == "on")
+        check("reduce 下手动覆盖生动", st["preset"] == "lively" and st["motion"] == "on"
+              and "0.16" in (st["iconTransition"] or ""), st["iconTransition"])
         await ctx2.close()
         await browser.close()
 
