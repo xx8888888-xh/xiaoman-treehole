@@ -812,23 +812,27 @@ async def main():
 
             # j-4 急性优先+关怀卡边界小字（危机层先于抑郁层；卡底部固定 AI 边界声明）
             # 注：j-2 转介话术已含 12356，全量匹配会旧文早退——必须等 CARE_SCRIPT 专属标记
-            n_e = await pg5.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
             await pg5.fill("#textInput", "我不想活了")
             await pg5.click("#sendBtn")
             # w1 多轮累积只升不降：同上下文第 4 次危机表述会升到高危档（这是预期行为），
             # 高危话术先问安全，不含中危那句；两档都接受，但都必须给 12356。
-            # 注意 w3 分页后 DOM 只保留最近 14 行，旧写法 slice(n_e) 会取空 → 改看最后 4 行。
-            await pg5.wait_for_timeout(1500)
-            t5 = await pg5.evaluate(
-                "() => [...document.querySelectorAll('#messages .msg-row.them')].slice(-4).map(r => r.textContent).join('|')")
-            card_j = await pg5.evaluate(
-                """() => {
-                  const c = document.querySelector('.care-card');
-                  const b = c ? c.querySelector('.ai-boundary') : null;
-                  return { card: !!c, boundary: b ? b.textContent : '' };
-                }""")
-            ok_j4 = (card_j["card"] and ("值得被认真对待" in t5 or "你现在安全吗" in t5)
-                     and "12356" in t5 and "AI" in card_j["boundary"]
+            # 关怀卡走 ChatPager 分页重建，不能再靠「them 行号切片」取样；直接轮询卡内容
+            card_j = {"card": False, "text": "", "boundary": ""}
+            end_j = time.time() + 18
+            while time.time() < end_j:
+                card_j = await pg5.evaluate(
+                    """() => {
+                      const c = document.querySelector('.care-card');
+                      const b = c ? c.querySelector('.ai-boundary') : null;
+                      return { card: !!c, text: c ? c.textContent : '', boundary: b ? b.textContent : '' };
+                    }""")
+                if card_j["card"] and ("值得被认真对待" in card_j["text"] or "你现在安全吗" in card_j["text"]) \
+                        and "12356" in card_j["text"]:
+                    break
+                await asyncio.sleep(0.5)
+            ok_j4 = (card_j["card"]
+                     and ("值得被认真对待" in card_j["text"] or "你现在安全吗" in card_j["text"])
+                     and "12356" in card_j["text"] and "AI" in card_j["boundary"]
                      and "真人的帮助" in card_j["boundary"] and not err_j)
             print("⑦j-4 急性优先+关怀卡边界小字:", "PASS" if ok_j4 else f"FAIL {card_j} err={err_j}")
             check("⑦j-4 急性优先+关怀卡边界小字", ok_j4)

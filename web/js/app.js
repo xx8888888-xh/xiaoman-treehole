@@ -1468,19 +1468,59 @@ const App = (() => {
     // P2-4 悬浮挂件：收起按钮 + 点挂件展开（widget.js 内部绑定 stage 点击）
     if (window.Widget) Widget.bind();
 
-    // 悬浮窗设置（仅 Android 壳内显示：桥上挂了 floatGranted 才露出入口）
+    // 主 App 可见性心跳：桌宠页据此让位提醒，避免主程序与悬浮窗重复弹气泡
+    // 原生 onResume/onPause 调 __appVisibility；页面不可见 90s 后桌宠自动接手
+    try {
+      const PRESENCE_KEY = "xiaoman_app_visible_v1";
+      let appVisible = !document.hidden;
+      const touchPresence = () => {
+        if (!appVisible) return;
+        try { localStorage.setItem(PRESENCE_KEY, String(Date.now())); } catch (e) {}
+      };
+      window.__appVisibility = (v) => {
+        appVisible = !!v;
+        try {
+          if (appVisible) touchPresence();
+          else localStorage.removeItem(PRESENCE_KEY);
+        } catch (e) {}
+      };
+      touchPresence();
+      setInterval(touchPresence, 15000);
+      document.addEventListener("visibilitychange", () => window.__appVisibility(!document.hidden));
+      window.addEventListener("pagehide", () => { try { localStorage.removeItem(PRESENCE_KEY); } catch (e) {} });
+    } catch (e) { console.warn("[probe] PRESENCE_FAIL", e.message); }
+
+    // 悬浮小满桌宠（仅 Android 壳内显示：桥上挂了 floatGranted 才露出入口）
     try {
       if (window.AndroidTTS && typeof window.AndroidTTS.floatGranted === "function") {
         $("floatField").hidden = false;
-        $("floatOpenBtn").onclick = () => {
+        const PENDING_KEY = "xiaoman_float_pending_v1";
+        const startFloat = () => {
           if (window.AndroidTTS.floatGranted()) {
-            toast(window.AndroidTTS.floatShow() ? "小满来了——拖动小球，点一下就能聊" : "启动失败，请重试");
+            let ok = false;
+            try { ok = !!window.AndroidTTS.floatShow(); } catch (e) { ok = false; }
+            toast(ok ? "小满已经在桌面上了——单击互动，双击聊天" : "启动失败，请检查「显示在其他应用上层」权限");
+            try { sessionStorage.removeItem(PENDING_KEY); } catch (e) {}
           } else {
-            toast("请先允许「显示在其他应用上层」");
+            toast("请先允许「显示在其他应用上层」，授权后回来即可开启");
+            try { sessionStorage.setItem(PENDING_KEY, "1"); } catch (e) {}
             window.AndroidTTS.floatOpenSettings();
           }
         };
-        $("floatCloseBtn").onclick = () => { window.AndroidTTS.floatHide(); toast("悬浮窗已关闭"); };
+        // 从系统授权页返回时自动续上：只在用户主动点过开启后才触发
+        const resumePending = () => {
+          let pending = false;
+          try { pending = sessionStorage.getItem(PENDING_KEY) === "1"; } catch (e) {}
+          if (pending && window.AndroidTTS.floatGranted()) startFloat();
+        };
+        window.addEventListener("focus", resumePending);
+        document.addEventListener("visibilitychange", () => { if (!document.hidden) resumePending(); });
+        $("floatOpenBtn").onclick = startFloat;
+        $("floatCloseBtn").onclick = () => {
+          try { window.AndroidTTS.floatHide(); } catch (e) {}
+          try { sessionStorage.removeItem(PENDING_KEY); } catch (e) {}
+          toast("悬浮小满已关闭");
+        };
       }
     } catch (e) { console.warn("[probe] FLOAT_UI_FAIL", e.message); }
   }
