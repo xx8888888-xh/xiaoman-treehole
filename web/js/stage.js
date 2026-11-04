@@ -187,6 +187,8 @@ const Stage = (() => {
 
   function setEmotion(name) {
     if (!model) return;
+    // 零动画模式下 ticker 已停：表情切换后手动渲染一帧，否则画面停在旧表情
+    const renderOnce = () => { if (!motionEnabled && app) { try { app.render(); } catch (e) {} } };
     // 按 expression name 查找，避免硬编码索引（模型替换后顺序可能变）
     try {
       const names = model.expressionManager?.expressionNames || [];
@@ -205,6 +207,7 @@ const Stage = (() => {
       chip.classList.add("pop");
       setTimeout(() => chip.classList.remove("pop"), 350);
     }
+    renderOnce();
   }
 
   /** 销毁舞台：清理 resize 监听、PIXI ticker、模型资源 */
@@ -238,10 +241,10 @@ const Stage = (() => {
     }
   }
 
-  /** TTS 播放期间的口型喂入 */
+  /** TTS 播放期间的口型喂入（level 来自音频包络关键帧；<0 = 无音频，只做轻微呼吸） */
   function lipFrame(level) {
-    if (level < 0) { lipHold = 2; lipOpen = 0.3 + Math.random() * 0.3; return; } // 无分析器兜底
-    lipOpen = 0.12 + level * 0.75;
+    if (level < 0) { lipHold = 0; lipOpen = 0.02; return; }
+    lipOpen = 0.04 + level * 0.55;   // 极简模式幅度小，避免"夸张张嘴"
     lipHold = 6;
   }
 

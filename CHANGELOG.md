@@ -42,6 +42,11 @@
   edge-tts，默认 `provider=none` 时 `/tts` 回 `503 {"error":"tts_provider_unavailable"}`，
   前端静默降级、文字始终先出；镜像去掉 edge-tts 安装层，生产新增运行时依赖保持 0，
   可选后端为 `cmd` / `sherpa`（Apache-2.0，模型需自备、不内置不下载）。
+- **Live2D 口型改为「音频包络关键帧」**：不再依赖实时 `AnalyserNode`（MuMu 等环境里
+  AudioContext 被挂起、RMS 恒 0，嘴一动不动）。改为解码音频后预计算 20Hz RMS 包络，
+  播放时按 `audio.currentTime` 取帧并平滑；音频直接播放（不接 WebAudio 图），
+  避免 `createMediaElementSource` 在跨域时把声音静音。无音频数据（系统 TTS / 解码失败）
+  只做轻微呼吸，不随机张嘴。
 - 首屏渲染改为**按需加载**：PIXI + Cubism 运行时（约 900KB）串行懒加载，输入框与聊天流先可用，
   Live2D 舞台随后挂载；加载失败只降级舞台，不影响聊天。
 - 安卓 WebView 上渲染分辨率降到 1x、帧率设上限，低端机/模拟器更省电、更流畅。

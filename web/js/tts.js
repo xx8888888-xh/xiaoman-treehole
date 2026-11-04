@@ -26,6 +26,7 @@ const TTS = (() => {
   ]);
   const DEFAULT_VOICE = "zh-CN-XiaoyiNeural";
   const AUDIO_START_TIMEOUT = 7000;   // 弱网：音频 7s 还没真正开播就降级，先保住文字
+  const ENVELOPE_FRAME_MS = 50;       // 口型包络关键帧间隔（20Hz，足够 15/30fps 舞台）
 
   let currentAudio = null;
   let fakeTimer = null;      // 假包络 interval（Android/browser 路），全局唯一
@@ -118,33 +119,79 @@ const TTS = (() => {
     return VOICES.indexOf(v) >= 0 ? v : DEFAULT_VOICE;
   }
 
+  /** 纯函数：PCM 通道 → 归一化 RMS 包络（可单测，不依赖 WebAudio） */
+  function envelopeLevels(ch, frameMs) {
+    const total = Math.max(1, Math.floor(ch.length / Math.max(1, frameMs)));
+    const per = Math.max(1, Math.floor(ch.length / total));
+    const levels = new Float32Array(total);
+    let peak = 0;
+    for (let i = 0; i < total; i++) {
+      const start = i * per;
+      const end = Math.min(ch.length, start + per);
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += ch[j] * ch[j];
+      const rms = Math.sqrt(sum / Math.max(1, end - start));
+      levels[i] = rms;
+      if (rms > peak) peak = rms;
+    }
+    if (peak > 0) for (let i = 0; i < total; i++) levels[i] = Math.min(1, levels[i] / peak);
+    return levels;
+  }
+
   /**
-   * 用 AudioContext 分析音量，驱动口型
+   * 解码音频并预先算好 RMS 包络关键帧（20Hz）。
+   * 不用实时 analyser：MuMu / 部分 WebView 里 AudioContext 被挂起或采样恒 0，
+   * 实时 analyser 会让嘴一动不动；解码后的关键帧与播放进度对齐，与设备无关。
+   * 失败返回 null（调用方退到「轻微呼吸」的静态口型）。
+   */
+  async function computeEnvelope(url) {
+    const AC = typeof window !== "undefined" ? (window.AudioContext || window.webkitAudioContext) : null;
+    if (!AC) return null;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("audio " + res.status);
+    const data = await res.arrayBuffer();
+    const ctx = new AC();
+    try {
+      const buf = await ctx.decodeAudioData(data);
+      // 采样率换算：每帧采样点数 = sampleRate × (帧长 ms / 1000)
+      const perFrame = Math.max(1, Math.round((buf.sampleRate * ENVELOPE_FRAME_MS) / 1000));
+      return { levels: envelopeLevels(buf.getChannelData(0), perFrame), frameMs: ENVELOPE_FRAME_MS };
+    } finally {
+      try { ctx.close(); } catch (e) {}
+    }
+  }
+
+  /** 无音频包络时的轻微呼吸口型（静止为主，幅度很小；需求：无音频不随机张嘴） */
+  function breathLevel() {
+    const t = (typeof performance !== "undefined" ? performance.now() : Date.now()) / 1000;
+    return 0.05 + 0.04 * Math.sin(t * 2.4);
+  }
+
+  /**
+   * 播放音频并用「包络关键帧 + 播放进度」驱动口型。
+   * 音频元素直接播放（不接 WebAudio 图），避免 createMediaElementSource 在
+   * 跨域/被挂起时把声音静音。包络解码是旁路，失败只影响口型、不影响声音。
    * @param onFail 播放失败（加载/解码/自动播放被拦）时回调 —— 由调用方决定降级
    */
-  function playWithLipSync(url, onFrame, onEnd, onFail) {
-    // 关键：跨域音频若不带 CORS（crossOrigin），createMediaElementSource 会把输出
-    // 静音（analyser 全 0 采样）——表现为"有字幕没声音"。服务端 /tts 已回
-    // Access-Control-Allow-Origin: *，这里必须同步声明 anonymous。
+  function playWithEnvelope(url, onFrame, onEnd, onFail) {
     const audio = new Audio();
-    audio.crossOrigin = "anonymous";
+    audio.preload = "auto";
     audio.src = url;
     if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
     currentAudio = audio;
-    let ctx = null, analyser = null, srcNode = null, raf = 0, settled = false;
+    let raf = 0, settled = false, env = null, last = 0;
     let startTimer = 0;
     const settle = (failed) => {
       if (settled) return;
       settled = true;
       clearTimeout(startTimer);
       cancelAnimationFrame(raf);
-      if (ctx) { try { ctx.close(); } catch (e) {} }
       if (currentAudio === audio) currentAudio = null;
       if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
     };
 
     audio.onended = () => settle(false);
-    audio.onerror = () => settle(true);   // 真败因（404/解码失败/服务端无 CORS）走降级
+    audio.onerror = () => settle(true);   // 真败因（404/解码失败）走降级
 
     // 弱网兜底：请求发出但迟迟没有真正开播 → 判定失败并降级（文字已经在屏幕上了）
     startTimer = setTimeout(() => {
@@ -152,41 +199,29 @@ const TTS = (() => {
       if (!audio.currentTime && audio.readyState < 3) settle(true);
     }, AUDIO_START_TIMEOUT);
 
+    const tick = () => {
+      if (settled) return;
+      let level;
+      if (env && env.levels.length) {
+        const idx = Math.min(env.levels.length - 1, Math.floor((audio.currentTime * 1000) / env.frameMs));
+        const target = env.levels[idx] || 0;
+        last = last * 0.62 + target * 0.38;   // 起落平滑，避免嘴抖
+        level = last;
+      } else {
+        level = breathLevel();   // 解码前 / 解码失败：轻微呼吸（不随机张嘴）
+      }
+      onFrame && onFrame(level);
+      raf = requestAnimationFrame(tick);
+    };
+
     audio.play().then(() => {
       audio.onplaying = () => clearTimeout(startTimer);
-      try {
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
-        // 非用户手势下 AudioContext 可能 suspended → 全部输出为 0、嘴不动
-        if (ctx.state === "suspended") ctx.resume().catch(() => {});
-        srcNode = ctx.createMediaElementSource(audio);
-        analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        srcNode.connect(analyser); analyser.connect(ctx.destination);
-        const buf = new Uint8Array(analyser.frequencyBinCount);
-        let zeroFrames = 0;
-        (function loop() {
-          analyser.getByteFrequencyData(buf);
-          let sum = 0; for (let i = 2; i < 40; i++) sum += buf[i];
-          const level = Math.min(1, sum / (38 * 160));   // 0~1 音量包络
-          // AudioContext 被自动播放策略挂起时 analyser 会永远 0 采样：此时不能干等，
-          // 转交给舞台的随机口型兜底（-1），但**不拆音频图**（拆了会真静音）
-          zeroFrames = level === 0 ? zeroFrames + 1 : 0;
-          if (zeroFrames > 45) {
-            onFrame && onFrame(-1);
-            raf = 0;
-            return;
-          }
-          onFrame && onFrame(level);
-          raf = requestAnimationFrame(loop);
-        })();
-      } catch (e) {
-        // 分析失败就静默播，口型走兜底（-1 触发 lipFrame 的随机包络）
-        onFrame && onFrame(-1);
-      }
+      computeEnvelope(url).then(e => { env = e; }).catch(() => { env = null; });
+      tick();
     }).catch(() => settle(true));
   }
 
-  /** 纯播放（不接 WebAudio）：CORS 拿不到时仍保证"有声音"，只是没有口型同步 */
+  /** 纯播放（不接 WebAudio 图）：口型包络失败时仍保证"有声音"，只是口型只轻微呼吸 */
   function playPlain(url, onFrame, onEnd, onFail) {
     const audio = new Audio(url);
     if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
@@ -197,6 +232,7 @@ const TTS = (() => {
       if (settled) return;
       settled = true;
       clearTimeout(startTimer);
+      clearFake();
       if (currentAudio === audio) currentAudio = null;
       onFrame && onFrame(0);
       if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
@@ -207,7 +243,8 @@ const TTS = (() => {
     startTimer = setTimeout(() => {
       if (!audio.currentTime && audio.readyState < 3) settle(true);
     }, AUDIO_START_TIMEOUT);
-    onFrame && onFrame(-1);   // 没有真实包络 → 走舞台的随机口型兜底
+    clearFake();
+    fakeTimer = setInterval(() => onFrame && onFrame(breathLevel()), 90);
     audio.play().catch(() => settle(true));
   }
 
@@ -230,7 +267,8 @@ const TTS = (() => {
       };
       u.onend = finish;
       u.onerror = finish;
-      fakeTimer = setInterval(() => onFrame && onFrame(0.4 + Math.random() * 0.3), 90);
+      // 拿不到音频数据（系统 TTS 在原生层播放）：只给轻微呼吸，不假装在说话
+      fakeTimer = setInterval(() => onFrame && onFrame(breathLevel()), 90);
       // 某些 WebView / 未装中文语音包时不会回调 onend：按时长估算兜底，避免口型一直动
       fakeStopTimer = setTimeout(finish, Math.max(1800, text.length * 190));
       window.speechSynthesis.speak(u);
@@ -252,7 +290,8 @@ const TTS = (() => {
       const ok = bridge.speakRate ? bridge.speakRate(text, r) : bridge.speak(text);
       if (!ok) return false;
       clearFake();
-      fakeTimer = setInterval(() => onFrame && onFrame(0.35 + Math.random() * 0.35), 90);
+      // 原生 TTS 音频无法取到：轻微呼吸，不做随机张嘴
+      fakeTimer = setInterval(() => onFrame && onFrame(breathLevel()), 90);
       let settled = false;
       const done = () => {
         if (settled) return;            // 原生回调与兜底定时器只结算一次，避免 onEnd 重复
@@ -296,7 +335,7 @@ const TTS = (() => {
     }
     const cleanup = () => { try { URL.revokeObjectURL(blobUrl); } catch (e) {} };
     // server 路失败（解码失败/跨域被拦）→ 先尝试无口型的纯播放，再降级 browser
-    playWithLipSync(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(); }, () => {
+    playWithEnvelope(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(); }, () => {
       console.info("server tts 口型链路失败，尝试纯播放");
       playPlain(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(); }, () => {
         console.info("server tts 纯播放失败，降级本机语音");
@@ -394,7 +433,7 @@ const TTS = (() => {
     done();
   }
 
-  return {
+  const api = {
     speak,
     stop,
     /** 当前会使用的 provider（便于设置页/自检显示） */
@@ -403,6 +442,11 @@ const TTS = (() => {
     chain: (cfg) => providerChain(cfg || loadCfg()),
     providers: Object.keys(PROVIDERS),
     voices: VOICES,
-    defaultVoice: DEFAULT_VOICE
+    defaultVoice: DEFAULT_VOICE,
+    /** 单测入口：包络关键帧纯函数与帧长 */
+    _envelopeLevels: envelopeLevels,
+    _frameMs: ENVELOPE_FRAME_MS
   };
+  if (typeof module === "object" && module.exports) module.exports = api;
+  return api;
 })();
