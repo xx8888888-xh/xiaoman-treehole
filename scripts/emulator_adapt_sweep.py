@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
 emulator_adapt_sweep.py · AVD 适配横扫（P2 适配收口）
@@ -94,6 +94,18 @@ class Cdp:
         return target["url"]
 
     def eval(self, js, timeout=20):
+        """掉线自动重连（配置变更/键盘弹出可能让 devtools 连接断开）。"""
+        try:
+            return self._eval(js, timeout)
+        except Exception:
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.attach()
+            return self._eval(js, timeout)
+
+    def _eval(self, js, timeout=20):
         self.n += 1
         mid = self.n
         self.ws.send(json.dumps({"id": mid, "method": "Runtime.evaluate",
@@ -157,12 +169,15 @@ def restore():
     sh("adb shell settings put system font_scale 1.0")
     sh("adb shell cmd uimode night no")
     sh("adb shell settings put system accelerometer_rotation 1")
-    sh("adb shell cmd overlay disable --category com.android.internal.display.cutout.emulation.double")
+    sh("adb shell cmd overlay disable com.android.internal.display.cutout.emulation.double")
     sh("adb shell input keyevent 3")
     time.sleep(2)
 
 
 def main():
+    sh("adb shell cmd overlay disable com.android.internal.display.cutout.emulation.double")
+    sh(f"adb shell am force-stop {PKG}")
+    time.sleep(1)
     sh(f"adb shell am start -n {MAIN} -f 0x20000000")
     time.sleep(8)
     cdp = Cdp()
@@ -232,8 +247,7 @@ def main():
     if cut:
         sh("adb shell cmd overlay enable-exclusive --category com.android.internal.display.cutout.emulation.double")
         time.sleep(1)
-        sh(f"adb shell am start -n {MAIN} -f 0x20000000")
-        sh("adb shell am force-stop " + PKG)
+        sh(f"adb shell am force-stop " + PKG)
         time.sleep(1)
         sh(f"adb shell am start -n {MAIN} -f 0x20000000")
         time.sleep(8)
@@ -245,7 +259,7 @@ def main():
         # 顶部应出现 letterbox 黑边（内容不得进入挖孔区）
         check("刘海屏模拟：布局未压到挖孔区且输入栏可见",
               p["inputVisible"], f"viewport={p['vw']}x{p['vh']} input={p['inputRect']}")
-        sh("adb shell cmd overlay disable --category com.android.internal.display.cutout.emulation.double")
+        sh("adb shell cmd overlay disable com.android.internal.display.cutout.emulation.double")
         time.sleep(1)
         sh(f"adb shell am start -n {MAIN} -f 0x20000000")
         time.sleep(6)
@@ -256,26 +270,58 @@ def main():
         check("刘海屏模拟：系统无 cutout 模拟 overlay（跳过）", True,
               "cmd overlay list 无 display.cutout.emulation.double")
 
-    # 键盘弹出
+    # 键盘弹出（CDP 给的是 CSS px，需按 devicePixelRatio 折算成物理坐标才能点中）
     p = probe(cdp)
     ir = p["inputRect"]
-    sh(f"adb shell input tap {p['vw'] // 2} {ir['top'] + 10}")
-    time.sleep(2)
+    dpr = p["dpr"] or 1
+    tx = int(((ir["left"] + ir["right"]) / 2) * dpr)
+    ty = int(((ir["top"] + ir["bottom"]) / 2) * dpr)
+    ime_shown = False
+    p2 = p
+    for attempt in range(3):
+        sh(f"adb shell input tap {tx} {ty}")
+        for _ in range(10):
+            time.sleep(0.5)
+            _, ime = sh("adb shell dumpsys input_method")
+            if "mInputShown=true" in ime or "isInputViewShown=true" in ime:
+                ime_shown = True
+                break
+        if ime_shown:
+            break
+        time.sleep(1)
     p2 = probe(cdp)
-    _, ime = sh("adb shell dumpsys input_method")
-    ime_shown = "mInputShown=true" in ime or "isInputViewShown=true" in ime
     shot("07-keyboard.png")
     check("键盘弹出：输入栏不被遮挡（收窄后仍在视口内）",
-          p2["inputVisible"] and (p2["vh"] <= p["vh"]),
-          f"vh {p['vh']}→{p2['vh']} input={p2['inputRect']} imeShown={ime_shown}")
-    sh("adb shell input keyevent 4")
-    time.sleep(1)
+          ime_shown and p2["inputVisible"],
+          f"tap=({tx},{ty}) vh {p['vh']}→{p2['vh']} input={p2['inputRect']} imeShown={ime_shown}")
+    if ime_shown:
+        cdp.eval("document.activeElement && document.activeElement.blur(); 'blur'")
+        time.sleep(1.5)
+    p3 = probe(cdp)
 
     # 长消息换行
-    cdp.eval("""(() => {
+    try:
+        cdp.eval("""(() => {
       const i = document.querySelector('#textInput');
       const b = document.querySelector('#sendBtn');
       if (!i || !b) return 'no-ui';
+      i.focus();
+      i.value = '这是一条用于测试小屏换行的超长消息，包含标点符号以及连续的英文单词ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789，用来验证气泡不会横向溢出屏幕，也不会把输入栏顶出可视区域。'.repeat(2);
+      i.dispatchEvent(new Event('input', {bubbles: true}));
+      b.click();
+      return 'sent';
+    })()""")
+    except Exception as e:
+        print(f"[ADAPT-WARN] 长消息步骤 CDP 掉线，重连：{e}", flush=True)
+        try:
+            cdp.close()
+        except Exception:
+            pass
+        cdp = Cdp()
+        cdp.attach()
+        cdp.eval("""(() => {
+      const i = document.querySelector('#textInput');
+      const b = document.querySelector('#sendBtn');
       i.focus();
       i.value = '这是一条用于测试小屏换行的超长消息，包含标点符号以及连续的英文单词ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789，用来验证气泡不会横向溢出屏幕，也不会把输入栏顶出可视区域。'.repeat(2);
       i.dispatchEvent(new Event('input', {bubbles: true}));
@@ -328,13 +374,14 @@ def native_items():
 
 
 def alarm_epoch():
-    """只取本包 REMINDER_ALARM 的 origWhen（避免被系统闹钟淹没）。"""
+    """只取本包 REMINDER_ALARM 的绝对触发时刻（dumpsys 里形如
+    `Alarm{... origWhen 1793837484955 whenElapsed ... com.xiaoman.treehole}`）。"""
     _, out = sh("adb shell dumpsys alarm")
-    vals = []
-    for blk in out.split("\n\n"):
-        if "com.xiaoman.treehole.REMINDER_ALARM" in blk or "REMINDER_ALARM" in blk:
-            vals += [int(v) for v in re.findall(r"origWhen=(\d+)", blk)]
-    return sorted(vals)
+    vals = [int(v) for v in re.findall(
+        r"Alarm\{[^\n}]*origWhen (\d{12,})[^\n}]*com\.xiaoman\.treehole\}", out)]
+    vals += [int(v) for v in re.findall(
+        r"origWhen=(\d{12,})[^\n]*\n\s*tag=\*walarm\*:com\.xiaoman\.treehole\.REMINDER_ALARM", out)]
+    return sorted(set(vals))
 
 
 def timezone_case(cdp):
@@ -373,22 +420,12 @@ def timezone_case(cdp):
     check("时区切换触发 TIMEZONE_CHANGED 重注册", "TIMEZONE_CHANGED" in lg,
           next((l.strip()[:80] for l in lg.splitlines() if "rescheduled after" in l), "无日志"))
 
-    # 72h 时钟前移（root 可用）
-    sh("adb root", timeout=60)
-    sh("adb wait-for-device", timeout=120)
-    time.sleep(2)
+    # 72h 时钟前移（`cmd alarm set-time` 直接改系统时钟，无需 root）
     _, cur = sh("adb shell date +%s")
     base = int(cur.strip().splitlines()[-1])
-    target = base + 72 * 3600
-    sh("adb shell settings put global auto_time 0")
-    ok_set = False
-    _, tstr = sh(f"adb shell date -d @{target} +%m%d%H%M%Y.%S")
-    if re.match(r"\d{12}\.\d{2}", tstr.strip()):
-        sh(f"adb shell su 0 date {tstr.strip()}", timeout=60)
-        ok_set = True
-    if not ok_set:
-        sh(f"adb shell su 0 date -s @{target}", timeout=60)
-    time.sleep(6)
+    target_ms = (base + 72 * 3600) * 1000
+    sh(f"adb shell cmd alarm set-time {target_ms}", timeout=60)
+    time.sleep(8)
     _, lg2 = sh("adb logcat -d -s ReminderAlarm:V")
     items3 = native_items()
     check("72h 时钟前移：提醒条目未丢（at 不变）",
@@ -400,13 +437,11 @@ def timezone_case(cdp):
     fatal_lines = [l for l in fatal.splitlines() if "AndroidRuntime" in l and PKG in l]
     check("时区/时钟变更全程无 FATAL", not fatal_lines, "\n".join(fatal_lines[-2:])[:150])
     # 恢复时间与时区
-    sh("adb shell settings put global auto_time 1")
-    _, tstr2 = sh(f"adb shell date -d @{base} +%m%d%H%M%Y.%S")
-    if re.match(r"\d{12}\.\d{2}", tstr2.strip()):
-        sh(f"adb shell su 0 date {tstr2.strip()}", timeout=60)
+    sh(f"adb shell cmd alarm set-time {base * 1000}", timeout=60)
     sh("adb shell cmd alarm set-timezone Asia/Shanghai", timeout=60)
     time.sleep(2)
 
 
 if __name__ == "__main__":
     main()
+

@@ -209,13 +209,19 @@ def count_me():
     return out.count("[probe] msg me")
 
 
-def scenario_chat(minutes):
+def setup_chat(minutes):
     panel = ensure_panel()
     if not panel:
         return False, "迷你窗未展开"
+    return True, "panel ready"
+
+
+def chat_rounds(seconds):
+    """在采样窗口内持续真实对话（每轮：点输入框→输入→回车→校验 probe）。
+    返回 (rounds, sent_ok)；供 run_segment 在计时窗口内调用。"""
     rounds = 0
     ok = 0
-    deadline = time.time() + minutes * 60
+    deadline = time.time() + seconds
     phrases = ["jin tian xin qing bu hao", "gong zuo hao lei a",
                "xiang he ni liao liao", "wan shang chi shen me",
                "wo you dian xiang jia le", "zhou mo xiang qu san bu"]
@@ -225,31 +231,32 @@ def scenario_chat(minutes):
         if not panel:
             panel = ensure_panel()
             if not panel:
-                time.sleep(3)
+                time.sleep(2)
                 continue
         x1, y1, x2, y2 = panel
         wcx = (x1 + x2) // 2
         icy = y2 - int((y2 - y1) * 0.07)
         before = count_me()
         sh(f"adb shell input tap {wcx} {icy}", timeout=30)
-        time.sleep(0.8)
+        time.sleep(0.7)
         sh(f'adb shell input text "{phrases[rounds % len(phrases)]}"', timeout=30)
-        time.sleep(0.8)
+        time.sleep(0.7)
         sh("adb shell input keyevent 66", timeout=30)
         rounds += 1
-        for _ in range(6):
-            time.sleep(0.7)
+        for _ in range(5):
+            time.sleep(0.6)
             if count_me() > before:
                 ok += 1
                 break
-        if not mid_shot and rounds >= max(3, int(minutes * 3)):
+        if not mid_shot and rounds >= 6:
             efc.shot("chat_mid.png")
             mid_shot = True
-        time.sleep(max(1, min(12, deadline - time.time())))
-    return True, f"rounds={rounds} sent_ok={ok}"
+        time.sleep(max(0.5, min(8, deadline - time.time())))
+    print(f"[SEG] chat rounds={rounds} sent_ok={ok}", flush=True)
+    return rounds, ok
 
 
-def run_segment(name, setup, minutes):
+def run_segment(name, setup, minutes, during=None):
     print(f"\n=== SEGMENT {name} ({minutes}min) ===", flush=True)
     ok = setup(minutes)
     if isinstance(ok, tuple) and ok and ok[0] is False:
@@ -261,7 +268,10 @@ def run_segment(name, setup, minutes):
     uid = uid_of()
     ticks0, _ = procs_ticks()
     t0 = time.time()
-    time.sleep(minutes * 60)
+    if during is not None:
+        during(minutes * 60)      # 采样窗口内持续施压（如连续对话）
+    else:
+        time.sleep(minutes * 60)
     dur = time.time() - t0
     ticks1, detail = procs_ticks()
     ticks = ticks1 - ticks0
@@ -293,16 +303,16 @@ def main():
     sh("adb shell settings put system screen_off_timeout 1800000", timeout=30)
     battery_unplug()
     phases = [
-        ("A_fg_nofloat", scenario_foreground),
-        ("B_bg_nofloat", lambda m: scenario_background(m, False)),
-        ("B_bg_float", lambda m: scenario_background(m, True)),
-        ("C_chat", scenario_chat),
+        ("A_fg_nofloat", scenario_foreground, None),
+        ("B_bg_nofloat", lambda m: scenario_background(m, False), None),
+        ("B_bg_float", lambda m: scenario_background(m, True), None),
+        ("C_chat", setup_chat, chat_rounds),
     ]
     results = []
-    for name, fn in phases:
+    for name, fn, during in phases:
         if only and only != name:
             continue
-        results.append(run_segment(name, fn, minutes))
+        results.append(run_segment(name, fn, minutes, during))
 
     print("\n=== SUMMARY ===", flush=True)
     for r in results:
