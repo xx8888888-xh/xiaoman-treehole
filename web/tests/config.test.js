@@ -60,3 +60,26 @@ test("patch 合并保留已有字段（模拟保存单项）", () => {
   assert.equal(merged.apiBase, "https://openrouter.ai/api/v1");
   assert.equal(merged.tts, "off");
 });
+
+test("设置页当前实际模式：默认在线，区分原生桥/服务端代理", () => {
+  assert.equal(cfg.normalizeCfg({}).mode, "openai");
+  assert.match(cfg.describeMode("openai", { native: true }), /在线免费模型（原生桥直连）/);
+  assert.match(cfg.describeMode("openai", { native: false }), /在线模型（服务端代理）/);
+  assert.match(cfg.describeMode("mock", { native: true }), /本机离线规则引擎/);
+  assert.match(cfg.describeMode("mock", { native: false }), /本地 Mock 服务/);
+  assert.match(cfg.describeMode("offline", {}), /纯离线规则引擎（不联网）/);
+});
+
+test("设置页当前实际模式：显示自动降级后的真实通道", () => {
+  assert.match(cfg.describeMode("openai", { native: true, lastRoute: "native" }), /当前实际：在线免费模型/);
+  assert.doesNotMatch(cfg.describeMode("openai", { native: true, lastRoute: "native" }), /降级/);
+
+  const degraded = cfg.describeMode("openai", { native: true, lastRoute: "mock" });
+  assert.match(degraded, /当前实际：本机离线规则引擎/);
+  assert.match(degraded, /配置为在线免费模型/);
+  assert.match(degraded, /已自动降级/);
+
+  const offline = cfg.describeMode("openai", { native: false, lastRoute: "offline" });
+  assert.match(offline, /当前实际：纯离线规则引擎/);
+  assert.match(offline, /已自动降级/);
+});

@@ -23,6 +23,11 @@ const API = (() => {
   // 密钥只驻留内存，不写 localStorage；刷新页面需重新输入（或由服务端环境变量提供）
   let memKey = "";
   let serverCfg = null;
+  // 最近一次「真正生效」的通道：native/openai/mock/offline（设置页展示实际模式用）
+  let lastRoute = "";
+
+  function markRoute(r) { lastRoute = r || ""; }
+  function effectiveMode() { return lastRoute; }
 
   function rawCfg() {
     try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch { return {}; }
@@ -285,6 +290,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     if (data?.offline) throw tagError(new Error("服务端为 offline 模式"), null, "config");
     if (data?.error) throw tagError(new Error(data.error), data.status || null, data.kind);
     if (!data?.content) throw new Error("代理返回 content 为空");
+    markRoute("openai");
     return parseStructured(data.content);
   }
 
@@ -318,6 +324,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     const content = data && data.choices && data.choices[0] && data.choices[0].message
       ? data.choices[0].message.content : null;
     if (content == null) throw new Error("模型返回 content 为 null（可能被 reasoning 吃光）");
+    markRoute("openai");
     return parseStructured(content);
   }
 
@@ -390,7 +397,10 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       try { data = JSON.parse(raw); } catch { throw tagError(new Error("原生通道返回非 JSON")); }
       const content = data && data.choices && data.choices[0] && data.choices[0].message
         ? data.choices[0].message.content : null;
-      if (content != null && content !== "") return parseStructured(content);
+      if (content != null && content !== "") {
+        markRoute("native");
+        return parseStructured(content);
+      }
       console.warn("原生通道 content 为空，重试:", attempt);
     }
     throw new Error("模型连续返回空 content");
@@ -424,12 +434,20 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   async function chat(history, opts) {
     const cfg = loadCfg();
     // 降级链：openai（Kilo 免 key / OpenRouter key）→ mock → 离线引擎
-    if (cfg.mode === "offline") return MockEngine.reply(history);
+    if (cfg.mode === "offline") {
+      markRoute("offline");
+      return MockEngine.reply(history);
+    }
     if (cfg.mode === "mock") {
-      try { return await chatMock(history); }
+      try {
+        const r = await chatMock(history);
+        markRoute(nativeBridge() ? "offline" : "mock");
+        return r;
+      }
       catch (e) {
         console.warn("mock 不可用，转离线引擎:", e.message);
         markDegraded("offline");
+        markRoute("offline");
         return MockEngine.reply(history);
       }
     }
@@ -438,7 +456,11 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     } catch (e) {
       if (e.kind === "limit") {
         // 限流是确定性的：先降一级到本地 mock；mock 也不可用才上抛排队 UX
-        try { return await chatMock(history); }
+        try {
+          const r = await chatMock(history);
+          markRoute(nativeBridge() ? "offline" : "mock");
+          return r;
+        }
         catch (e1) {
           console.warn("限流且 mock 不可用:", e1.message);
           throw e;
@@ -447,10 +469,13 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       console.warn("openai 失败，降级 mock:", e.message);
       try {
         markDegraded("mock");
-        return await chatMock(history);
+        const r = await chatMock(history);
+        markRoute(nativeBridge() ? "offline" : "mock");
+        return r;
       } catch (e2) {
         console.warn("mock 失败，降级离线引擎:", e2.message);
         markDegraded("offline");
+        markRoute("offline");
         return MockEngine.reply(history);
       }
     }
@@ -514,7 +539,8 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   return {
     chat, loadCfg, saveCfg, buildSystemPrompt, SYSTEM_PROMPT, HEARTBEAT_PROMPT,
     sessionId, bootstrap, serverConfig, testConnection,
-    getApiKey, setApiKey, parseStructured
+    getApiKey, setApiKey, parseStructured, effectiveMode,
+    hasNativeBridge: () => !!nativeBridge()
   };
 })();
 

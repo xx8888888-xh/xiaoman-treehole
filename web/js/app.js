@@ -458,10 +458,22 @@ const App = (() => {
   }
   window.addEventListener("appearance:change", onAppearanceChanged);
 
+  // ---------- 当前实际模式（设置页展示，含自动降级结果） ----------
+  function refreshModeHint() {
+    const el = $("cfgModeActual");
+    if (!el) return;
+    const cfg = API.loadCfg();
+    el.textContent = XMConfig.describeMode(cfg.mode, {
+      native: API.hasNativeBridge ? API.hasNativeBridge() : false,
+      lastRoute: API.effectiveMode ? API.effectiveMode() : ""
+    });
+  }
+
   // ---------- 降级提示（安静、可关闭） ----------
   // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。
   function showDegrade(kind) {
     try { if (sessionStorage.getItem("xiaoman_degrade_off") === "1") return; } catch (e) {}
+    refreshModeHint();
     const badge = $("degradeBadge");
     if (!badge) return;
     const txt = $("degradeText");
@@ -1079,9 +1091,10 @@ const App = (() => {
         toast(res === "shared" ? "已呼出分享面板" : "卡片已开始下载，也可以长按图片保存");
       };
     }
-    $("settingsBtn").onclick = () => {
+    if ($("settingsBtn")) $("settingsBtn").onclick = () => {
       const cfg = API.loadCfg();
       $("cfgMode").value = cfg.mode;
+      refreshModeHint();
       $("cfgApi").value = cfg.apiBase || "";
       $("cfgApiKey").value = API.getApiKey();
       $("cfgModel").value = cfg.model || "";
@@ -1107,6 +1120,7 @@ const App = (() => {
           voice: $("cfgVoice").value,
           ttsRate: $("cfgRate").value
         });
+        refreshModeHint();
         toast("已保存");
       });
     });
