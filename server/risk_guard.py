@@ -43,18 +43,22 @@ DEFAULT_LEXICON = {
     "act": [
         "跳下去", "跳楼", "跳河", "卧轨", "上吊", "割腕", "烧炭", "吞药", "喝农药",
         "喝了农药", "割了手腕", "开煤气", "煤气中毒", "从楼上跳", "从桥上跳",
+        "已经跳了", "已经割了", "刚吞了", "刚喝了药", "服药过量", "割了手",
         "已经吃了", "已经吞了", "吃了整瓶", "吞了整瓶", "吃了一整瓶", "吞了一整瓶",
         r"re:(?:吞|吃|喝)(?:了|下)?[^，。！？]{0,8}(?:安眠药|农药|整瓶|一瓶|药片)",
         r"re:(?:割|划)(?:了|开)?[^，。！？]{0,6}(?:手腕|胳膊|手)",
     ],
     "means": [
-        "安眠药", "农药", "刀片", "美工刀", "绳子", "煤气", "的天台", "在天台",
-        "楼顶", "桥上", "高层", "江边", "河边", "车里", "一把刀",
+        "安眠药", "农药", "刀片", "美工刀", "绳子", "煤气", "天台", "楼顶",
+        "窗台", "阳台", "桥上", "高层", "江边", "河边", "水库", "海边", "车里",
+        "汽油", "胶带", "塑料袋", "药片", "药瓶", "一整瓶", "一把刀", "菜刀", "水果刀",
+        r"re:(?:一大|一整|半)把(?:药|安眠药)",
     ],
     "explicit": [
         "想死", "不想活", "自杀", "结束自己", "了结自己", "寻短见", "不想醒来",
         "不想再醒", "去死", "死了算了", "一了百了", "不想活下去了", "想结束生命",
-        "想离开这个世界", "我要死",
+        "想离开这个世界", "我要死", "轻生", "寻死", "求死", "自尽", "不如死了",
+        "死了更好", "死了对大家都好", "想结束这一切",
         r"re:不想(?:再)?活",
         r"re:想(?:要)?(?:去)?死",
         r"re:不想(?:再)?醒(?:来)?",
@@ -65,12 +69,16 @@ DEFAULT_LEXICON = {
         "怎么才能死", "怎样死", "无痛死", "不痛苦地死", "死得不痛苦",
         r"re:(?:怎么|如何|怎样).{0,6}(?:死|自杀|了结自己|结束生命)",
         r"re:(?:死法|死的方式|自杀的方法|自杀方式|方法).{0,4}(?:不疼|不痛苦|无痛|最快|最舒服)",
+        r"re:(?:怎么|如何|怎样|什么方法|啥办法).{0,6}(?:才能|可以|能)?(?:死|自杀|结束生命|了结自己|轻生)",
+        r"re:(?:不疼|不痛苦|无痛|最快|最舒服|最体面).{0,4}(?:地)?(?:死|自杀|走掉)",
     ],
     "plan": [
         "遗书", "遗言", "后事", "交代后事", "交代好了", "安排好了", "都安排好",
         "决定好了", "想清楚了", "最后一天", "最后一顿", "最后一件事", "最后一晚",
         "最后一个晚上", "立遗嘱", "银行卡密码", "密码写在", "东西都送人", "东西送人",
         "把东西送", "送人了", "分东西", "托付", "准备好了", "都准备好了", "今晚就动手",
+        "遗物", "骨灰", "葬礼", "墓地", "火化", "告别信", "最后的安排", "安排好一切",
+        "一切安排好了", "处理后事",
         # "该说的我都说完了 / 该交代的交代好了"：后事收尾口吻
         r"re:该(?:说的|交代的|办的).{0,4}(?:都|也)?.{0,2}(?:说|交代|办)(?:完|好)了",
     ],
@@ -79,8 +87,23 @@ DEFAULT_LEXICON = {
         "道别", "道过别", "告别", "最后一面", "明天就不在", "明天不来了",
         "不在了", "离开大家", "大家都能安心", "对大家都轻松", "对大家都好",
         "终于解脱", "解脱了", "不用管我", "不用再管我", "没有明天",
+        "不打扰大家", "不打扰你们", "各位保重", "你们保重", "要保重",
+        "别等我", "不用等我", "不用再找我", "别找我了", "不用来找我",
+        "不会再来了", "来跟你们道别", "跟大家道别", "跟你们道别", "向你们告别", "告别大家",
         r"re:见不到.{0,6}(?:明天|以后|下个月|明年)|(?:明天|以后).{0,4}见不到我",
         r"re:话.{0,4}(?:都|也).{0,2}说完了|把话说完了|该说的.{0,4}说完了",
+        # "明天就不打扰大家了 / 以后不来了"：明确退出社交的告别口吻
+        r"re:(?:明天|以后|今后|再也|之后).{0,3}(?:就)?不打扰(?:大家|你们|各位)|不打扰(?:大家|你们|各位)(?:了|啦)",
+        r"re:(?:明天|以后|今后|再也|之后).{0,4}(?:就)?不来了|不来了.{0,4}(?:再见|见不到|别找我|别等我)",
+        r"re:(?:这|那)?(?:可能|估计|应该)?(?:是|就是).{0,4}最后一次.{0,6}(?:说|聊|见|陪|打扰|找|来)",
+        # 送东西/分东西（"把东西都送人了"）：处理身后物的行为信号
+        r"re:(?:把|将).{0,6}(?:东西|物品|书|收藏|存款|钱|衣服|猫|狗|团子|年糕).{0,6}(?:都|全部).{0,3}(?:送|给|分|寄)(?:人|朋友|别人|出去)?",
+    ],
+    # 弱告别（感谢/道谢/要走）：单独出现不算风险，必须与计划/告别/工具等强信号同现才计数
+    "farewell_soft": [
+        "很高兴认识你们", "认识你们很开心", "谢谢你们照顾", "谢谢你们这段时间",
+        "谢谢大家这段时间", "谢谢你们一直", "你们要好好的", "大家要好好的",
+        "照顾好自己啊", "我该走了", "我得走了", "该说再见了", "要说再见了",
     ],
     "implicit": [
         "想消失", "消失", "不想出现", "再也不想出现", "解脱", "撑不下去",
@@ -88,9 +111,11 @@ DEFAULT_LEXICON = {
         r"re:活着.{0,4}没意思|没意思.{0,4}活",
         # "以后见不到我了 / 再也见不到我"：未来消失的明确暗示
         r"re:以后.{0,6}见不到我|再也见不到我|见不到我(?:了|啦)",
+        "活够了", "活着太累", "消失掉", "不想存在", "活着是负担",
     ],
     "despair": [
         "低落", "绝望", "无助", "没希望", "看不到希望", "活着没劲", "好累", "撑不住",
+        "提不起劲", "什么都不想做", "没力气", "心里堵", "压抑", "看不到头",
     ],
     "time": [
         "今晚", "今天晚上", "现在", "马上", "一会", "待会", "这就", "最后一次",
@@ -102,6 +127,7 @@ DEFAULT_LEXICON = {
         "end my life", "end it all", "want to die", "wanna die",
         "don't want to live", "do not want to live", "no reason to live",
         "overdose", "slit my wrist", "hang myself", "jump off",
+        "take my own life", "better off dead", "off myself", "end it",
     ],
 }
 
@@ -122,7 +148,13 @@ def _build_regexes():
 _LEX = _build_regexes()
 _ZERO_WIDTH = re.compile("[\u200b-\u200f\u2060\ufeff\u0000-\u0008\u000b\u000c\u000e-\u001f]")
 _SPACE = re.compile(r"[ \t\r\n]+")
-_NEGATION = re.compile(r"(不想死|不想自杀|不想自残|不想伤害自己|没想过自杀|没有想过自杀|不会自杀|才不会自杀|怕死)")
+_NEGATION = re.compile(
+    r"(不想死|不想自杀|不想自残|不想伤害自己|没想过自杀|没有想过自杀|没想过要死|"
+    r"不会自杀|才不会自杀|怕死|不打算自杀|没有自杀的(?:想法|念头|打算)|不会去死|"
+    r"不可能自杀|不会做傻事|不会干傻事|不愿意死|不想寻死|没想寻短见|"
+    r"i (?:do not|don't|dont) want to die|not suicidal)"
+)
+_CLAUSE_SPLIT = re.compile(r"[，。！？,;；\n]+")
 
 # 上下文守卫（对标报告 1.5）：玩笑/夸张/引用，避免「笑死/社死/累死」误触
 _BENIGN_TERMS = (
@@ -139,8 +171,10 @@ _SELF_SUBJECT = re.compile(r"我(?:最近|今天|这几天|真的|已经|现在|
 
 SIGNAL_WEIGHTS = {
     "act": 6, "explicit": 3, "harm": 3, "plan": 5, "method": 3, "burden": 2,
-    "farewell": 3, "implicit": 2, "despair": 2, "means": 2, "time": 1, "english": 3,
+    "farewell": 3, "farewell_soft": 1, "implicit": 2, "despair": 2,
+    "means": 2, "time": 1, "english": 3,
 }
+CARE_TURNS = 3
 LEVEL_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
 RANK_LEVEL = ("none", "low", "medium", "high")
 
@@ -166,20 +200,52 @@ def strip_benign(text) -> str:
     return out
 
 
+def drop_negated_clauses(hay: str) -> str:
+    """按标点切从句，剔除含明确否定的从句；其余从句照常判风险"""
+    if not hay:
+        return hay
+    parts = [c for c in _CLAUSE_SPLIT.split(hay) if c]
+    if not parts:
+        return hay
+    return "，".join(c for c in parts if not _NEGATION.search(c))
+
+
+def _plan_clause_count(hay: str) -> int:
+    """计划信号覆盖了几个不同从句（同一从句里的重叠词不重复计数）"""
+    subs, regexes = _LEX.get("plan", ([], []))
+    n = 0
+    for c in [x for x in _CLAUSE_SPLIT.split(str(hay or "")) if x]:
+        c_norm = normalize(c)
+        if any(t in c_norm or _compact(t) in _compact(c_norm) for t in subs) \
+                or any(rx.search(c_norm) or rx.search(_compact(c_norm)) for rx in regexes):
+            n += 1
+    return n
+
+
+_HELPING_RE = re.compile(r"我.{0,4}(?:该|要|应该|可以|能)?(?:怎么|如何|怎样)?(?:劝|帮|救|安慰|开导|照顾|陪|关心)")
+
+
 def detect_subject(text) -> str:
     """self（本人）/ third（朋友/家人等第三人称）"""
     s = normalize(text)
     clauses = [c for c in re.split(r"[，。！？,;；\n]+", s) if c]
-    self_subject = False
+    self_strong = False   # "我想死 / 我不想活"：本人风险陈述
+    self_plain = False    # "我在天台"：本人陈述但无风险动词
     third = False
     for c in clauses:
         rest = _THIRD_PHRASE.sub(" ", c)
-        if rest.startswith("我") or _SELF_SUBJECT.search(rest):
-            self_subject = True
+        if _SELF_SUBJECT.search(rest):
+            self_strong = True
+        elif rest.startswith("我") and not _HELPING_RE.search(c):
+            self_plain = True
         if _THIRD_PHRASE.search(c) or re.search(r"(?:^|[^我])(?:他|她)(?!们)", c) \
                 or re.search(r"(?:^|[^a-z])ta(?![a-z])", c):
             third = True
-    if self_subject:
+    if self_strong:
+        return "self"
+    if third and not self_plain:
+        return "third"
+    if self_plain:
         return "self"
     return "third" if third else "self"
 
@@ -190,26 +256,23 @@ def classify(text) -> dict:
         return {"level": "none", "imminent": False, "subject": "self",
                 "reasons": [], "matched": [], "categories": [], "score": 0}
 
-    hay = normalize(strip_benign(raw))
-    comp = _compact(hay)
+    hay = normalize(strip_benign(raw))          # 全量文本（引用/玩笑语境判定用）
+    hay_eff = drop_negated_clauses(hay)         # 有效文本（剔除明确否定从句）
+    comp = _compact(hay_eff)
     hits = {}
     matched = []
     for key, (subs, regexes) in _LEX.items():
         found = []
         for term in subs:
             t = normalize(term)
-            if t and (t in hay or _compact(t) in comp):
+            if t and (t in hay_eff or _compact(t) in comp):
                 found.append(term)
         for rx in regexes:
-            if rx.search(hay) or rx.search(comp):
+            if rx.search(hay_eff) or rx.search(comp):
                 found.append(rx.pattern)
         if found:
             hits[key] = found
             matched.extend(f"{key}:{t}" for t in found)
-
-    if _NEGATION.search(hay):
-        hits.pop("explicit", None)
-        hits.pop("harm", None)
 
     subject = detect_subject(raw)
 
@@ -227,9 +290,14 @@ def classify(text) -> dict:
     implicit = has("implicit")
     despair = has("despair")
 
-    core = act or means or method or explicit or harm or plan or burden or farewell or implicit or despair
+    farewell_soft = has("farewell_soft")
+    # 单个软告别不算核心；两个及以上软告别（感谢+要走）才进入判定
+    soft_strong = bool(farewell_soft and len(hits.get("farewell_soft", [])) >= 2)
+    core = (act or means or method or explicit or harm or plan or burden
+            or farewell or implicit or despair or soft_strong)
     time_hit = bool(core and has("time"))
-    imminent = bool(core and (act or means or time_hit or method))
+    urgent = bool(core and (act or means or time_hit or method))
+    plan_clauses = _plan_clause_count(hay_eff)
 
     level = "none"
     score = 0
@@ -237,20 +305,25 @@ def classify(text) -> dict:
         score = (6 if act else 0) + (5 if explicit else 0) + (5 if harm else 0)
         score += (4 if plan else 0) + (4 if burden else 0) + (4 if farewell else 0)
         score += (3 if implicit else 0) + (2 if despair else 0) + (2 if means else 0)
-        score += (1 if time_hit else 0) + (6 if method else 0)
+        score += (1 if time_hit else 0) + (6 if method else 0) + (1 if farewell_soft else 0)
 
         if act or method:
             level = "high"
         elif explicit or harm:
-            level = "high" if imminent else "medium"
+            level = "high" if urgent else "medium"
         elif plan and (farewell or implicit or means or time_hit or despair or burden):
             level = "high"
-        elif plan and len(hits.get("plan", [])) >= 2:
+        elif plan and plan_clauses >= 2:
             level = "high"
         elif farewell and (plan or implicit or means or time_hit or burden):
             level = "high"
         elif burden and (farewell or implicit or plan):
             level = "high"
+        # 弱告别（感谢/要走）+ 任何强信号 → 高危；只有弱告别不算风险
+        elif farewell_soft and (plan or farewell or burden or implicit or means):
+            level = "high"
+        elif soft_strong:
+            level = "medium"
         elif plan or burden or farewell or implicit:
             level = "medium"
         elif despair:
@@ -261,8 +334,8 @@ def classify(text) -> dict:
             level = "low" if despair else "none"
 
     reasons = matched[:6]
-    return {"level": level, "imminent": imminent, "subject": subject,
-            "reasons": reasons, "matched": matched[:12],
+    return {"level": level, "imminent": bool(level != "none" and urgent),
+            "subject": subject, "reasons": reasons, "matched": matched[:12],
             "categories": list(hits.keys()), "score": score}
 
 
@@ -289,11 +362,10 @@ class Tracker:
         result = result or {}
         current = result.get("level") or "none"
         cats = result.get("categories") or []
-        escalating = any(c in ("act", "explicit", "harm", "plan", "method",
-                               "burden", "farewell", "means") for c in cats)
         weight = sum(SIGNAL_WEIGHTS.get(c, 0) for c in cats)
         self.turns += 1
-        if escalating:
+        # 有信号就累加（低危的持续低落也会逐步升级），无信号则自然衰减
+        if weight > 0:
             self.score = max(0, min(12, self.score - 1 + min(weight, 8)))
         else:
             self.score = max(0, self.score - 1)
@@ -312,8 +384,10 @@ class Tracker:
 
 
 _AFFIRM_RE = re.compile(
-    r"(决定.{0,8}(挺好|很好|不错|对)|(挺好的|很好)(?:！|!|。|，|$)|安心很多|大家.{0,6}安心|"
-    r"不打扰|人不在了|明天不来了|明天见|终于解脱|解脱了|走吧|好好告别|尊重你的决定|支持你的决定)"
+    r"(决定.{0,8}(挺好|很好|不错|对)|(挺好的|很好)(?:！|!|。|，|$)|安心|"
+    r"不打扰|人不在了|明天不来了|明天见|终于解脱|解脱了|走吧|好好告别|"
+    r"尊重你的(?:决定|选择)|支持你的决定|想清楚就好|你的选择是对的|走好|一路走好|"
+    r"放心地走|不会痛了|不用再受苦|终于可以休息|替你开心|也是解脱)"
 )
 # 禁忌句式黑名单（对标报告 A4）：劝解/说教/诊断/保密承诺/方法细节/情感绑架
 _BANNED_RE = re.compile(
@@ -346,10 +420,14 @@ def last_user_text(messages) -> str:
 
 
 def sanitize_output(reply, risk_level) -> str:
-    """输出兜底：肯定告别/禁忌句式 → 安全话术。
+    """输出兜底：肯定告别/禁忌句式 → 安全话术；content=null/空串同样必须过闸。
     medium/high 拦 AFFIRM + 全部黑名单；low 只拦劝解类；none 只拦硬禁忌。"""
     txt = str(reply or "")
-    if not txt:
+    if not txt.strip():
+        if risk_level == "high":
+            return SCRIPT_HIGH
+        if risk_level == "medium":
+            return SCRIPT_MEDIUM
         return txt
     norm = normalize(txt)
     if risk_level in ("medium", "high") and (_AFFIRM_RE.search(norm) or _BANNED_RE.search(norm)):
@@ -381,3 +459,28 @@ def crisis_payload(level: str, subject: str = "self") -> dict:
         "risk_level": level,
         "risk_subject": subject,
     }
+
+
+def evaluate(text, state=None) -> dict:
+    """单轮 + 累积：返回 {base, acc, state, level}（与客户端 Risk.evaluate 同语义）"""
+    base = classify(text)
+    tr = Tracker(state)
+    acc = tr.update(base)
+    return {"base": base, "acc": acc, "state": tr.snapshot(), "level": acc["level"]}
+
+
+def max_level(a, b) -> str:
+    return a if LEVEL_RANK.get(a, 0) >= LEVEL_RANK.get(b, 0) else b
+
+
+def care_arm(level, turns=CARE_TURNS) -> dict:
+    return {"level": level or "medium", "left": max(1, int(turns or CARE_TURNS))}
+
+
+def care_next(state) -> dict:
+    """关怀粘滞消耗一轮：返回 {state, prev}"""
+    if not state or not state.get("left"):
+        return {"state": None, "prev": None}
+    prev = {"level": state.get("level") or "medium", "left": int(state["left"])}
+    left = prev["left"] - 1
+    return {"state": ({"level": prev["level"], "left": left} if left > 0 else None), "prev": prev}
