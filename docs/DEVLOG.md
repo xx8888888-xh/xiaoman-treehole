@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-11-05 · 第三轮合并 r3（w10/w11/w12/w13 → feat/containerize-and-config）
+
+> 背景：宿主机硬断电重启（Kernel-Power 41）后重新拉起三容器栈（web/mock/tts 均 healthy，TTS `provider=none` 全程静音）。基线 `61384a0`，先建 `backup/pre-r3-20261105` 分支 + `backup-pre-r3-20261105` tag。四个分支按序合并，**每合一个跑全套闸门，全绿才进下一个**；四次合并均无冲突（ort 自动合并，无整文件覆盖）。
+
+### 各步闸门结果（实跑）
+| 步骤 | 合并提交 | node | pytest | biome | verify_assets | e2e | live2d | rAF | feature-loop |
+|---|---|---|---|---|---|---|---|---|---|
+| 基线 61384a0 | — | 139/139 | 93+19 | 0 error | PASS 54 files / 7,275,154 B | 60/60 | — | — | — |
+| w10 Live2D | `9062e99` | 154/154 | 93+19 | 0 error | PASS 85 files / 6,444,571 B | 60/60 | 24/24 | 8/8 | — |
+| w11 真人感 | `6533537` | 154/154 | 145+19 | 0 error | PASS 85 files / 6,444,571 B | 60/60 | 24/24 | 8/8 | — |
+| w12 功能补齐 | `9ed8a88` | 181/181 | 145+19 | 0 error | PASS 86 files / 6,478,473 B | 60/60 | 24/24 | 8/8 | 43/43 |
+| w13 性能 | `ecb4943` | 181/181 | 145+19 | 0 error | PASS 86 files / 6,480,501 B | 60/60 | 24/24 | 8/8 | 43/43 |
+
+- w11 改的是服务端代码，`mock` 容器不挂源码 → 合并后**重建镜像**（`docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up -d --build mock`），否则 e2e 跑的是旧服务。
+- `web/` 每次合并后重跑 `build_assets.sh` 同步 `assets/www`（容器只读挂载，实时生效）。
+- 冲突面复核：四个合并 `git diff --diff-filter=U` 均为空；按历史教训专项 grep 关键函数，`stage.js` 的 `pickTier/modelUrl/activeTier/startWander/stopWander` 与 `pet.js` 的 `freezeTimer/envPaused` 全部在位。
+- 未合：`feat/android-battery`（w14 真机复测，另一个会话仍在跑）；未动 `treehole-local-assets` 与 `treehole-w14` worktree。
+
+**触及**：合并产物覆盖 `web/**`、`server/**`、`scripts/**`、`tools/**`、`docs/**`、`LICENSE`；本条 + `docs/PROJECT_STATE.md`。
+
+---
+
 ## 2026-11-05 · 功能落实收官（feat/feature-completeness，基线 61384a0）
 
 > 用户令：「里面的功能都要落实实现，并且让人使用顺滑」「像一个正规的大软件」。先盘点再补齐，盘点表见 `docs/FEATURE_MATRIX.md`。

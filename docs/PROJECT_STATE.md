@@ -1,7 +1,7 @@
 # PROJECT_STATE · 小满树洞（Xiaoman Treehole）
 
 > 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完文件即可掌握全局。
-> 最后更新：2026-11-04（w4 安全/发布）｜ 当前版本：v0.5.0 ｜ 状态：**安全审计收口 + 发布物单一真源 + 默认在线** ｜ 工作分支：`feat/security`；`main` 为稳定线。
+> 最后更新：2026-11-05（第三轮合并 r3）｜ 当前版本：v0.5.0 ｜ 状态：**w10–w13 已并入 `feat/containerize-and-config`，全套闸门全绿** ｜ 集成分支：`feat/containerize-and-config`（tag `r3-20261105`）；`main` 为稳定线。
 
 ## 0. 2026-11-04 当前事实（优先于下文历史快照）
 
@@ -20,7 +20,8 @@
 | 凭据边界 | Key 只从**环境变量 / Windows 凭据管理器**读取，不写前端、不入镜像、不落日志；**容器内读不到 Windows 凭据管理器**，Docker 部署必须用 `.env` / `-e AI_API_KEY=…` 显式注入 |
 | 语音 | 默认设备系统 TTS / 浏览器 `speechSynthesis`；服务端语音是可选插件，默认 `provider=none`，仓库无 edge-tts |
 | 日志 | TTS 原文只走 POST body，日志统一经 `server/log_redact.py` 脱敏（查询串、长文本、疑似密钥、手机号） |
-| 功能落实（2026-11-05） | 分支 `feat/feature-completeness`（基线 61384a0，**未合并**）：43 项承诺功能盘点见 `docs/FEATURE_MATRIX.md`；已补齐设置开关真实生效（语音链跟随设置）、提醒 UI 闭环、小本本统计、首次空状态、错误边界提示；验证 166 node / 22 appearance / 60 e2e / 43 feature-loop |
+| 功能落实（2026-11-05） | 分支 `feat/feature-completeness`（基线 61384a0，**已并入 r3**）：43 项承诺功能盘点见 `docs/FEATURE_MATRIX.md`；已补齐设置开关真实生效（语音链跟随设置）、提醒 UI 闭环、小本本统计、首次空状态、错误边界提示 |
+| 第三轮合并 r3（2026-11-05） | `feat/containerize-and-config` ← w10 Live2D 接入 + w11 真人感（服务端记忆槽）+ w12 功能补齐 + w13 性能；四个合并提交无冲突（逐块能力全保留）；合并后闸门：node **181/181**、pytest **145 + 19 subtests**、biome **0 error**、`verify_assets` **PASS**（86 files / 6,480,501 B）、E2E **60/60**、live2d **24/24**、rAF **8/8**、feature-loop **43/43**。`feat/android-battery`（w14）按用户要求暂不合 |
 
 ---
 
