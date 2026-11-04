@@ -1,5 +1,15 @@
 # 小满树洞（xiaoman-treehole）· 技术与 API 现状分析
 
+> **2026-11-04 校正**：本文是 `main @ cad17bc`（2026-10-18）的只读分析快照，下列结论已被当前
+> `feat/security` 覆盖，请勿按原文执行：
+> - 对话默认模式已从 mock/auto 改为**在线优先**（原生桥 / 服务端代理），mock 仅兜底；
+> - 已移除 `edge-tts`（非开源许可），语音默认设备系统 TTS / 浏览器 `speechSynthesis`，服务端 `provider=none`；
+> - CORS 不再是 `*`，改为 `server/xm_config.py` 的 Origin 白名单（`127.0.0.1:8901`、旧壳 `null`、appassets）；
+> - 服务端默认只监听 `127.0.0.1`；WSL 的 `docker-compose.hostnet.yml` 仅在 bridge 无外网时叠加；
+> - 容器读不到 Windows 凭据管理器，Docker 部署须显式注入 `AI_API_KEY`；
+> - 发布物以 `web/` 为唯一真源，启动前做工作树/清单双重哈希校验，不一致拒绝启动。
+> 现状以 `README.md` 与 `docs/PROJECT_STATE.md` §0 为准。
+
 > 分析日期：2026-11-03
 > 分析对象：`xx8888888-xh/xiaoman-treehole`（main @ cad17bc，2026-10-18）
 > 本地路径：`D:\我的\编程\vibe coding tools\treehole`
