@@ -3,7 +3,7 @@
 - 分支：`feat/android-background`（基于主工作区 HEAD `688dd20`）
 - 工作树：`treehole-w8`（未改动主工作区；另建 ASCII junction `D:\treehole-w8` 仅为解决 Gradle 单测 worker 的中文路径问题）
 - 范围：`android/**`；`web/**` 仅按追加要求修改 `web/js/tts.js` 的"状态/文案映射"与对应用例
-- 提交：本分支最后一次提交（哈希见对话交付说明）；未 push、未合并、未开 PR
+- 提交：`1152e8a`；未 push、未合并、未开 PR
 
 ---
 
