@@ -21,6 +21,9 @@
     tts: "server",
     voice: "zh-CN-XiaoyiNeural",
     ttsRate: "normal",     // 语速档位：slow / normal / fast（跨启动持久化）
+    // W7 隐私开关：Kilo 等免费 trial 条款禁止承载个人倾诉数据。
+    // 默认 false → 安卓免 key 通道不发请求，直接 mock/offline 安全兜底。
+    allowFreePersonal: false,
     apiKey: ""            // 仅内存使用，normalizeCfg 会把它丢弃
   };
 
@@ -54,6 +57,7 @@
     cfg.tts = ["server", "browser", "off"].indexOf(raw.tts) >= 0 ? raw.tts : DEFAULTS.tts;
     cfg.voice = String(raw.voice || DEFAULTS.voice).trim();
     cfg.ttsRate = RATES.indexOf(raw.ttsRate) >= 0 ? raw.ttsRate : DEFAULTS.ttsRate;
+    cfg.allowFreePersonal = raw.allowFreePersonal === true;
     // 密钥永不进入持久化配置
     delete cfg.apiKey;
     return cfg;
