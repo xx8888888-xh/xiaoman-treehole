@@ -4,7 +4,7 @@
 > 最后更新：2026-10-06（分支合并日：audit+r2+zhiqiu/dev 三线合一）｜ 当前版本：v0.4.0 ｜ 状态：**朋友定位+记忆/提醒/心跳三大生命线全绿** · 全需求闭环 · 开源仓库已上线 · 等真API增强 ｜ 分支：main=稳定线，知秋=zhiqiu/dev（多AI协同）
 > 测试基线（全部实跑，均 exit 0）：Mock 契约 8/8（幂等 ×2）· UI 集成 5/5 · 端到端 5/5（含危机/记忆/TTS 落点）· XSS 回归通过 · 舞台降级通过 · verify_tts mp3 PASS（ASR 因本机缺 z-ai-web-dev-sdk 为 SKIP）
 > 代码审计（DSH 逐行精读，报告见 \`/workspace/.dsh_audit/\`）：合计 **148 条缺陷/风险**（高 22 / 中 69 / 低 56 / 中高 1）。修复进度以 \`docs/AUDIT_REMEDIATION.md\` 为准：**已修 136 / 部分 11 / 遗留 1**；第二轮清零 4 项，其余为"有意不修"（逐条附理由，见该文档 §9.2）
-> ⚠️ 环境与额度：环境一键重建 \`bash scripts/setup_dsh.sh\`（Node24+dsh+免费模型路由+edge-tts+chromium+系统依赖+**AI 长期记忆还原**）；DSH 免费模型额度 **50 次/日**（次日 00:00 UTC 重置），耗尽后全量 429 —— 额度耗尽时由助手直接执行并记录
+> ⚠️ 环境与额度：环境一键重建 \`bash scripts/setup_dsh.sh\`（Node24+dsh+免费模型路由+playwright+chromium+系统依赖+**AI 长期记忆还原**）；DSH 免费模型额度 **50 次/日**（次日 00:00 UTC 重置），耗尽后全量 429 —— 额度耗尽时由助手直接执行并记录
 ---
 
 ## 0. 项目一句话
@@ -17,7 +17,7 @@
 |---|------|------|------|
 | R1 | 安卓跑通 | ✅ **KVM模拟器验收通过**（云端CI实机截图）+ APK 4.8MB已签名 | docs/shots/emulator_0*.png；repo: github.com/xx8888888-xh/xiaoman-treehole |
 | R2 | 文字聊天 | ✅ 分条连发+打字延迟+时段问候+留存钩子 | docs/shots/03_chat.png |
-| R3 | 语音回复 | ✅ edge-tts→ASR回环PASS；真机走系统TTS桥 | scripts/verify_tts.py输出；web/js/tts.js |
+| R3 | 语音回复 | ✅ 可插拔 provider：安卓系统 TTS 优先 / 浏览器 speechSynthesis 兜底 / 服务端默认 none | scripts/verify_tts.py输出；web/js/tts.js |
 | R4 | 萌系UI | ✅ 首轮截图审查通过（角色完整渲染+手绘点缀） | docs/shots/01_base.png |
 | R5 | Live2D手术 | ✅ 6表情+4动作组，可回滚 | docs/live2d_surgery.md |
 | R6 | 活人感 | ✅ 五件套+危机安全层（12356） | docs/shots/04_intimate.png, 06_crisis.png |
@@ -83,11 +83,11 @@ bash scripts/build_apk.sh   # 需 ANDROID_HOME；构建器依赖已固化在脚�
 │  ├─ js/live2d.js      PixiJS + pixi-live2d-display；情绪→表情/动作；口型同步  │
 │  ├─ js/app.js         活人感引擎：分条发送/打字延迟/主动开口/记忆/留存钩子     │
 │  ├─ js/api.js         LLM 适配器：MOCK ⇄ OPENAI 兼容（真 API 明天接入）       │
-│  └─ js/tts.js         TTS 适配器：服务端 TTS(mp3) / 浏览器 speechSynthesis    │
+│  └─ js/tts.js         TTS 适配器：native(系统TTS) / server(可选) / browser / none  │
 │                                                                             │
 │  server/（本地/局域网跑，安卓壳内也可打包）                                    │
 │  ├─ mock_api.py       我充当的 API：情绪识别+回复模板+记忆+结构化输出          │
-│  └─ tts_server.py     edge-tts 封装（免费，中文自然）                          │
+│  └─ tts_server.py     可插拔 TTS（默认 provider=none，不内置模型/不联网）      │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -136,7 +136,7 @@ treehole-app/
 | pixi-live2d-display (guansss) | Live2D 渲染 | MIT |
 | PixiJS | 渲染底层 | MIT |
 | Live2D 官方免费示例模型 | 角色模型（将做结构化改造） | Live2D 免费素材许可 |
-| edge-tts | 免费 TTS | GPL-3.0（仅本地服务调用，不打包进闭源分发；本项目本身开源故兼容） |
+| 系统 TTS / speechSynthesis | 语音默认路径 | 设备自带，离线可用，零额外依赖 |
 | Open-LLM-VTuber (t41372) | 架构参考：情绪标签驱动 Live2D | AGPL-3.0（仅参考思路，不复代码） |
 | 前几日"小满"测试集与盲测结论 | 人设、活人感规则、安全层话术 | 自产 |
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_tts_post.py · TTS POST 协议 + 日志脱敏单测（审计 P1-5）
+"""test_tts_post.py · TTS POST 协议 + 日志脱敏 + provider 语义单测（审计 P1-5）
 
-不触网：只测纯函数，以及本地回环 Handler 的 400/413/OPTIONS 行为。
-运行：python -m unittest discover -s server/tests -p "test_*.py"
+不触网：只测纯函数、provider 探测，以及本地回环 Handler 的 400/413/OPTIONS/503 行为。
+默认 provider=none —— /tts 必须回 503 JSON，由前端降级到系统 TTS。
+运行：python -m unittest discover -s tests
 """
 import json
 import os
@@ -115,8 +116,67 @@ class ParsePayloadTest(unittest.TestCase):
                         json.dumps({"text": "你好", "voice": bad}).encode())
 
 
+class ProviderTest(unittest.TestCase):
+    """provider 语义：默认 none 不可用；可选 provider 需显式环境变量，不联网不下载"""
+
+    def test_default_provider_is_none(self):
+        with mock.patch.dict(os.environ, {"XIAOMAN_TTS_PROVIDER": "",
+                                          "TTS_PROVIDER": ""}, clear=False):
+            self.assertEqual(tts_server._provider_name(), "none")
+
+    def test_unknown_provider_falls_back_none(self):
+        with mock.patch.dict(os.environ, {"XIAOMAN_TTS_PROVIDER": "cloud-tts"}, clear=False):
+            self.assertEqual(tts_server._provider_name(), "none")
+
+    def test_supported_providers(self):
+        for name in ("cmd", "sherpa"):
+            with mock.patch.dict(os.environ, {"XIAOMAN_TTS_PROVIDER": name}, clear=False):
+                self.assertEqual(tts_server._provider_name(), name)
+
+    def test_none_never_available(self):
+        self.assertFalse(tts_server.provider_available("none"))
+
+    def test_cmd_requires_env(self):
+        with mock.patch.dict(os.environ, {"XIAOMAN_TTS_CMD": ""}, clear=False):
+            self.assertFalse(tts_server.provider_available("cmd"))
+        with mock.patch.dict(os.environ, {"XIAOMAN_TTS_CMD": "tts-cli --stdout"}, clear=False):
+            self.assertTrue(tts_server.provider_available("cmd"))
+
+    def test_sherpa_requires_local_model_files(self):
+        with mock.patch.dict(os.environ, {"XIAOMAN_TTS_SHERPA_MODEL": "",
+                                          "XIAOMAN_TTS_SHERPA_TOKENS": ""}, clear=False):
+            self.assertFalse(tts_server.provider_available("sherpa"))
+
+    def test_rate_table_matches_frontend(self):
+        self.assertEqual(tts_server.TTS_RATES,
+                         {"slow": 0.86, "normal": 1.02, "fast": 1.18})
+
+
+class CmdProviderTest(unittest.TestCase):
+    """cmd provider：原文只走 stdin，进程只回音频；失败只报退出码（不泄露输出）"""
+
+    def _run(self, code, argv):
+        with mock.patch.object(tts_server, "PROVIDER", "cmd"), \
+                mock.patch.object(tts_server, "_cmd_argv", return_value=tuple(argv)):
+            return tts_server._cmd_synthesize("机密原文", "zh-CN-XiaoyiNeural", "normal")
+
+    def test_output_is_returned(self):
+        audio = self._run(0, [sys.executable, "-c",
+                              "import sys;sys.stdout.buffer.write(b'ID3fake')"])
+        self.assertEqual(audio, b"ID3fake")
+
+    def test_nonzero_exit_raises_without_echo(self):
+        with self.assertRaises(tts_server.TtsProviderUnavailable) as cm:
+            self._run(0, [sys.executable, "-c", "import sys;sys.exit(3)"])
+        self.assertNotIn("机密原文", str(cm.exception))
+
+    def test_empty_output_raises(self):
+        with self.assertRaises(tts_server.TtsProviderUnavailable):
+            self._run(0, [sys.executable, "-c", "pass"])
+
+
 class HandlerHTTPTest(unittest.TestCase):
-    """本地回环起真实 Handler，验证 400/413/OPTIONS（不触发合成、不触网）"""
+    """本地回环起真实 Handler，验证 400/413/OPTIONS/503（不触发合成、不触网）"""
 
     @classmethod
     def setUpClass(cls):
@@ -136,6 +196,15 @@ class HandlerHTTPTest(unittest.TestCase):
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/tts", data=data, method="POST",
             headers={"Content-Type": "application/json", "Origin": ORIGIN})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, r.read(), dict(r.headers)
+        except urllib.error.HTTPError as e:
+            return e.code, e.read(), dict(e.headers)
+
+    def _get(self, path, headers=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
+                                     headers=headers or {"Origin": ORIGIN})
         try:
             with urllib.request.urlopen(req, timeout=5) as r:
                 return r.status, r.read(), dict(r.headers)
@@ -178,19 +247,54 @@ class HandlerHTTPTest(unittest.TestCase):
         self.assertIn("POST", headers.get("Access-Control-Allow-Methods", ""))
         self.assertIn("Content-Type", headers.get("Access-Control-Allow-Headers", ""))
 
+    def test_default_provider_none_post_returns_503(self):
+        """默认不启用任何合成后端：POST 必须回 503 JSON，供前端静默降级"""
+        with mock.patch.object(tts_server, "PROVIDER", "none"), \
+                mock.patch.object(tts_server, "provider_available", return_value=False), \
+                self.assertLogs("xiaoman-tts", level="INFO") as cm:
+            code, body, headers = self._post({"text": SECRET})
+
+        self.assertEqual(code, 503)
+        payload = json.loads(body.decode())
+        self.assertEqual(payload, {"error": "tts_provider_unavailable", "provider": "none"})
+        self.assertEqual(headers.get("Content-Type"), "application/json; charset=utf-8")
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
+        joined = "\n".join(cm.output)
+        self.assertNotIn(SECRET, joined)
+        self.assertIn("tts unavailable", joined)
+
+    def test_default_provider_none_get_returns_503_without_text_in_log(self):
+        qs = urllib.parse.urlencode({"text": SECRET, "voice": tts_server.DEFAULT_VOICE})
+        with mock.patch.object(tts_server, "PROVIDER", "none"), \
+                mock.patch.object(tts_server, "provider_available", return_value=False), \
+                self.assertLogs("xiaoman-tts", level="INFO") as cm:
+            code, body, _ = self._get(f"/tts?{qs}")
+
+        self.assertEqual(code, 503)
+        self.assertEqual(json.loads(body.decode()),
+                         {"error": "tts_provider_unavailable", "provider": "none"})
+        self.assertNotIn(SECRET, "\n".join(cm.output))
+
+    def test_health_reports_provider_and_no_tts_text(self):
+        with mock.patch.object(tts_server, "PROVIDER", "none"), \
+                mock.patch.object(tts_server, "provider_available", return_value=False):
+            code, body, _ = self._get("/health")
+        self.assertEqual(code, 200)
+        payload = json.loads(body.decode())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["provider"], "none")
+        self.assertFalse(payload["available"])
+
     def test_get_compat_still_works_and_text_not_logged(self):
-        async def fake_synth(text, voice, rate="+4%", pitch="+12Hz"):
+        def fake_synth(text, voice, rate="normal"):
             return b"ID3legacy"
 
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/tts?"
-            + urllib.parse.urlencode({"text": SECRET, "voice": tts_server.DEFAULT_VOICE}),
-            headers={"Origin": ORIGIN})
-        with mock.patch.object(tts_server, "HAS_EDGE", True), \
+        qs = urllib.parse.urlencode({"text": SECRET, "voice": tts_server.DEFAULT_VOICE})
+        with mock.patch.object(tts_server, "provider_available", return_value=True), \
                 mock.patch.object(tts_server, "_get_or_generate_audio", fake_synth), \
+                mock.patch.object(tts_server, "audio_content_type", return_value="audio/mpeg"), \
                 self.assertLogs("xiaoman-tts", level="INFO") as cm:
-            with urllib.request.urlopen(req, timeout=5) as r:
-                code, body = r.status, r.read()
+            code, body, _ = self._get(f"/tts?{qs}")
 
         self.assertEqual(code, 200)
         self.assertEqual(body, b"ID3legacy")
@@ -206,12 +310,13 @@ class HandlerHTTPTest(unittest.TestCase):
     def test_post_success_returns_audio_without_logging_text(self):
         calls = {}
 
-        async def fake_synth(text, voice, rate="+4%", pitch="+12Hz"):
+        def fake_synth(text, voice, rate="normal"):
             calls.update(text=text, voice=voice, rate=rate)
             return b"ID3fake-audio"
 
-        with mock.patch.object(tts_server, "HAS_EDGE", True), \
+        with mock.patch.object(tts_server, "provider_available", return_value=True), \
                 mock.patch.object(tts_server, "_get_or_generate_audio", fake_synth), \
+                mock.patch.object(tts_server, "audio_content_type", return_value="audio/mpeg"), \
                 self.assertLogs("xiaoman-tts", level="INFO") as cm:
             code, body, headers = self._post({"text": SECRET, "rate": "fast"})
 
@@ -220,7 +325,8 @@ class HandlerHTTPTest(unittest.TestCase):
         self.assertEqual(headers.get("Content-Type"), "audio/mpeg")
         self.assertEqual(calls["text"], SECRET)
         self.assertEqual(calls["voice"], tts_server.DEFAULT_VOICE)
-        self.assertEqual(calls["rate"], tts_server.TTS_RATES["fast"])
+        self.assertEqual(calls["rate"], "fast")
+        self.assertEqual(tts_server.TTS_RATES[calls["rate"]], 1.18)
         self.assertNotIn(SECRET, "\n".join(cm.output))
 
 

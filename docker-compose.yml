@@ -10,6 +10,9 @@ x-common-env: &common-env
   AI_MODEL: ${AI_MODEL:-nvidia/nemotron-3.5-lightning:free}
   TTS_BASE: ${TTS_BASE:-http://127.0.0.1:8903}
   TTS_VOICE: ${TTS_VOICE:-zh-CN-XiaoyiNeural}
+  # 默认不启用服务端合成（不内置云 TTS / 模型）；/tts 回 503，前端走系统 TTS。
+  # 可选：cmd（外部本地 TTS 命令，见 XIAOMAN_TTS_CMD）或 sherpa（自备模型）
+  XIAOMAN_TTS_PROVIDER: ${XIAOMAN_TTS_PROVIDER:-none}
   # 安卓壳：file:// 页面 Origin 是字面量 "null"；WebViewAssetLoader 域是
   # https://appassets.androidplatform.net。三者都必须在白名单里，否则 APK 内
   # 拉模型 / 调代理一律被 CORS 拦。
@@ -70,9 +73,11 @@ services:
   tts:
     build:
       context: .
-      target: tts
+      target: runtime
       network: host
     image: treehole-tts:local
+    # TTS 与 web/mock 共用同一运行时（0 新增依赖）；provider 由环境变量决定
+    command: ["python", "server/tts_server.py"]
     ports:
       - "127.0.0.1:8903:8903"
     environment:

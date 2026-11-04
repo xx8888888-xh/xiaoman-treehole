@@ -16,9 +16,11 @@ DST="$ASSETS_DIR/www"
 # shellcheck source=scripts/asset_excludes.sh
 . "$ROOT/scripts/asset_excludes.sh"
 
-# assets/www 是生成物、不入库（见 .gitignore），目录可能不存在 → 先建
-mkdir -p "$ASSETS_DIR"
-rm -rf "$DST"; mkdir -p "$DST"
+# assets/www 是生成物、不入库（见 .gitignore），目录可能不存在 → 先建。
+# 注意：只清空内容、不删除目录本身，否则 compose 里对 assets/www 的 bind mount
+# 会指向被删掉的旧 inode，运行中的 web 容器会突然 404。
+mkdir -p "$DST"
+find "$DST" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 ( cd "$SRC" && tar cf - "${ASSET_TAR_EXCLUDES[@]}" . ) | ( cd "$DST" && tar xf - )
 
 # 源 commit：能拿到就写；web/ 有未提交改动时标记 dirty（发布物不完全等于任一提交）

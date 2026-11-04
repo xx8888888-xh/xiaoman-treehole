@@ -1,6 +1,6 @@
 # 小满树洞（treehole）
 
-AI 陪伴 / 情感倾诉小应用：静态前端（Live2D 小满）+ 本地对话服务（内置规则引擎 + OpenAI 兼容代理）+ edge-tts 语音服务。
+AI 陪伴 / 情感倾诉小应用：静态前端（Live2D 小满）+ 本地对话服务（内置规则引擎 + OpenAI 兼容代理）+ 可插拔语音服务（默认走设备系统 TTS）。
 
 ## 快速开始
 
@@ -16,7 +16,7 @@ cd web && python -m http.server 8901
 
 直接双击 `web/index.html`（`file://`）也能看到界面，没有后端时会自动落到**离线规则引擎 + 浏览器语音**；
 但部分浏览器对 `file://` 下的 IndexedDB 有限制，**推荐起一个本地静态服务**。
-需要 mock 对话 / 真模型 / edge-tts 语音时，用方式 ② 或 ②-b。
+需要 mock 对话 / 真模型时用方式 ② 或 ②-b；语音默认走安卓系统 TTS / 浏览器 `speechSynthesis`，不依赖后端。
 
 ### 方式 ②：Docker Compose 全栈（推荐）
 
@@ -38,7 +38,7 @@ docker compose up -d --build      # 或在 WSL: docker compose -f ~/treehole-sta
 |------|------|------|
 | 8901 | web | 前端静态站 |
 | 8902 | mock | 对话服务（mock 规则引擎 + LLM 代理） |
-| 8903 | tts | 语音合成（edge-tts） |
+| 8903 | tts | 语音服务（默认 `provider=none`，不内置合成后端，由设备系统 TTS 接管） |
 
 容器统一打 label `com.dsh.project=treehole`，可用 `docker ps --filter label=com.dsh.project=treehole` 查看。
 
@@ -75,7 +75,9 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 | `AI_API_KEY` | 仅 `openrouter` / 自建网关需要；**Kilo 免 Key**。留空时 Windows 下自动从凭据管理器读取 |
 | `AI_KEY_CREDENTIAL_TARGET` | 读取通用凭据的 Target 名（默认 Freebuff BYOK 写入的那条），可选 |
 | `AI_MODEL` | 默认 `nvidia/nemotron-3.5-lightning:free` |
-| `TTS_BASE` / `TTS_VOICE` | 语音服务地址与音色 |
+| `TTS_BASE` / `TTS_VOICE` | 语音服务地址与音色（仅服务端 provider 启用时使用） |
+| `XIAOMAN_TTS_PROVIDER` | 服务端语音后端：`none`（默认，回 503）/ `cmd` / `sherpa` |
+| `XIAOMAN_TTS_CMD` | `provider=cmd` 时的本地 TTS 命令（文本走 stdin、音频走 stdout） |
 
 两条预置通道：
 
@@ -105,6 +107,26 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
   `XIAOMAN_ALLOW_ORIGINS` 覆盖。音频接口 `/tts` 是公开资源，固定回 `Access-Control-Allow-Origin: *`
   （跨域 `<audio>` + WebAudio 取音量包络所必需；无此头浏览器会把音频静音）。
 
+## 依赖说明与许可
+
+- **不再使用 edge-tts**：它不是开源许可（GPL-3.0），微软也未授权对 Edge 朗读接口做自动化调用，
+  且强依赖在线服务、与本项目「离线可用 + 可降级」的定位冲突。仓库代码 / 依赖清单 / 镜像中已无任何
+  `edge-tts` 引用与安装层。
+- **语音默认走设备本机能力**：安卓用系统 TTS（`AndroidTTS` JS Bridge：`available / speakRate / stop`，
+  完成回调 `window.__ttsEnded`），浏览器用 `speechSynthesis`；两者随系统离线可用、不联网、零额外依赖。
+- **服务端语音是可选插件**：`server/tts_server.py` 默认 `XIAOMAN_TTS_PROVIDER=none`，
+  `/tts` 返回 `503 {"error":"tts_provider_unavailable","provider":"none"}`；前端收到后静默降级，
+  文字始终先出，不阻塞对话。需要服务端合成时用环境变量显式开启（不联网下载任何东西）：
+  - `XIAOMAN_TTS_PROVIDER=cmd` + `XIAOMAN_TTS_CMD=/path/to/tts-cli`：文本走 stdin、音频走 stdout，
+    可把 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）的 CLI 包成这个命令；
+  - `XIAOMAN_TTS_PROVIDER=sherpa` + 自备 `XIAOMAN_TTS_SHERPA_MODEL` / `..._TOKENS` 本地模型文件
+    （可选 `_LEXICON` / `_DATA_DIR` / `_DICT_DIR` / `_SID`）。**仓库不内置、不下载模型**，
+    模型许可由使用者自行确认。
+- **许可友好**：生产新增运行时依赖保持 **0**（Python 侧只用标准库；前端既有依赖为 MIT）。
+  可选后端优先 Apache-2.0 / MIT 实现，明确避免 GPL/AGPL 传染性许可。
+- **CI 锁版本**：基础镜像 `python:3.12-slim`、Playwright `1.63.0`、Gradle Wrapper 8.7 均在配置中固定，
+  不随 latest 漂移；单测与 e2e 全部离线，不调用任何云 TTS。
+
 ## 常见问题（FAQ）
 
 **没有 API key 怎么办？**
@@ -126,9 +148,11 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 **语音没有声音？**
 
-1. 服务端语音需要 8903 在跑：`bash scripts/verify_stack.sh dev` 做一次三端口冒烟；
+1. 服务端默认 `provider=none`（不合成），这是设计行为：语音由安卓系统 TTS / 浏览器 `speechSynthesis` 接管；
+   安卓需在系统设置里安装中文语音包；
 2. 浏览器有自动播放限制，发一条消息（或点一下页面）之后再播放；
-3. 安卓走系统 TTS 时需安装中文语音包；也可在设置页把「语音回复」切到服务端（需后端可达）或关闭；
+3. 确实需要服务端语音时，用 `XIAOMAN_TTS_PROVIDER=cmd`（或 `sherpa`）显式开启，见「依赖说明与许可」；
+   可用 `curl -s http://127.0.0.1:8903/health` 查看当前 provider；
 4. 「说话音色 / 语速」修改后从下一条消息开始生效。
 
 **我的数据存在哪里？**
@@ -152,7 +176,7 @@ App 命中危机信号时会给出固定关怀话术与热线，不依赖模型�
 ```text
 treehole/
 ├─ web/                 前端（index.html + css/js/assets），浏览器与 APK 共用的唯一真源
-├─ server/              本地服务：mock_api.py（对话/mock/LLM 代理）、tts_server.py（edge-tts）、risk_guard.py（危机分级）
+├─ server/              本地服务：mock_api.py（对话/mock/LLM 代理）、tts_server.py（可插拔 TTS，默认 none）、risk_guard.py（危机分级）
 ├─ android/             WebView 壳工程（app/src/main/{java,res,assets} + Gradle Wrapper）
 ├─ scripts/             构建/启动/测试脚本（build_assets.sh、build_apk.sh、dev_up.sh、test_*.py）
 ├─ docs/                发布与运维文档（RELEASE_SIGNING.md、DEVLOG.md、PROJECT_STATE.md、截图等）

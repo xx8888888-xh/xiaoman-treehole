@@ -420,18 +420,43 @@ const App = (() => {
   window.__retheme = () => applyTheme((() => {
     try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; }
   })());
+  // 外观自检/自动化入口（只读当前值；切换请用 Appearance.setPreset/setSwitch）
+  window.__appearance = () => (window.Appearance ? Appearance.get() : null);
 
-  // ---------- 字号档位（标准 / 大 / 特大；跨启动持久化） ----------
-  // 用户中有人需要更大的字：用 body 上的档位类驱动 CSS 变量 --fs，
-  // 不动布局结构、不加动画（硬约束）。
-  const FS_KEY = "xiaoman_fs";
-  function applyFontScale(v) {
-    const mode = v === "large" || v === "xlarge" ? v : "normal";
-    document.body.classList.remove("fs-large", "fs-xlarge");
-    if (mode !== "normal") document.body.classList.add("fs-" + mode);
-    try { localStorage.setItem(FS_KEY, mode); } catch (e) {}
+  // ---------- 外观预设 / 三个独立开关 ----------
+  // appearance.js 已在 <head> 首帧把选择写到 <html data-*>；这里只负责设置面板同步与事件。
+  const FONT_LABEL = { normal: "标准", large: "大", xlarge: "特大" };
+  const PRESET_LABEL = { minimal: "极简", default: "默认", lively: "生动", custom: "自定义" };
+
+  function appearanceHint(p) {
+    const bits = [];
+    bits.push(p.motion ? "动画开" : "零动画");
+    bits.push("字号" + (FONT_LABEL[p.font] || "标准"));
+    bits.push(p.iconsGray ? "灰阶图标" : "彩色图标");
+    if (p.flat) bits.push("扁平层级");
+    const head = PRESET_LABEL[p.preset] || "自定义";
+    return `${head}：${bits.join(" · ")}`;
   }
-  applyFontScale((() => { try { return localStorage.getItem(FS_KEY) || "normal"; } catch (e) { return "normal"; } })());
+
+  function syncAppearancePanel() {
+    if (!window.Appearance) return;
+    const p = Appearance.get();
+    document.querySelectorAll("#apPresets [data-preset]").forEach(btn => {
+      btn.setAttribute("aria-checked", String(p.preset === btn.dataset.preset));
+    });
+    document.querySelectorAll("#apFonts [data-font]").forEach(btn => {
+      btn.setAttribute("aria-checked", String(p.font === btn.dataset.font));
+    });
+    $("apMotion").checked = p.motion;
+    $("apIcons").checked = p.iconsGray;
+    $("apHint").textContent = appearanceHint(p);
+  }
+
+  function onAppearanceChanged() {
+    syncAppearancePanel();
+    if (window.Stage && Stage.setMotionEnabled) Stage.setMotionEnabled(Appearance.get().motion);
+  }
+  window.addEventListener("appearance:change", onAppearanceChanged);
 
   // ---------- 降级提示（安静、可关闭） ----------
   // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。
@@ -1064,7 +1089,7 @@ const App = (() => {
       $("cfgTts").value = cfg.tts || "server";
       $("cfgVoice").value = cfg.voice || "zh-CN-XiaoyiNeural";
       $("cfgRate").value = cfg.ttsRate || "normal";
-      $("cfgFont").value = (() => { try { return localStorage.getItem(FS_KEY) || "normal"; } catch (e) { return "normal"; } })();
+      syncAppearancePanel();
       $("cfgTheme").value = (() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })();
       $("cfgTestResult").textContent = "";
       openPanel($("settingsModal"), $("settingsBtn"));
@@ -1085,10 +1110,28 @@ const App = (() => {
         toast("已保存");
       });
     });
-    $("cfgFont").addEventListener("change", () => {
-      applyFontScale($("cfgFont").value);
-      toast("字号已调整");
+    // 外观预设：三档按钮 + 三个独立开关（改任一开关 → 自定义）
+    $("apPresets").querySelectorAll("[data-preset]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const p = Appearance.setPreset(btn.dataset.preset);
+        toast(`外观已切换：${PRESET_LABEL[p.preset]}`);
+      });
     });
+    $("apMotion").addEventListener("change", () => {
+      Appearance.setSwitch("motion", $("apMotion").checked);
+      toast($("apMotion").checked ? "已开启动画" : "已关闭所有动画");
+    });
+    $("apIcons").addEventListener("change", () => {
+      Appearance.setSwitch("iconsGray", $("apIcons").checked);
+      toast($("apIcons").checked ? "图标已改为灰阶" : "图标已改为彩色");
+    });
+    $("apFonts").querySelectorAll("[data-font]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        Appearance.setSwitch("font", btn.dataset.font);
+        toast("字号已调整");
+      });
+    });
+    syncAppearancePanel();
     // ---------- 倾诉记录导出 / 导入（本地 JSON，不做云同步） ----------
     $("backupExport").onclick = async () => {
       const btn = $("backupExport"), out = $("backupResult");
@@ -1205,8 +1248,10 @@ const App = (() => {
       console.log("[probe] float-mode: stage & widget skipped");
       try { $("stage").style.display = "none"; } catch (e) {}
     } else {
-      Stage.mount($("stage")).then(() => console.log("[probe] mount ok ms=" + Math.round(performance.now())))
-        .catch(e => console.warn("[probe] STAGE_FAIL", e.message));
+      Stage.mount($("stage")).then(() => {
+        Stage.setMotionEnabled(Appearance.get().motion);
+        console.log("[probe] mount ok ms=" + Math.round(performance.now()));
+      }).catch(e => console.warn("[probe] STAGE_FAIL", e.message));
     }
 
     try { greet(); console.log("[probe] greet ok ms=" + Math.round(performance.now())); } catch (e) { console.warn("[probe] GREET_FAIL", e.message); }

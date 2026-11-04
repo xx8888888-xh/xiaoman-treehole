@@ -162,14 +162,15 @@ async def main():
             print(f"② 对话回复: {'PASS' if ok2 else 'FAIL'} (小满消息数={n_them}, 含安慰词={any(k in msgs for k in ('骂','累','委屈'))})")
             check("② 对话回复", ok2)
 
-            # —— 语音请求落点（必须是 TTS 端口） ——
+            # —— 语音请求落点（启用 server 时必须是 TTS 端口；provider=none 允许请求后降级） ——
             print("③ TTS 请求数:", len(tts_hits))
             for u in tts_hits[:3]:
                 print("    ->", u[:95])
             ports = {u.split("//")[1].split("/")[0] for u in tts_hits}
-            ok4 = ports == {TTS_ORIGIN}
-            print("④ TTS 端口:", "PASS " + str(sorted(ports)) if ok4 else "FAIL " + str(sorted(ports)))
-            check("④ TTS 端口", ok4)
+            ok4 = ports <= {TTS_ORIGIN}
+            note4 = str(sorted(ports)) if ports else "无请求（provider=none 直接降级）"
+            print("④ TTS 请求落点:", "PASS " + note4 if ok4 else "FAIL " + str(sorted(ports)))
+            check("④ TTS 请求落点", ok4)
 
             # ④b 日志隐私：对话原文不得出现在任何 TTS 请求 URL（P1-5 验收）
             leak = [u for u in tts_hits if "text=" in u or "%E6%88%91%E5%9C%A8" in u]
@@ -177,34 +178,106 @@ async def main():
             print("④b TTS 查询串脱敏:", "PASS" if ok4b else f"FAIL {leak[:2]}")
             check("④b TTS 查询串脱敏", ok4b)
 
+            # ④c 默认 provider=none / 弱网：音频失败绝不能阻塞文字，页面零 JS 错误
+            ok4c = len(msgs.strip()) > 8 and not errors
+            print("④c 文字优先且零 JS 错误:",
+                  "PASS" if ok4c else f"FAIL text_len={len(msgs.strip())} errors={errors}")
+            check("④c 文字优先且零 JS 错误", ok4c)
+
             await pg.screenshot(path=os.path.join(SHOTS, "09_e2e_chat.png"))
 
-            # —— 语音是否真的产出音频帧（用 fetch 直测同一 URL） ——
+            # —— 服务端语音语义直测：/health 报 provider；none → 503 JSON，启用 → 200 音频 ——
             audio = await pg.evaluate("""
               async (origin) => {
-                const r = await fetch('http://' + origin + '/tts?text=' + encodeURIComponent('我在听'), {method:'GET'});
-                const buf = await r.arrayBuffer();
-                return {status: r.status, bytes: buf.byteLength, type: r.headers.get('content-type')};
+                const health = await (await fetch('http://' + origin + '/health')).json();
+                const r = await fetch('http://' + origin + '/tts?text=' + encodeURIComponent('我在听')
+                  + '&voice=zh-CN-XiaoyiNeural', {method:'GET'});
+                let body = null;
+                if (r.ok) {
+                  body = (await r.arrayBuffer()).byteLength;
+                } else {
+                  try { body = await r.json(); } catch (e) { body = null; }
+                }
+                return {provider: health.provider, available: health.available,
+                        status: r.status, body: body};
               }
             """, TTS_ORIGIN)
-            print("⑤ 音频直测:", audio)
+            print("⑤ 服务端语音语义:", audio)
+            if audio.get("provider") == "none":
+                ok5 = (audio["status"] == 503
+                       and audio["body"] == {"error": "tts_provider_unavailable",
+                                             "provider": "none"})
+            else:
+                ok5 = audio["status"] == 200 and isinstance(audio["body"], int) and audio["body"] > 1000
+            print("⑤ 服务端语音语义:", "PASS" if ok5 else "FAIL")
+            check("⑤ 服务端语音语义", ok5)
 
-            # —— ⑤b 语速档位：服务端 slow/normal/fast 都必须可用（弱网兜底前的正常路径） ——
+            # —— ⑤b 语速档位：provider=none 时三档都必须是同一 503 JSON（不静默 200） ——
             rate_audio = await pg.evaluate("""
               async () => {
                 const out = {};
                 for (const r of ['slow', 'normal', 'fast']) {
                   const res = await fetch('http://127.0.0.1:8903/tts?text=' + encodeURIComponent('我在听')
                     + '&voice=zh-CN-XiaoyiNeural&rate=' + r);
-                  const b = await res.arrayBuffer();
-                  out[r] = {status: res.status, bytes: b.byteLength};
+                  if (res.ok) {
+                    out[r] = {status: res.status, bytes: (await res.arrayBuffer()).byteLength};
+                  } else {
+                    let body = null;
+                    try { body = await res.json(); } catch (e) { body = null; }
+                    out[r] = {status: res.status, body: body};
+                  }
                 }
                 return out;
               }
             """)
-            ok_rate = all(v["status"] == 200 and v["bytes"] > 1000 for v in rate_audio.values())
+            if audio.get("provider") == "none":
+                ok_rate = all(v["status"] == 503
+                              and v.get("body") == {"error": "tts_provider_unavailable",
+                                                    "provider": "none"}
+                              for v in rate_audio.values())
+            else:
+                ok_rate = all(v["status"] == 200 and v.get("bytes", 0) > 1000
+                              for v in rate_audio.values())
             print("⑤b TTS 语速档位:", "PASS " + str(rate_audio) if ok_rate else "FAIL " + str(rate_audio))
             check("⑤b TTS 语速档位", ok_rate)
+
+            # —— ⑤c 有 AndroidTTS 时走系统 TTS：不得再请求服务端 /tts ——
+            native_hits = []
+            pg_native = await b.new_page(viewport={"width": 390, "height": 844})
+            pg_native.on("pageerror", lambda e: errors.append("native: " + str(e)))
+            pg_native.on("request", lambda r: native_hits.append(r.url)
+                         if r.url.split("?")[0].endswith("/tts") and r.method != "OPTIONS" else None)
+            await pg_native.add_init_script("""
+              window.__spoken = [];
+              window.AndroidTTS = {
+                available: () => true,
+                speakRate: (text, rate) => {
+                  window.__spoken.push([text, rate]);
+                  setTimeout(() => window.__ttsEnded && window.__ttsEnded(), 20);
+                  return true;
+                },
+                speak: (text) => { window.__spoken.push([text, 1.02]); return true; },
+                stop: () => {}
+              };
+            """)
+            await pg_native.goto(BASE, wait_until="domcontentloaded")
+            await pg_native.wait_for_selector("#textInput", state="visible", timeout=15000)
+            native_info = await pg_native.evaluate("""
+              async () => {
+                const provider = TTS.provider();
+                const chain = TTS.chain();
+                await new Promise((resolve) => TTS.speak('系统语音测试', () => {}, resolve));
+                return {provider: provider, chain: chain, spoken: window.__spoken.slice()};
+              }
+            """)
+            ok_native = (native_info["provider"] == "native"
+                         and any(t == "系统语音测试" for t, _ in native_info["spoken"])
+                         and not native_hits)
+            print("⑤c AndroidTTS 系统 TTS:",
+                  "PASS " + str(native_info) if ok_native
+                  else f"FAIL {native_info} hits={native_hits}")
+            check("⑤c AndroidTTS 系统 TTS", ok_native)
+            await pg_native.close()
 
             # —— 危机拦截 ——
             await pg.fill("#textInput", "我不想活了")

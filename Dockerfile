@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
-# 小满树洞 · 单镜像多目标（web / mock / tts 共用运行时，tts 额外装 edge-tts）
+# 小满树洞 · 单镜像多目标（web / mock / tts 共用同一运行时）
+# TTS 服务不内置任何第三方语音库 / 模型：默认 provider=none，由前端
+# 「安卓系统 TTS / 浏览器 speechSynthesis」接管；需要服务端合成时用环境变量
+# 显式启用可选 provider（不新增运行时 pip 依赖，见 server/tts_server.py）。
 # 所有容器统一加 label com.dsh.project=treehole（见 docker-compose.yml）
 FROM python:3.12-slim AS runtime
 
@@ -20,10 +23,5 @@ COPY scripts/verify_manifest.py ./scripts/verify_manifest.py
 # 静态站 / mock API / TTS 三个端口
 EXPOSE 8901 8902 8903
 
-# 默认：静态站点（compose 里 web 服务用这个 target）
+# 静态站（compose 里 web 服务用这个 target）；mock / tts 由 compose 覆盖 command
 CMD ["python", "-m", "http.server", "8901", "--bind", "0.0.0.0", "--directory", "web"]
-
-# TTS 目标：额外装 edge-tts（缓存目录由 TTS_CACHE_DIR + volume 提供）
-FROM runtime AS tts
-RUN pip install --no-cache-dir "edge-tts>=6.1,<8"
-CMD ["python", "server/tts_server.py"]

@@ -8,6 +8,8 @@
 <meta name="description" content="开源 AI 树洞陪伴应用 —— Live2D 角色 + 活人感对话 + 语音回复">
 <meta name="theme-color" content="#FFF9F2">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Ccircle%20cx='16'%20cy='16'%20r='13'%20fill='%23F7A8B8'/%3E%3C/svg%3E">
+<!-- 外观预设必须早于样式表执行：首帧直接带 data-*，避免刷新时闪回默认 -->
+<script src="js/appearance.js"></script>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -116,13 +118,25 @@
           <option value="dark">深色</option>
         </select>
       </label>
-      <label class="field"><span>字号</span>
-        <select id="cfgFont">
-          <option value="normal">标准</option>
-          <option value="large">大（+15%）</option>
-          <option value="xlarge">特大（+30%）</option>
-        </select>
-      </label>
+      <div class="field appearance-field">
+        <span id="apLabel">外观预设</span>
+        <div class="seg" id="apPresets" role="radiogroup" aria-labelledby="apLabel">
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="minimal">极简</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="default">默认</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="lively">生动</button>
+        </div>
+        <div class="ap-switches">
+          <label class="switch"><input type="checkbox" id="apMotion"><span>动画</span></label>
+          <label class="switch"><input type="checkbox" id="apIcons"><span>图标灰阶</span></label>
+        </div>
+        <span id="apFontLabel">字号</span>
+        <div class="seg" id="apFonts" role="radiogroup" aria-labelledby="apFontLabel">
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-font="normal">标准</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-font="large">大</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-font="xlarge">特大</button>
+        </div>
+        <p class="mini" id="apHint" role="status" aria-live="polite"></p>
+      </div>
       <button class="ghost-btn" id="cfgTestBtn">测试连接</button>
       <p class="mini" id="cfgTestResult" role="status" aria-live="polite"></p>
       <label class="field"><span>语音回复</span>

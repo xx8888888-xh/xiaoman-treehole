@@ -1,22 +1,42 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-tts_server.py · 语音回复服务（edge-tts 封装）
-===========================================
-POST /tts  {"text": "你好", "voice": "zh-CN-XiaoyiNeural"} → audio/mpeg
-GET  /tts?text=你好&voice=… → audio/mpeg（保留兼容旧客户端，新客户端请用 POST）
+tts_server.py · 语音回复服务（可插拔 TTS provider）
+===================================================
+默认 provider = none：不内置任何云 TTS、不下载任何模型，/tts 直接回
+503 {"error": "tts_provider_unavailable", "provider": "none"}，
+前端据此静默降级到「安卓系统 TTS / 浏览器 speechSynthesis」，文字先出不受影响。
+
+可选 provider（全部需要显式环境变量开启，且不新增任何运行时 pip 依赖）：
+  XIAOMAN_TTS_PROVIDER=cmd    调用本机已有的 TTS 可执行文件：
+                               XIAOMAN_TTS_CMD /path/to/tts-cli      （必填）
+                               XIAOMAN_TTS_CMD_TYPE audio/wav|audio/mpeg（默认 audio/wav）
+                               文本经 stdin 传入，音频写 stdout；
+                               N 也可把 sherpa-onnx（Apache-2.0）CLI 包成这个命令。
+  XIAOMAN_TTS_PROVIDER=sherpa 进程内调用 sherpa-onnx（需自行 pip 安装 + 自备模型）：
+                               XIAOMAN_TTS_SHERPA_MODEL   model.onnx 路径
+                               XIAOMAN_TTS_SHERPA_TOKENS  tokens.txt 路径
+                               可选 XIAOMAN_TTS_SHERPA_LEXICON / _DATA_DIR / _DICT_DIR / _SID
+                               模型文件必须已存在本地，服务不会联网下载。
+
+接口：
+POST /tts  {"text": "你好", "voice": "zh-CN-XiaoyiNeural", "rate": "normal"} → audio/*
+GET  /tts?text=你好&voice=… → audio/*（保留兼容旧客户端，新客户端请用 POST）
+GET  /health → {"ok": true, "provider": ..., "available": ...}
 安全约定：对话原文只走 POST body；日志只记「方法 + path」，查询串/body 均不落盘。
-语音质量验证：TTS 生成后用 ASR 回环核对文本（见 scripts/verify_tts.py）
 """
+import hashlib
+import io
 import json
+import logging
 import os
 import re
-import urllib.parse
-import hashlib
-import asyncio
-import logging
+import shlex
+import subprocess
 import threading
 import time
+import urllib.parse
+import wave
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
@@ -35,21 +55,19 @@ logger = logging.getLogger("xiaoman-tts")
 BIND_HOST = xm_config.BIND_HOST
 PORT = xm_config.TTS_PORT
 
-# 代理：aiohttp 默认不读环境变量，必须显式传给 edge-tts，否则受限网络直连会超时
-# 优先 HTTPS_PROXY → https_proxy → ALL_PROXY → all_proxy，都没有则为 None
-PROXY = (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-         or os.environ.get("ALL_PROXY") or os.environ.get("all_proxy") or None)
+SUPPORTED_PROVIDERS = ("none", "cmd", "sherpa")
 
-# ---------------- edge-tts 可用性 ----------------
-try:
-    import edge_tts
-    HAS_EDGE = True
-except ImportError:
-    HAS_EDGE = False
-    edge_tts = None  # type: ignore
+
+def _provider_name():
+    raw = (os.environ.get("XIAOMAN_TTS_PROVIDER")
+           or os.environ.get("TTS_PROVIDER") or "none").strip().lower()
+    return raw if raw in SUPPORTED_PROVIDERS else "none"
+
+
+PROVIDER = _provider_name()
 
 # ---------------- Voice 白名单 ----------------
-# 包含默认 zh-CN-XiaoyiNeural 与常用 zh-CN 音色
+# 包含默认 zh-CN-XiaoyiNeural 与常用 zh-CN 音色（前端音色白名单与之对齐）
 ALLOWED_VOICES = frozenset({
     "zh-CN-XiaoyiNeural",      # 默认：女性，自然
     "zh-CN-YunjianNeural",     # 男性，沉稳
@@ -61,16 +79,17 @@ ALLOWED_VOICES = frozenset({
     "zh-CN-shaanxi-XiaoniNeural",    # 陕西方言
 })
 
-# 语速档位 → edge-tts rate 参数（与前端设置页 slow/normal/fast 对齐）
+# 语速档位 → 数值倍率（与前端 slow/normal/fast 对齐；cmd/sherpa 都吃这个倍率）
 TTS_RATES = {
-    "slow": "-12%",
-    "normal": "+4%",
-    "fast": "+18%",
+    "slow": 0.86,
+    "normal": 1.02,
+    "fast": 1.18,
 }
 
 DEFAULT_VOICE = "zh-CN-XiaoyiNeural"
 MAX_TEXT_LEN = 300        # 单条语音文本上限（超出截断，防止超长请求拖垮合成）
 MAX_BODY_BYTES = 8 * 1024  # POST JSON body 上限
+CMD_TIMEOUT = 30          # 外部 TTS 命令超时（秒）
 
 _QUERY_RE = re.compile(r"\?\S*")
 _HTTP_VER_RE = re.compile(r"\s+HTTP/\d+(?:\.\d+)?")
@@ -130,6 +149,142 @@ def parse_tts_payload(raw_body):
     return {"text": text, "voice": voice, "rate": rate_key}
 
 
+# ---------------- provider 探测 ----------------
+class TtsProviderUnavailable(RuntimeError):
+    """当前 provider 不可用（未安装 / 未配置 / 模型缺失 / 外部命令失败）"""
+
+
+def _cmd_argv():
+    """外部 TTS 命令 → argv 元组；未配置返回空元组。text 只走 stdin，不进命令。"""
+    raw = (os.environ.get("XIAOMAN_TTS_CMD") or "").strip()
+    if not raw:
+        return ()
+    try:
+        return tuple(shlex.split(raw, posix=(os.name != "nt")))
+    except ValueError:
+        return ()
+
+
+def _sherpa_paths():
+    """sherpa-onnx 本地模型文件路径；缺失的键为 None。"""
+    return {
+        "model": os.environ.get("XIAOMAN_TTS_SHERPA_MODEL"),
+        "tokens": os.environ.get("XIAOMAN_TTS_SHERPA_TOKENS"),
+        "lexicon": os.environ.get("XIAOMAN_TTS_SHERPA_LEXICON"),
+        "data_dir": os.environ.get("XIAOMAN_TTS_SHERPA_DATA_DIR"),
+        "dict_dir": os.environ.get("XIAOMAN_TTS_SHERPA_DICT_DIR"),
+    }
+
+
+def _sherpa_files_ok():
+    """只做文件存在性检查（不 import 库、不联网、不下载模型）。"""
+    paths = _sherpa_paths()
+    required = (paths["model"], paths["tokens"])
+    if not all(p and os.path.isfile(p) for p in required):
+        return False
+    if paths["lexicon"] and not os.path.isfile(paths["lexicon"]):
+        return False
+    return True
+
+
+def provider_available(name=None):
+    """provider 是否可用。默认 none 永远不可用（返回 503 由前端降级）。"""
+    name = (name or PROVIDER)
+    if name == "none":
+        return False
+    if name == "cmd":
+        return bool(_cmd_argv())
+    if name == "sherpa":
+        return _sherpa_files_ok()
+    return False
+
+
+def audio_content_type():
+    """当前 provider 产出音频的 Content-Type（none 不会被调用）"""
+    if PROVIDER == "cmd":
+        raw = (os.environ.get("XIAOMAN_TTS_CMD_TYPE") or "audio/wav").strip().lower()
+        return raw if raw in ("audio/wav", "audio/mpeg", "audio/ogg") else "audio/wav"
+    return "audio/wav"
+
+
+def _audio_suffix(content_type):
+    return {"audio/mpeg": ".mp3", "audio/ogg": ".ogg"}.get(content_type, ".wav")
+
+
+# ---------------- 各 provider 的合成实现 ----------------
+def _cmd_synthesize(text, voice, rate_key):
+    argv = _cmd_argv()
+    if not argv:
+        raise TtsProviderUnavailable("XIAOMAN_TTS_CMD not configured")
+    env = os.environ.copy()
+    env["XIAOMAN_TTS_VOICE"] = voice
+    env["XIAOMAN_TTS_RATE"] = "%.3f" % TTS_RATES.get(rate_key, TTS_RATES["normal"])
+    try:
+        proc = subprocess.run(argv, input=text.encode("utf-8"),
+                              capture_output=True, timeout=CMD_TIMEOUT, env=env)
+    except FileNotFoundError:
+        raise TtsProviderUnavailable("XIAOMAN_TTS_CMD not found")
+    except subprocess.TimeoutExpired:
+        raise TtsProviderUnavailable("XIAOMAN_TTS_CMD timeout")
+    except OSError as e:
+        raise TtsProviderUnavailable(f"XIAOMAN_TTS_CMD failed: {type(e).__name__}")
+    if proc.returncode != 0:
+        # 只记退出码：stdout/stderr 可能含原文，绝不落日志
+        raise TtsProviderUnavailable(f"XIAOMAN_TTS_CMD exit={proc.returncode}")
+    audio = proc.stdout or b""
+    if not audio:
+        raise TtsProviderUnavailable("XIAOMAN_TTS_CMD produced no audio")
+    return audio
+
+
+def _sherpa_synthesize(text, voice, rate_key):
+    try:
+        import numpy as np
+        import sherpa_onnx
+    except ImportError:
+        raise TtsProviderUnavailable("sherpa-onnx not installed")
+
+    paths = _sherpa_paths()
+    if not _sherpa_files_ok():
+        raise TtsProviderUnavailable("sherpa-onnx model files missing")
+
+    vits = sherpa_onnx.OfflineTtsVitsModelConfig(
+        model=paths["model"],
+        lexicon=paths["lexicon"] or "",
+        tokens=paths["tokens"],
+        data_dir=paths["data_dir"] or "",
+        dict_dir=paths["dict_dir"] or "",
+    )
+    config = sherpa_onnx.OfflineTtsConfig(
+        model=sherpa_onnx.OfflineTtsModelConfig(vits=vits, num_threads=2, provider="cpu")
+    )
+    tts = sherpa_onnx.OfflineTts(config)
+    try:
+        sid = int(os.environ.get("XIAOMAN_TTS_SHERPA_SID") or 0)
+    except ValueError:
+        sid = 0
+    audio = tts.generate(text, sid=sid,
+                         speed=TTS_RATES.get(rate_key, TTS_RATES["normal"]))
+    samples = np.clip(np.asarray(audio.samples), -1.0, 1.0)
+    pcm16 = (samples * 32767).astype("<i2")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(int(audio.sample_rate))
+        w.writeframes(pcm16.tobytes())
+    return buf.getvalue()
+
+
+def synthesize(text, voice, rate_key="normal"):
+    """按当前 provider 合成音频；不可用时抛 TtsProviderUnavailable。"""
+    if PROVIDER == "cmd":
+        return _cmd_synthesize(text, voice, rate_key)
+    if PROVIDER == "sherpa":
+        return _sherpa_synthesize(text, voice, rate_key)
+    raise TtsProviderUnavailable("provider=none")
+
+
 # ---------------- 磁盘缓存 + single-flight ----------------
 # 缓存目录可配置（容器内挂 volume 到 /data/tts；本地 dev 默认落在项目 .cache/tts）
 CACHE_DIR = Path(
@@ -140,77 +295,61 @@ CACHE_DIR = Path(
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_CACHE_ENTRIES = 200
 CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7天
+_AUDIO_SUFFIXES = (".mp3", ".wav", ".ogg")
 
-_cache_locks = {}  # key -> asyncio.Lock (single-flight)
+_cache_locks = {}  # key -> threading.Lock (single-flight)
 _cache_locks_lock = threading.Lock()
 
 
-def _cache_key(text: str, voice: str, rate: str, pitch: str) -> str:
-    h = hashlib.sha1(f"{text}|{voice}|{rate}|{pitch}".encode()).hexdigest()
+def _cache_key(text, voice, rate_key):
+    h = hashlib.sha1(f"{PROVIDER}|{text}|{voice}|{rate_key}".encode()).hexdigest()
     return h
 
 
-def _cache_path(key: str) -> Path:
-    return CACHE_DIR / f"{key}.mp3"
+def _cache_path(key, content_type):
+    return CACHE_DIR / f"{key}{_audio_suffix(content_type)}"
+
+
+def _key_lock(key):
+    with _cache_locks_lock:
+        return _cache_locks.setdefault(key, threading.Lock())
 
 
 def _cleanup_cache():
     """LRU 清理：按 mtime 删除最旧，保留 MAX_CACHE_ENTRIES"""
     try:
-        files = sorted(CACHE_DIR.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
+        files = sorted((p for p in CACHE_DIR.iterdir() if p.suffix in _AUDIO_SUFFIXES),
+                       key=lambda p: p.stat().st_mtime)
         for f in files[:-MAX_CACHE_ENTRIES]:
             f.unlink(missing_ok=True)
         # 清理过期
         now = time.time()
-        for f in CACHE_DIR.glob("*.mp3"):
+        for f in files[-MAX_CACHE_ENTRIES:]:
             if now - f.stat().st_mtime > CACHE_TTL_SECONDS:
                 f.unlink(missing_ok=True)
     except Exception:
         logger.debug("Cache cleanup failed", exc_info=True)
 
 
-async def _synthesize(text: str, voice: str, rate: str, pitch: str) -> bytes:
-    """实际合成协程，带 10 秒超时"""
-    communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch, proxy=PROXY)
-    chunks = []
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            chunks.append(chunk["data"])
-    return b"".join(chunks)
+def _get_or_generate_audio(text, voice, rate_key="normal"):
+    """带缓存 + single-flight 的合成入口（同步；无 asyncio 依赖）"""
+    content_type = audio_content_type()
+    key = _cache_key(text, voice, rate_key)
+    cache_file = _cache_path(key, content_type)
 
-
-async def _get_or_generate_audio(text: str, voice: str, rate: str = "+4%", pitch: str = "+12Hz") -> bytes:
-    """带缓存 + single-flight 的合成入口"""
-    key = _cache_key(text, voice, rate, pitch)
-    cache_file = _cache_path(key)
-
-    # 缓存命中
     if cache_file.exists():
         logger.debug("TTS cache hit: %s", key[:8])
         return cache_file.read_bytes()
 
-    # Single-flight：同 key 并发请求只合成一次
-    with _cache_locks_lock:
-        if key not in _cache_locks:
-            _cache_locks[key] = asyncio.Lock()
-        lock = _cache_locks[key]
-
-    async with lock:
-        # 双重检查
+    with _key_lock(key):
         if cache_file.exists():
             return cache_file.read_bytes()
 
-        logger.info("TTS generating: voice=%s text_len=%d", voice, len(text))
-        try:
-            # 首次连接 edge-tts 端点可能因 TLS/DNS 冷启动 >10s；生成结果会落缓存，
-            # 客户端另有 7s 超时兜底（先出文字），服务端给 20s 让冷请求有机会成功
-            audio = await asyncio.wait_for(_synthesize(text, voice, rate, pitch), timeout=20.0)
-        except asyncio.TimeoutError:
-            logger.error("TTS timeout: voice=%s", voice)
-            raise RuntimeError("TTS synthesis timeout")
-        except Exception as e:
-            logger.error("TTS synthesis failed: voice=%s error=%s", voice, e)
-            raise RuntimeError("TTS synthesis failed")
+        logger.info("TTS generating: provider=%s voice=%s text_len=%d",
+                    PROVIDER, voice, len(text))
+        audio = synthesize(text, voice, rate_key)
+        if not audio:
+            raise RuntimeError("TTS synthesis produced empty audio")
 
         # 写缓存（原子写入）
         tmp = cache_file.with_suffix(".tmp")
@@ -220,6 +359,7 @@ async def _get_or_generate_audio(text: str, voice: str, rate: str = "+4%", pitch
         return audio
 
 
+# ---------------- HTTP Handler ----------------
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # 审计 P1-5：只记录「方法 + path」，查询串（旧 GET 的 ?text=…）整体抹掉；
@@ -237,20 +377,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
 
     def _cors_audio(self):
-        """音频响应：公开资源，直接放行任意 Origin。
+        """音频/错误响应：公开资源，直接放行任意 Origin。
 
         安卓 WebView（file:// → Origin: null，或 https://appassets.androidplatform.net）
         播放时前端会给 <audio> 设 crossOrigin="anonymous" 才能用 WebAudio 取音量包络；
-        没有 ACAO 头时浏览器会直接静音（不是播放失败，是"有画面无声"）。
+        没有 ACAO 头时浏览器会直接静音（不是播放失败，是"有画面无声"）。503 的
+        JSON 错误体同理需要 ACAO，前端才能读到 error/provider 并降级。
         """
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Accept-Ranges", "none")
 
-    def _json(self, obj, code=200):
+    def _json(self, obj, code=200, public=False):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self._cors()
+        if public:
+            self._cors_audio()
+        else:
+            self._cors()
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Content-Length", str(len(body)))
@@ -273,20 +417,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_tts(self, text, voice, rate_key, start):
         """GET/POST 共用的合成 + 音频响应"""
-        if not HAS_EDGE:
-            self._error(503, "edge-tts not installed")
+        if not provider_available():
+            # 默认 provider=none：不合成、不联网，交给前端系统 TTS 降级
+            logger.warning("tts unavailable: provider=%s", PROVIDER)
+            self._json({"error": "tts_provider_unavailable", "provider": PROVIDER},
+                       503, public=True)
             return
 
         try:
-            audio = asyncio.run(_get_or_generate_audio(text, voice, TTS_RATES[rate_key]))
+            audio = _get_or_generate_audio(text, voice, rate_key)
             self.send_response(200)
-            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Type", audio_content_type())
             self._cors_audio()
             self.send_header("Content-Length", str(len(audio)))
             self.end_headers()
             self.wfile.write(audio)
             logger.debug("tts 200 %dms audio_len=%d",
                          int((time.time() - start) * 1000), len(audio))
+        except TtsProviderUnavailable as e:
+            logger.error("TTS provider unavailable: provider=%s detail=%s", PROVIDER, e)
+            self._json({"error": "tts_provider_unavailable", "provider": PROVIDER},
+                       503, public=True)
         except RuntimeError:
             # 已在 _get_or_generate_audio 中记录详细日志，这里只返回通用错误
             self._error(500, "tts synthesis failed")
@@ -301,7 +452,8 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
 
         if path == "/health":
-            self._json({"ok": True, "service": "xiaoman-tts", "edge_tts": HAS_EDGE,
+            self._json({"ok": True, "service": "xiaoman-tts",
+                        "provider": PROVIDER, "available": provider_available(),
                         "cache_dir": str(CACHE_DIR)})
             logger.debug("GET /health %dms", int((time.time() - start) * 1000))
             return
@@ -359,6 +511,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    avail = provider_available()
     print(f"小满 TTS 服务就绪 → http://{BIND_HOST}:{PORT}/tts "
-          f"（edge-tts: {'可用' if HAS_EDGE else '未安装'}） (bind: {BIND_HOST}, cache: {CACHE_DIR})")
+          f"（provider: {PROVIDER}{'' if not avail else ' 可用'}；"
+          f"未启用时 /tts 回 503 由前端系统 TTS 降级） "
+          f"(bind: {BIND_HOST}, cache: {CACHE_DIR})")
     ThreadingHTTPServer((BIND_HOST, PORT), Handler).serve_forever()

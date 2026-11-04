@@ -89,6 +89,21 @@ def main():
            + "&voice=zh-CN-XiaoyiNeural")
     try:
         data = urllib.request.urlopen(url, timeout=60).read()
+    except urllib.error.HTTPError as e:
+        # 默认 provider=none：服务端不合成，前端走系统 TTS → 视为环境跳过，不算失败
+        body = b""
+        try:
+            body = e.read()
+        except Exception:
+            pass
+        try:
+            info = json.loads(body.decode())
+        except Exception:
+            info = {}
+        if e.code == 503 and info.get("error") == "tts_provider_unavailable":
+            print(f"[SKIP] TTS provider={info.get('provider')}：服务端未启用合成，前端走系统 TTS")
+            return 0
+        fail("mp3 生成", f"HTTP {e.code}: {(e.reason or '')}")
     except urllib.error.URLError as e:
         fail("mp3 生成", f"URLError: {e.reason}")
     except Exception as e:  # 超时、连接重置等

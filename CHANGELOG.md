@@ -20,6 +20,12 @@
 - **倾诉记录备份**：设置页「倾诉记录」可导出为 JSON 文件、也可从 JSON 导入；数据只在本机读写，
   不上传云端。导入时按内容去重合并，重复条目跳过并提示数量。
   APK 内通过原生桥（`AndroidTTS.saveBackup`）写入文件，并用系统文件选择器导入。
+- **外观预设 + 三个独立开关**：极简（默认，灰阶图标 / 零动画 / 大字号 / 扁平层级）、
+  默认、生动（彩色图标 + 仅 160ms 状态转换）；改任一开关即进入「自定义」并持久化
+  `localStorage`，首帧同步应用、刷新不闪回；系统 `prefers-reduced-motion` 默认极简，但可手动覆盖。
+- **危机对抗用例 40 条**：20 正例（隐性告别 / 计划性 / 方法询问 / 第三人称）+ 20 反例
+  （否定、玩笑、歌词、夸张），客户端 `web/tests/risk_regression.test.js` 与服务端
+  `server/tests/test_risk_regression.py` 同源双跑，纳入 CI。
 - **无障碍字号**：设置页新增「字号」三档（标准 / 大 +15% / 特大 +30%），选择后持久化并即时生效。
 - **语音语速与音色**：设置页新增「语速」（慢一点 / 正常 / 快一点）与「说话音色」（小艺 / 小晓 / 小圆）；
   - 服务端 `POST /tts` 接受 `rate` 档位并做白名单校验，非法值回退 `normal`；
@@ -31,6 +37,11 @@
 
 ### Changed
 
+- **移除 edge-tts（许可与离线策略）**：语音改为可插拔 provider（`native` 安卓系统 TTS →
+  可选 `server` → `browser` `speechSynthesis` → `none`）。`server/tts_server.py` 不再依赖
+  edge-tts，默认 `provider=none` 时 `/tts` 回 `503 {"error":"tts_provider_unavailable"}`，
+  前端静默降级、文字始终先出；镜像去掉 edge-tts 安装层，生产新增运行时依赖保持 0，
+  可选后端为 `cmd` / `sherpa`（Apache-2.0，模型需自备、不内置不下载）。
 - 首屏渲染改为**按需加载**：PIXI + Cubism 运行时（约 900KB）串行懒加载，输入框与聊天流先可用，
   Live2D 舞台随后挂载；加载失败只降级舞台，不影响聊天。
 - 安卓 WebView 上渲染分辨率降到 1x、帧率设上限，低端机/模拟器更省电、更流畅。

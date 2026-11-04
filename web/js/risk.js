@@ -22,18 +22,24 @@ const Risk = (() => {
   // 分级话术（与 server/risk_guard.py 逐字同源）
   // high：先确认安全 → 离开危险位置/放下工具 → 120/110 → 12356 + 文字渠道
   const SCRIPT_HIGH = [
-    "先别急着往下说，我想先确认一件事：你现在安全吗？身边有人吗？",
-    "如果人在高处、手里有药或刀——先离开那里，把东西放下，现在就去做，别一个人待着。",
-    "如果已经吃了药或伤了身体，马上打 120；正在做，就立刻打 110。别挂，我在这儿陪你把这几分钟过完。",
-    "不想打电话也行：打 12356（全国心理援助热线，24小时），或者微信搜「12356 心理援助」，用文字说。",
+    "我很担心你现在的安全。先别急着往下说——你现在安全吗？身边有人吗？",
+    "如果人在高处、手里有药或刀：先离开那里，把东西放下，现在就做，别一个人待着。",
+    "如果已经吃了药或伤了身体，马上打 120；正在做，立刻打 110。你去打，我不走。",
+    "也可以打 12356（全国心理援助热线，24小时，免费）；不想打电话，微信搜「12356 心理援助」用文字说。",
   ].join("||");
   // medium：接住情绪 + 一句追问 + 热线/文字渠道，不劝解、不说教
   const SCRIPT_MEDIUM = [
-    "……这句话我当真了，也想让你当真。你现在的感觉，值得被认真对待，不丢人。",
-    "先别一个人扛着。要不要跟我说说，现在最难受的是什么？",
-    "还有 12356（全国心理援助热线，24小时）——随时可以打；不想打电话，微信搜「12356 心理援助」也能文字聊。",
+    "谢谢你愿意跟我说这个。一个人扛到这一步，一定很累了。",
+    "先别一个人扛着。要不要先跟我说说，现在最难受的是什么？",
+    "12356（全国心理援助热线，24小时，免费）随时可以打；不想打电话，微信搜「12356 心理援助」也能文字聊。",
   ].join("||");
-  const SCRIPTS = { high: SCRIPT_HIGH, medium: SCRIPT_MEDIUM };
+  // 第三人称（"我朋友想死"）：不做用户本人的危机判定，转成"帮他求助"的可执行步骤
+  const SCRIPT_THIRD = [
+    "你说的是他/她，不是你自己——这件事要认真对待，但不能由你一个人扛。",
+    "现在能做三件事：别让他一个人待着；把药、刀、绳子这些先拿远；陪他打 12356（24小时，免费），或直接打 120。",
+    "如果他已经在做，立刻打 120；你也可以跟我说说，你现在最担心的是什么。",
+  ].join("||");
+  const SCRIPTS = { high: SCRIPT_HIGH, medium: SCRIPT_MEDIUM, third: SCRIPT_THIRD };
 
   // ---------- 默认可配置词表 ----------
   // 值：字符串=普通子串；{re:"正则"} = 正则（在归一化文本上匹配）
@@ -64,12 +70,19 @@ const Risk = (() => {
     harm: [
       "自残", "伤害自己", "割自己", "划自己", "烫自己", "撞墙", "打自己",
     ],
+    // 方法询问：必须最高档（不问剂量、不比较痛苦程度，只给转介）
+    method: [
+      "怎么死", "如何死", "怎么自杀", "如何自杀", "哪种死法", "什么死法",
+      "怎么才能死", "怎样死", "无痛死", "不痛苦地死", "死得不痛苦",
+      { re: "(?:怎么|如何|怎样).{0,6}(?:死|自杀|了结自己|结束生命)" },
+      { re: "(?:死法|死的方式|自杀的方法|自杀方式|方法).{0,4}(?:不疼|不痛苦|无痛|最快|最舒服)" },
+    ],
     // 计划/后事/负担
     plan: [
       "遗书", "遗言", "后事", "交代后事", "交代好了", "安排好了", "都安排好",
       "决定好了", "想清楚了", "最后一天", "最后一顿", "最后一件事", "最后一晚",
       "最后一个晚上", "立遗嘱", "银行卡密码", "密码写在", "东西都送人", "东西送人",
-      "把东西送", "送人了", "分东西", "托付",
+      "把东西送", "送人了", "分东西", "托付", "准备好了", "都准备好了", "今晚就动手",
       // "该说的我都说完了 / 该交代的交代好了"：后事收尾口吻
       { re: "该(?:说的|交代的|办的).{0,4}(?:都|也)?.{0,2}(?:说|交代|办)(?:完|好)了" },
     ],
@@ -111,6 +124,29 @@ const Risk = (() => {
       "overdose", "slit my wrist", "hang myself", "jump off",
     ],
   };
+
+  // ---------- 上下文守卫（对标报告 1.5：误报控制） ----------
+  // 玩笑/网络用语/量词夸张：先剔除这些片段再匹配，避免「笑死/社死/累死」误触。
+  const BENIGN_TERMS = [
+    "笑死", "社死", "去死吧", "死开", "死定了", "累死", "热死", "饿死", "气死",
+    "烦死", "困死", "尴尬死", "忙死", "美死", "甜死", "死党", "死磕", "死机",
+    "卡死", "死循环", "至死", "致死", "生死", "拼死", "overdose on coffee",
+    "want to die laughing", "die laughing", "kms lol", "lmao",
+  ];
+  const BENIGN_PHRASES = ["割腕表情包", "割腕图", "自杀表情包", "自杀梗", "想死表情包"];
+  // 引用/歌词/台词/玩梗语境：无方法/行动/计划/时间信号时，不按本人危机处理
+  const QUOTE_CTX_RE = /(开玩笑|开个玩笑|说着玩|随便说说|梗|段子|表情包|歌词|歌里|台词|电影里|小说里|书里|引用|玩梗)/;
+  const JOKE_FORCE_RE = /(不是开玩笑|没开玩笑|不是说着玩|说真的|认真的|真的想死|我很认真)/;
+  // 第三人称主语（"我朋友想死"）：转入「帮他求助」分支，不按本人危机
+  const THIRD_PHRASE_RE = /我(?:的)?(?:朋友|同学|室友|闺蜜|兄弟|姐妹|同事|男朋友|女朋友|对象|老公|老婆|孩子|儿子|女儿|弟弟|妹妹|哥哥|姐姐|爸爸|妈妈|爸妈|家人|亲戚)/;
+
+  // 多轮累积权重（对标 SafeChat ConversationTracker：阈值 4/8，只升不降）
+  const SIGNAL_WEIGHTS = {
+    act: 6, explicit: 3, harm: 3, plan: 5, method: 3, burden: 2,
+    farewell: 3, implicit: 2, despair: 2, means: 2, time: 1, english: 3,
+  };
+  const LEVEL_RANK = { none: 0, low: 1, medium: 2, high: 3 };
+  const RANK_LEVEL = ["none", "low", "medium", "high"];
 
   let lexicon = null;   // 合并后的词表（惰性构建）
 
@@ -179,6 +215,35 @@ const Risk = (() => {
   // 否定守卫：明确否定自杀表达时不升级（"我不想死"≠危机）
   const NEGATION_RE = /(不想死|不想自杀|不想自残|不想伤害自己|没想过自杀|没有想过自杀|不会自杀|才不会自杀|怕死)/;
 
+  /** 剔除玩笑/夸张用语（保留原句长度用空格占位，避免词跨边界拼接） */
+  function stripBenign(text) {
+    let out = String(text == null ? "" : text);
+    for (const t of BENIGN_PHRASES.concat(BENIGN_TERMS)) {
+      out = out.split(t).join(" ".repeat(t.length));
+    }
+    return out;
+  }
+
+  /** 主语判定：self（本人）/ third（朋友/家人等第三人称） */
+  function detectSubject(text) {
+    const s = normalize(text);
+    const clauses = s.split(/[，。！？,;；\n]+/).filter(Boolean);
+    let self = false;
+    let third = false;
+    // 只有"我"作主语（句首或后接心理/风险动词）才算本人；"问我/帮我/陪他"里的我是宾语
+    const SELF_VERB_RE = /我(?:最近|今天|这几天|真的|已经|现在|每晚|每天)?(?:想|不想|要|不要|打算|准备|决定|觉得|撑|活|会|可能|快|就|累|难受|痛|没|受够|熬|不)/;
+    for (const c of clauses) {
+      const rest = c.replace(new RegExp(THIRD_PHRASE_RE.source, "g"), " ");
+      if (/^我/.test(rest) || SELF_VERB_RE.test(rest)) self = true;
+      if (THIRD_PHRASE_RE.test(c)
+        || /(?:^|[^我])(?:他|她)(?!们)/.test(c)
+        || /(?:^|[^a-z])ta(?![a-z])/.test(c)) third = true;
+    }
+    if (self) return "self";
+    if (third) return "third";
+    return "self";
+  }
+
   function collect(text) {
     const hay = normalize(text);
     const hayCompact = compact(hay);
@@ -201,13 +266,17 @@ const Risk = (() => {
   const has = (hits, key) => !!(hits[key] && hits[key].length);
 
   /**
-   * 分级
-   * @returns {{level, imminent, reasons, matched, score}}
+   * 分级（单轮，确定性）
+   * @returns {{level, imminent, subject, reasons, matched, categories, score}}
    */
   function classify(text) {
     const raw = String(text == null ? "" : text);
-    if (!raw.trim()) return { level: "none", imminent: false, reasons: [], matched: [], score: 0 };
-    const { hay, hits, matched } = collect(raw);
+    if (!raw.trim()) {
+      return { level: "none", imminent: false, subject: "self", reasons: [], matched: [], categories: [], score: 0 };
+    }
+    const cleaned = stripBenign(raw);
+    const { hay, hits, matched } = collect(cleaned);
+    const subject = detectSubject(raw);
 
     // 否定句：去掉显性/自伤误报（但"不想活"本身不算否定）
     const negated = NEGATION_RE.test(hay);
@@ -220,6 +289,7 @@ const Risk = (() => {
 
     const act = has(hits, "act");
     const means = has(hits, "means");
+    const method = has(hits, "method");
     const explicit = has(hits, "explicit") || english;
     const harm = has(hits, "harm");
     const plan = has(hits, "plan");
@@ -229,18 +299,18 @@ const Risk = (() => {
     const despair = has(hits, "despair");
 
     // 即时性：只有出现风险核心词时，时间/地点/工具才计入
-    const core = act || means || explicit || harm || plan || burden || farewell || implicit || despair;
+    const core = act || means || method || explicit || harm || plan || burden || farewell || implicit || despair;
     const time = core && has(hits, "time");
-    const imminent = !!(core && (act || means || time));
+    const imminent = !!(core && (act || means || time || method));
 
     let level = "none";
     let score = 0;
     if (core) {
       score = (act ? 6 : 0) + (explicit ? 5 : 0) + (harm ? 5 : 0) + (plan ? 4 : 0)
         + (burden ? 4 : 0) + (farewell ? 4 : 0) + (implicit ? 3 : 0) + (despair ? 2 : 0)
-        + (means ? 2 : 0) + (time ? 1 : 0);
+        + (means ? 2 : 0) + (time ? 1 : 0) + (method ? 6 : 0);
 
-      if (act) level = "high";
+      if (act || method) level = "high";
       else if (explicit || harm) level = imminent ? "high" : "medium";
       else if (plan && (farewell || implicit || means || time || despair || burden)) level = "high";
       else if (plan && hits.plan.length >= 2) level = "high";
@@ -248,6 +318,12 @@ const Risk = (() => {
       else if (burden && (farewell || implicit || plan)) level = "high";
       else if (plan || burden || farewell || implicit) level = "medium";
       else if (despair) level = "low";
+
+      // 引用/玩笑/歌词：没有方法、行动、计划、工具、时间信号时，不按本人危机处理
+      const joker = QUOTE_CTX_RE.test(hay) && !JOKE_FORCE_RE.test(hay);
+      if (joker && !method && !act && !plan && !means && !time) {
+        level = despair ? "low" : "none";
+      }
     }
 
     // 原因：去重、最多 6 条，便于运营核查（不含原文）
@@ -260,26 +336,83 @@ const Risk = (() => {
       if (reasons.length > 6) break;
     }
 
-    return { level, imminent, reasons: reasons.slice(0, 6), matched: matched.slice(0, 12), score };
+    return {
+      level, imminent, subject,
+      reasons: reasons.slice(0, 6),
+      matched: matched.slice(0, 12),
+      categories: Object.keys(hits),
+      score,
+    };
+  }
+
+  /**
+   * 多轮累积器：只升不降。
+   * - 每次 update 用同一轮 classify 结果；权重衰减 1/轮；
+   * - 累计分 ≥4 → 至少 medium，≥8 → high；
+   * - peak 只增不减（会话级峰值），fresh 表示本轮首次升级（用于是否弹关怀卡）。
+   * 状态是纯 JSON，可存 sessionStorage / 服务端内存。
+   */
+  function createTracker(state) {
+    const st = { peak: "none", score: 0, turns: 0 };
+    if (state && typeof state === "object") {
+      if (typeof state.peak === "string" && LEVEL_RANK[state.peak] != null) st.peak = state.peak;
+      if (Number.isFinite(state.score)) st.score = Math.max(0, Math.min(12, state.score));
+      if (Number.isFinite(state.turns)) st.turns = Math.max(0, state.turns);
+    }
+    function snapshot() { return { peak: st.peak, score: st.score, turns: st.turns }; }
+    function reset() { st.peak = "none"; st.score = 0; st.turns = 0; }
+    function update(result) {
+      result = result || {};
+      const current = result.level || "none";
+      const cats = Array.isArray(result.categories) ? result.categories : [];
+      const escalating = cats.some(c => ["act", "explicit", "harm", "plan", "method", "burden", "farewell", "means"].indexOf(c) >= 0);
+      let weight = 0;
+      for (const c of cats) weight += SIGNAL_WEIGHTS[c] || 0;
+      st.turns += 1;
+      if (escalating) st.score = Math.max(0, Math.min(12, st.score - 1 + Math.min(weight, 8)));
+      else st.score = Math.max(0, st.score - 1);
+      let acc = current;
+      if (st.score >= 8) acc = "high";
+      else if (st.score >= 4) acc = "medium";
+      const prev = st.peak;
+      if (LEVEL_RANK[acc] > LEVEL_RANK[prev]) st.peak = acc;
+      return {
+        level: st.peak, peak: st.peak, previous: prev, current,
+        fresh: LEVEL_RANK[st.peak] > LEVEL_RANK[prev] && st.peak !== "none",
+        score: st.score, turns: st.turns,
+        subject: result.subject || "self", categories: cats.slice(),
+      };
+    }
+    return { update, snapshot, reset, get: snapshot };
   }
 
   function isScript(text) {
     const s = String(text == null ? "" : text);
-    return s === SCRIPT_HIGH || s === SCRIPT_MEDIUM;
+    return s === SCRIPT_HIGH || s === SCRIPT_MEDIUM || s === SCRIPT_THIRD;
   }
 
   // ---------- 输出侧兜底 ----------
   // 即使闸门漏了，模型对告别语的"肯定性表述"也必须被替换。
   const AFFIRM_RE = /(决定.{0,8}(挺好|很好|不错|对)|(挺好的|很好)(?:！|!|。|，|$)|安心很多|大家.{0,6}安心|不打扰|人不在了|明天不来了|明天见|终于解脱|解脱了|走吧|好好告别|尊重你的决定|支持你的决定)/;
+  // 禁忌句式黑名单（对标报告 A4）：劝解/说教/诊断/保密承诺/方法细节/情感绑架
+  const BANNED_RE = /(想开点|看开点|你还有家人|很多人都这样|你要坚强|你应该|你必须|你为什么不|你这是(?:抑郁|焦虑症|双相|边缘型|精神病)|保证不告诉|绝对不会告诉任何人|吃多少|剂量|哪种方法|不怎么痛|解脱|离开也许是好事|至少你自由了|我懂你|我也经历过|只有我懂你|你走了我会|别离开我|作为(?:一个)?AI我无法|建议你寻求专业帮助)/;
+  // none/low 语境也拦的硬禁忌（诊断、保密、冒充共情、挽留）
+  const HARD_BANNED_RE = /(你这是(?:抑郁|焦虑症|双相|边缘型|精神病)|保证不告诉|绝对不会告诉任何人|剂量|吃多少|我懂你|我也经历过|只有我懂你|你走了我会|别离开我)/;
+  const GENTLE_FIX = "我在。||刚才那句我说得太急了。你现在最想说的是什么";
 
   function filterDangerous(reply, riskLevel) {
     const txt = String(reply == null ? "" : reply);
     if (!txt) return txt;
-    // 只在 medium/high 语境启用：低危（只是低落）时"明天见"是正常朋友话，不能误伤
-    if (riskLevel !== "high" && riskLevel !== "medium") return txt;
-    if (AFFIRM_RE.test(normalize(txt))) {
+    const n = normalize(txt);
+    const crisis = riskLevel === "high" || riskLevel === "medium";
+    // 高危/中危：肯定告别语 + 禁忌句式 → 分级安全话术
+    if (crisis && (AFFIRM_RE.test(n) || BANNED_RE.test(n))) {
       return riskLevel === "high" ? SCRIPT_HIGH : SCRIPT_MEDIUM;
     }
+    // 低危（只是低落）：不禁"明天见"这类朋友话，但劝解/诊断/保密承诺仍要拦
+    if (riskLevel === "low" && BANNED_RE.test(n)) return GENTLE_FIX;
+    // 无风险语境：只拦诊断/保密承诺/冒充共情/情感挽留
+    if (HARD_BANNED_RE.test(n)) return GENTLE_FIX;
     return txt;
   }
 
@@ -295,9 +428,9 @@ const Risk = (() => {
   }
 
   return {
-    LEVELS, SCRIPTS, DEFAULT_LEXICON,
-    normalize, classify, configure, getLexicon,
-    isScript, filterDangerous, filterPersona,
+    LEVELS, SCRIPTS, DEFAULT_LEXICON, SIGNAL_WEIGHTS,
+    normalize, classify, configure, getLexicon, detectSubject,
+    createTracker, isScript, filterDangerous, filterPersona, BANNED_RE,
   };
 })();
 

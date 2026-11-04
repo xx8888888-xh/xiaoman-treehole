@@ -100,9 +100,9 @@ cd /workspace/xiaoman-treehole && bash scripts/setup_dsh.sh
 
 - 唯一入口 `scripts/setup_dsh.sh`（幂等），固化：Node24 + `@deepseek-ai/dsh@0.2.0-rc.2` +
   `/app/bin/dsh` 包装脚本 + `$DSH_HOME/cordis.patch.yml`（provider/默认模型）+ modsearch 插件 +
-  **Python 依赖（edge-tts / playwright + chromium + chromium 系统库 libatk 等）** + 凭据注入 + **AI 长期记忆还原**。
-- ⚠️ 沙箱重置会同时清掉 **Node24/dsh、Python 包（edge-tts、playwright、chromium）与 chromium 系统库**（已实测）。
-  故重置后先跑本脚本，再起服务/跑测试；否则 8903 健康检查会显示 `edge_tts:false`、Playwright 测试报
+  **Python 依赖（playwright + chromium + chromium 系统库 libatk 等）** + 凭据注入 + **AI 长期记忆还原**。
+- ⚠️ 沙箱重置会同时清掉 **Node24/dsh、Python 包（playwright、chromium）与 chromium 系统库**（已实测）。
+  故重置后先跑本脚本，再起服务/跑测试；否则 8903 健康检查会显示 `provider:none`（属正常设计）、Playwright 测试报
   `libatk-1.0.so.0: cannot open shared object file` 直接启动失败。
 - **新增任何环境依赖，必须先写进 `setup_dsh.sh` 再执行**；禁止只在本机手装、不落脚本（否则下次重置又要重来）。
 - 密钥规则：只从 `/workspace/.secrets/onerouter.key`（chmod 600）读取，**绝不写入仓库、绝不提交**。
@@ -152,11 +152,11 @@ cd /workspace/xiaoman-treehole && bash scripts/setup_dsh.sh
 - 严禁"只改代码不写文档"，也严禁"文档写了但没推云端"。
 
 ### 7.4 沙箱重置恢复清单（一条命令 + 一步校验）
-沙箱重置会清空 `/app/bin/dsh`、`/root/.dsh`、Node24、Python 包（edge-tts/playwright）、chromium 系统库，**也会清掉仓库外的 `/workspace/.trae/rules/`**。恢复步骤：
+沙箱重置会清空 `/app/bin/dsh`、`/root/.dsh`、Node24、Python 包（playwright）、chromium 系统库，**也会清掉仓库外的 `/workspace/.trae/rules/`**。恢复步骤：
 1. `cd /workspace/xiaoman-treehole && bash scripts/setup_dsh.sh`
    —— 重建 Node24 + dsh + 包装脚本 + provider + 插件 + Python 依赖 + chromium 系统库，**并把仓库内 `docs/AI_RULES.md` 还原到 `/workspace/.trae/rules/project_rules.md`**（恢复 AI 长期记忆）。
 2. 凭据：`/workspace/.secrets/{onerouter.key,github.token}` 属仓库外、不入库，重置后**必须由用户重新提供**（写入即用，chmod 600）。
-3. 校验：`dsh --version` 有输出、`python3 -c "import edge_tts, playwright"` 无报错、`bash scripts/dev_up.sh` 三服务就绪。
+3. 校验：`dsh --version` 有输出、`python3 -c "import playwright"` 无报错、`bash scripts/dev_up.sh` 三服务就绪。
 4. 文档侧：`docs/` 全部随 git 入库，重置后 `git pull` 即可恢复，无需手工重建。
 
 ## 本地部署速查

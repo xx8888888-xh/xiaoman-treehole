@@ -8,7 +8,7 @@
 #   3) $DSH_HOME/cordis.patch.yml：onerouter(OpenRouter) 免费模型路由 + 默认模型
 #   4) 凭据存放于 /workspace/.secrets/onerouter.key（权限 600，绝不入库）
 #   5) 可选插件（modsearch），best-effort
-#   6) Python 依赖（edge-tts 供 TTS 服务、playwright + chromium 供 UI 测试）
+#   6) Python 依赖（playwright + chromium 供 UI 测试；TTS 服务默认 provider=none 无依赖）
 #   7) AI 长期记忆还原：docs/AI_RULES.md → /workspace/.trae/rules/project_rules.md
 #      （仓库外的 .trae/rules 会被沙箱重置清掉，故以仓库内副本为源还原）
 #
@@ -139,15 +139,14 @@ else
   log "SKIP_PLUGINS=1，跳过插件安装"
 fi
 
-# ---------- 6. Python 依赖（TTS 服务 + UI 测试） ----------
+# ---------- 6. Python 依赖（仅 UI 测试；TTS 服务默认 provider=none 无依赖） ----------
 if [ "${SKIP_PYDEPS:-0}" != "1" ]; then
-  if ! python3 -c "import edge_tts, playwright" >/dev/null 2>&1; then
-    log "安装 Python 依赖（edge-tts / playwright）..."
-    python3 -m pip install --quiet edge-tts playwright >/dev/null 2>&1 \
-      || python3 -m pip install --quiet --break-system-packages edge-tts playwright >/dev/null 2>&1 \
+  if ! python3 -c "import playwright" >/dev/null 2>&1; then
+    log "安装 Python 依赖（playwright）..."
+    python3 -m pip install --quiet playwright >/dev/null 2>&1 \
+      || python3 -m pip install --quiet --break-system-packages playwright >/dev/null 2>&1 \
       || log "警告：pip 安装失败"
   fi
-  python3 -c "import edge_tts" >/dev/null 2>&1 && log "edge-tts OK" || log "警告：edge-tts 仍缺失（8903 将降级）"
   # playwright chromium（幂等：已安装会跳过）
   if python3 -c "import playwright" >/dev/null 2>&1; then
     python3 -m playwright install chromium >/dev/null 2>&1 && log "playwright chromium OK" \

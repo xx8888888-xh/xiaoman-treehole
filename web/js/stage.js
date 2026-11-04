@@ -15,6 +15,8 @@ const Stage = (() => {
   let lipOpen = 0;            // 当前口型目标值
   let lipHold = 0;            // 剩余保持帧（无分析器时的兜底）
   let resizeHandler = null;   // resize 监听引用，用于销毁
+  // 极简模式/关动画：停 ticker，画面定格；生动模式恢复（含呼吸/眨眼/视线漫游）
+  let motionEnabled = !(window.Appearance && !Appearance.get().motion);
   const MOODS = { happy: "开心", sad: "有点难过", gentle: "温柔模式", surprised: "诶？", shy: "脸红了", neutral: "在听你说" };
 
   /* ---------- 渲染库按需加载（首屏 TTI 关键） ----------
@@ -224,6 +226,18 @@ const Stage = (() => {
     try { model.motion(group, undefined, 2); } catch (e) {}
   }
 
+  /** 动画开关：关 → 停 ticker 并渲染最后一帧；开 → 恢复 ticker 与呼吸/眨眼 */
+  function setMotionEnabled(on) {
+    motionEnabled = !!on;
+    if (!app || !app.ticker) return;
+    if (motionEnabled) {
+      app.ticker.start();
+    } else {
+      app.ticker.stop();
+      try { app.render(); } catch (e) {}
+    }
+  }
+
   /** TTS 播放期间的口型喂入 */
   function lipFrame(level) {
     if (level < 0) { lipHold = 2; lipOpen = 0.3 + Math.random() * 0.3; return; } // 无分析器兜底
@@ -231,5 +245,5 @@ const Stage = (() => {
     lipHold = 6;
   }
 
-  return { mount, unmount, setEmotion, playMotion, lipFrame, focusHead, restoreView };
+  return { mount, unmount, setEmotion, playMotion, lipFrame, focusHead, restoreView, setMotionEnabled };
 })();

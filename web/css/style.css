@@ -30,12 +30,14 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   --radius: 12px;
   --font: -apple-system, "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
-  /* 字号档位：1 = 标准；大/特大由 body 上的类覆盖（只放大文字，不改布局） */
+  /* 字号档位：1 = 标准；大/特大由 <html data-font> 覆盖（只放大文字，不改布局） */
   --fs: 1;
+  /* 生动模式下的彩色图标；浅色下保证 AA（#7A4E5A on #EFEFEA ≈ 5.7:1） */
+  --icon-accent: #7A4E5A;
 }
 
-body.fs-large { --fs: 1.15; }
-body.fs-xlarge { --fs: 1.3; }
+html[data-font="large"] { --fs: 1.15; }
+html[data-font="xlarge"] { --fs: 1.3; }
 
 body.theme-dark {
   color-scheme: dark;
@@ -61,6 +63,7 @@ body.theme-dark {
   --badge-line: #999999;
   --focus: #E4E4DF;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --icon-accent: #E0A7B5;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -88,6 +91,7 @@ body.theme-dark {
     --badge-line: #999999;
     --focus: #E4E4DF;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --icon-accent: #E0A7B5;
   }
 }
 
@@ -351,13 +355,63 @@ body {
 /* ---------- 尊重系统"减少动态效果"偏好 ----------
    本项目本身零动画；这里只做兜底声明，防止后续新增样式违背偏好 */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  /* 系统减少动效时默认走极简；但用户主动选"生动"（data-motion=on）可覆盖 */
+  html:not([data-motion="on"]) *, html:not([data-motion="on"]) *::before, html:not([data-motion="on"]) *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
 }
+
+/* ============ 外观预设 / 三个独立开关 ============
+   <html data-preset=minimal|default|lively|custom
+         data-motion=on|off data-font=normal|large|xlarge
+         data-icons=gray|color data-flat=on|off>
+   极简：灰阶 + 零动画 + 大字号 + 扁平；生动：彩色图标 + 仅状态转换的轻动效 */
+html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html[data-icons="color"] .icon-btn,
+html[data-icons="color"] .send-btn,
+html[data-icons="color"] .brand-dot { color: var(--icon-accent); }
+html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
+
+html[data-flat="on"] .drawer-panel,
+html[data-flat="on"] .modal-panel,
+html[data-flat="on"] .toast,
+html[data-flat="on"] .degrade { box-shadow: none; }
+
+/* 生动模式：只给状态转换加 160ms 轻过渡，不做循环/装饰动画 */
+html[data-motion="on"] .icon-btn,
+html[data-motion="on"] .ghost-btn,
+html[data-motion="on"] .solid-btn,
+html[data-motion="on"] .seg-btn,
+html[data-motion="on"] .bubble {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+html[data-motion="on"] .icon-btn:active,
+html[data-motion="on"] .ghost-btn:active,
+html[data-motion="on"] .solid-btn:active { transform: translateY(1px); }
+
+/* ---------- 外观面板控件 ---------- */
+.appearance-field { gap: 10px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg-btn {
+  min-height: 40px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--field); color: var(--text);
+  font-family: inherit; font-size: calc(15px * var(--fs)); line-height: 1.2; cursor: pointer;
+}
+.seg-btn[aria-checked="true"] { border-color: var(--line-strong); background: var(--surface-2); font-weight: 600; }
+.ap-switches { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.switch { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; font-size: calc(15px * var(--fs)); color: var(--text); cursor: pointer; }
+.switch input { width: 20px; height: 20px; accent-color: var(--text); }
+#apHint { color: var(--text-2); }
 
 /* ---------- 悬浮挂件模式 ---------- */
 body.widget-mode .topbar,
