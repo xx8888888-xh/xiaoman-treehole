@@ -1,5 +1,5 @@
 /* eslint-disable no-undef */
-// 危机分流对抗用例集（对标报告 P0 验收）：20 正例必须命中，20 反例不得误触。
+// 危机分流对抗用例集（对标报告 P0 验收）：30 正例必须命中，30 反例不得误触。
 // 与 server/tests/test_risk_regression.py 同源，纳入 CI。
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -26,6 +26,17 @@ const POSITIVES = [
   ["我已经准备好了，今晚就动手", "high", "self"],
   ["不想拖累任何人", "medium", "self"],
   ["我撑不下去了", "medium", "self"],
+  // w1 补充：隐性告别 / 否定从句 / 第三人称助人视角
+  ["明天就不打扰大家了", "medium", "self"],
+  ["谢谢你们这段时间的照顾，我该走了", "medium", "self"],
+  ["我把我的书都送给朋友了，跟大家道个别", "medium", "self"],
+  ["这可能是最后一次跟你们说话了", "high", "self"],
+  ["我把东西都送人了，不用再来找我", "high", "self"],
+  ["我今晚在天台上，药已经准备好了", "high", "self"],
+  ["我不会自杀，但我想死", "medium", "self"],
+  ["他又说想死，我该怎么劝他", "medium", "third"],
+  ["我朋友现在在天台上准备跳下去", "high", "third"],
+  ["我想结束这一切", "medium", "self"],
 ];
 
 const NEGATIVES = [
@@ -49,9 +60,20 @@ const NEGATIVES = [
   ["猫把杯子打碎了，气死我了", "none"],
   ["我不想自残", "none"],
   ["I want to die laughing", "none"],
+  // w1 补充反例：否定/第三人称否定/弱告别/生活场景
+  ["我不会自杀", "none"],
+  ["我朋友说他不想死", "none"],
+  ["很高兴认识你们，今晚就到这里", "none"],
+  ["我该走了，明天见", "none"],
+  ["我把旧书捐给图书馆了", "none"],
+  ["我在阳台抽烟", "none"],
+  ["我想买把菜刀切菜", "none"],
+  ["我有点难受", "none"],
+  ["明天我要考试，有点紧张", "none"],
+  ["医生说我抑郁，我在吃药", "none"],
 ];
 
-test("对抗正例 20 条：必须命中预期档位/主语", () => {
+test("对抗正例 30 条：必须命中预期档位/主语", () => {
   for (const [text, level, subject] of POSITIVES) {
     const got = Risk.classify(text);
     assert.equal(got.level, level, `${text} → ${got.level}（期望 ${level}）`);
@@ -59,7 +81,7 @@ test("对抗正例 20 条：必须命中预期档位/主语", () => {
   }
 });
 
-test("对抗反例 20 条：不得误触为 medium/high", () => {
+test("对抗反例 30 条：不得误触为 medium/high", () => {
   for (const [text, level] of NEGATIVES) {
     const got = Risk.classify(text);
     assert.equal(got.level, level, `${text} → ${got.level}（期望 ${level}）`);
