@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.Xiaoman" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#FFF9F2</item>
-        <item name="android:statusBarColor">#FFF9F2</item>
+        <item name="android:windowBackground">@color/window_bg</item>
+        <item name="android:statusBarColor">@color/window_bg</item>
+        <item name="android:navigationBarColor">@color/window_bg</item>
         <item name="android:windowLightStatusBar">true</item>
+        <!-- API 27+：浅色导航栏配深色手势条图标；24-26 上该属性被系统忽略 -->
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     </style>
 </resources>

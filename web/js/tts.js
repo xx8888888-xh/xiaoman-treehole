@@ -102,10 +102,18 @@ const TTS = (() => {
     let speakGen = 0;          // 播放代际：异步取音频返回时，过期的请求直接丢弃
     let muted = W.XIAOMAN_TTS_MUTED === "1" || W.XIAOMAN_TTS_MUTED === true;
 
-    /** 读取前端配置（API.loadCfg 由 api.js 提供；缺失时用空配置走默认链路） */
+    /**
+     * 读取前端配置（API.loadCfg 由 api.js 提供；缺失时用空配置走默认链路）。
+     * 注意：api.js 里 API 是顶层 const，在浏览器里**只存在于全局词法作用域、不挂在 window 上**；
+     * 之前只查 W.API 会让真机页面永远读到空配置，provider 恒为 none/与设置页不一致。
+     * 所以先看单测注入的 win.API，再回退到全局 API 绑定。
+     */
     function loadCfg() {
       try {
         if (W.API && W.API.loadCfg) return W.API.loadCfg() || {};
+        if (typeof API !== "undefined" && API && typeof API.loadCfg === "function") {
+          return API.loadCfg() || {};
+        }
       } catch (e) {
         /* 配置读取失败不阻断语音降级 */
       }
@@ -434,6 +442,13 @@ const TTS = (() => {
         done();
         return { spoke: false, provider: "none" };
       }
+      // 用户显式关闭语音（设置页 tts=off）：只静默收尾，且**不回调 onEnd**。
+      // 原因：onEnd 在 app.js 里承担「气泡标记 🔊 语音已播」，off 时回调会把一句
+      // 根本没出声的话标成"已播"。状态与文案必须是同一事实：off = 无声 = 无标记。
+      if (cfg.tts === "off") {
+        frame(0);
+        return { spoke: false, provider: "off" };
+      }
 
       try {
         for (const id of providerChain(cfg)) {
@@ -456,8 +471,12 @@ const TTS = (() => {
     return {
       speak,
       stop,
-      /** 当前会使用的 provider（便于设置页/自检显示） */
-      provider: (cfg) => providerChain(cfg || loadCfg())[0] || "none",
+      /** 当前会使用的 provider（便于设置页/自检显示）；off 如实返回 "off" 而不是 "none" */
+      provider: (cfg) => {
+        const c = cfg || loadCfg();
+        if (c.tts === "off") return "off";
+        return providerChain(c)[0] || "none";
+      },
       /** 当前配置下的完整降级链路 */
       chain: (cfg) => providerChain(cfg || loadCfg()),
       /** 是否有任何可用的发声 provider（muted 时恒 false） */
