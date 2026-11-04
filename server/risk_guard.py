@@ -222,7 +222,7 @@ def _plan_clause_count(hay: str) -> int:
     return n
 
 
-_HELPING_RE = re.compile(r"我.{0,4}(?:该|要|应该|可以|能)?(?:怎么|如何|怎样)?(?:劝|帮|救|安慰|开导|照顾|陪|关心)")
+_HELPING_RE = re.compile(r"我.{0,4}(?:该|要|应该|可以|能)?(?:怎么|如何|怎样)?(?:劝|帮|救|安慰|开导|照顾|陪|关心|办|做点什么)")
 
 
 def detect_subject(text) -> str:

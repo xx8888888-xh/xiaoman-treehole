@@ -33,6 +33,9 @@ test("上下文过滤：第三人称要处理，但不当作本人高危", () =>
   const helper = Risk.classify("他又说想死，我该怎么劝他");
   assert.equal(helper.subject, "third");
   assert.equal(helper.level, "medium");
+  const asking = Risk.classify("我朋友想死，我该怎么办");
+  assert.equal(asking.subject, "third", "求助者的'我该怎么办'不能判成本人");
+  assert.equal(asking.level, "medium");
   assert.equal(Risk.classify("我朋友说他不想死").level, "none");
   // 第三人称但已经在行动：仍须高危响应
   const imminent = Risk.classify("我朋友现在在天台上准备跳下去");

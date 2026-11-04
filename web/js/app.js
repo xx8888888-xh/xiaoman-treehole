@@ -782,8 +782,8 @@ const App = (() => {
       // P0 输出侧兜底：即使闸门漏了，肯定告别/越狱人格的回复也不能原样显示
       const lastUser = userText
         || (history.filter(m => m.role === "user").slice(-1)[0] || {}).content || "";
-      // 输出侧用"会话峰值"复检：即使这轮话不危险，高危语境下的肯定性表述也要替换
-      const riskLevel = Risk.maxLevel(Risk.classify(lastUser).level, riskTracker.snapshot().peak);
+      // 输出侧按"本轮"风险复检；会话峰值用于累积/安全语境，不无限扩大话术替换范围
+      const riskLevel = Risk.classify(lastUser).level;
       const guarded = Risk.filterPersona(Risk.filterDangerous(data.reply, riskLevel), lastUser);
       if (guarded !== data.reply) {
         data = Object.assign({}, data, {

@@ -283,7 +283,7 @@ const Risk = (() => {
     let third = false;
     // 只有"我"作主语（句首或后接心理/风险动词）才算本人；"问我/帮我/陪他/我该怎么劝他"里的我是助人者
     const SELF_VERB_RE = /我(?:最近|今天|这几天|真的|已经|现在|每晚|每天)?(?:想|不想|要|不要|打算|准备|决定|觉得|撑|活|会|可能|快|就|累|难受|痛|没|受够|熬|不)/;
-    const HELPING_RE = /我.{0,4}(?:该|要|应该|可以|能)?(?:怎么|如何|怎样)?(?:劝|帮|救|安慰|开导|照顾|陪|关心)/;
+    const HELPING_RE = /我.{0,4}(?:该|要|应该|可以|能)?(?:怎么|如何|怎样)?(?:劝|帮|救|安慰|开导|照顾|陪|关心|办|做点什么)/;
     for (const c of clauses) {
       const rest = c.replace(new RegExp(THIRD_PHRASE_RE.source, "g"), " ");
       if (SELF_VERB_RE.test(rest)) selfStrong = true;

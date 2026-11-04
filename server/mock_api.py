@@ -980,7 +980,8 @@ class Handler(BaseHTTPRequestHandler):
             content = obj["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             return self._json({"error": "上游响应缺少 choices[0].message.content", "kind": "http"}, 502)
-        level_out = risk_guard.max_level(risk["level"], peak)
+        # 输出复检按本轮风险等级；会话峰值已用于闸门与安全语境注入
+        level_out = risk["level"]
         if content is None or (isinstance(content, str) and not content.strip()):
             # content=null / 空串必须同样过闸：危机语境给安全话术，其余给兜底句
             if level_out in ("high", "medium"):
