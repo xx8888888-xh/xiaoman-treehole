@@ -55,6 +55,11 @@
       <button class="pending-btn" id="pendingRetry">再试一次</button>
       <button class="pending-close" id="pendingClose" aria-label="关闭排队提示">✕</button>
     </div>
+    <!-- 语音不可用：不出声，文字照常；一条可关闭的安静提示（不弹窗） -->
+    <div class="pending-bar hidden" id="voiceTip" role="status" aria-live="polite">
+      <span id="voiceTipText">语音暂时没法出声，文字照常</span>
+      <button class="pending-close" id="voiceTipClose" aria-label="关闭语音提示">✕</button>
+    </div>
     <div class="inputbar">
       <input id="textInput" type="text" placeholder="跟小满说点什么…" aria-label="给小满发消息" enterkeyhint="send" autocomplete="off" maxlength="500">
       <button class="send-btn" id="sendBtn" aria-label="发送">
@@ -172,7 +177,7 @@
       </div>
       <div class="about">
         <p>小满树洞 v0.5 · 开源软件（MIT）</p>
-        <p class="mini">渲染: PixiJS + pixi-live2d-display (MIT) · 模型: Hiyori（Live2D 免费素材，经结构化改造）· 语音: edge-tts</p>
+        <p class="mini">渲染: PixiJS + pixi-live2d-display (MIT) · 模型: Hiyori（Live2D 免费素材，经结构化改造）· 语音: Android 系统 TTS / 可选自建服务（默认关闭）</p>
         <p class="mini">隐私：聊天默认存本机；在线模式下内容会经服务端转发给第三方模型服务商。可随时导出或清空本机记录。</p>
         <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）；紧急情况打 120 / 110。</p>
       </div>
@@ -214,6 +219,7 @@
 <script src="js/tts.js"></script>
 <script src="js/stage.js"></script>
 <script src="js/backup.js"></script>
+<script src="js/chat_pager.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
