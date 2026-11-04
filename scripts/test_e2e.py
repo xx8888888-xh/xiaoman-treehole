@@ -145,7 +145,7 @@ async def main():
             # （CI 的 dev_up 已设 AI_MODE=mock；本地容器若为 openai 也能复现）
             await pg.evaluate(
                 "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
-                "{mode:'mock', mockBase:'http://127.0.0.1:8902', tts:'server', "
+                "{mode:'mock', mockBase:'http://127.0.0.1:" + str(MOCK_PORT) + "', tts:'server', "
                 "voice:'zh-CN-XiaoyiNeural', ttsRate:'normal'}))")
             await pg.reload(wait_until="domcontentloaded")
             await pg.wait_for_selector("#textInput", state="visible", timeout=15000)
@@ -217,7 +217,7 @@ async def main():
               async () => {
                 const out = {};
                 for (const r of ['slow', 'normal', 'fast']) {
-                  const res = await fetch('http://127.0.0.1:8903/tts?text=' + encodeURIComponent('我在听')
+                  const res = await fetch('http://127.0.0.1:__TTS_PORT__/tts?text=' + encodeURIComponent('我在听')
                     + '&voice=zh-CN-XiaoyiNeural&rate=' + r);
                   if (res.ok) {
                     out[r] = {status: res.status, bytes: (await res.arrayBuffer()).byteLength};
@@ -229,7 +229,7 @@ async def main():
                 }
                 return out;
               }
-            """)
+            """.replace("__TTS_PORT__", str(TTS_PORT)))
             if audio.get("provider") == "none":
                 ok_rate = all(v["status"] == 503
                               and v.get("body") == {"error": "tts_provider_unavailable",
