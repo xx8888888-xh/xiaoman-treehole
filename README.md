@@ -188,7 +188,7 @@ treehole/
 ├─ android/             WebView 壳工程（app/src/main/{java,res,assets} + Gradle Wrapper）
 ├─ scripts/             构建/启动/测试脚本（build_assets.sh、build_apk.sh、dev_up.sh、test_*.py）
 ├─ docs/                发布与运维文档（RELEASE_SIGNING.md、DEVLOG.md、PROJECT_STATE.md、截图等）
-├─ .github/workflows/   CI（android-ci.yml、quick.yml、healthcheck.yml）
+├─ .github/workflows/   CI（ci.yml 快闸门、e2e.yml 浏览器、android.yml 出包、gates.yml 一键全套）
 ├─ CHANGELOG.md         版本变更记录
 ├─ ANALYSIS.md          技术与 API 现状分析
 ├─ LICENSE（MIT）

@@ -1,0 +1,91 @@
+name: ci
+
+# 快闸门（每次 push / PR）：Node 单测 + Biome + Python pytest + 发布物一致性。
+# 刻意不碰 Docker、不跑浏览器、不启动模拟器——这些属于 e2e.yml / android.yml / 本地。
+# 基线（main，2026-11-05）：node 181 passed；pytest 145 passed + 19 subtests；biome 0 error。
+# 分支基线可能不同（如 feat/data-completeness 为 node 192 / pytest 153），因此这里只跑不做数字断言。
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**', 'zhiqiu/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  node:
+    name: node-tests-and-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install deps
+        # 仓库已提交 web/package-lock.json；若后续出现 lock 缺失/不同步，
+        # 这里会直接红，提示改用 npm install 并补 lock（不静默降级）。
+        run: npm ci
+
+      - name: node:test
+        run: npm test
+
+      - name: Biome lint (0 error)
+        run: npm run lint
+
+  python:
+    name: python-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test deps
+        # 测试本体只用标准库；pytest/pytest-subtests 仅用于汇总与子用例计数。
+        run: python -m pip install --upgrade pip pytest pytest-subtests
+
+      - name: Syntax compile (server + scripts)
+        run: python -m compileall -q server scripts
+
+      - name: Sync assets + verify (web ↔ android assets/www)
+        # 同一真源两处消费：先按 build_assets.sh 生成发布物，再逐文件 sha256 校验。
+        run: |
+          bash scripts/build_assets.sh
+          python scripts/verify_assets.py
+
+      - name: pytest
+        run: python -m pytest server/tests -q
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### ci · python"
+            echo "- 运行命令：\`python -m pytest server/tests -q\`"
+            echo "- 发布物：\`python scripts/verify_assets.py\`（web ↔ assets/www）"
+          } >> "$GITHUB_STEP_SUMMARY"
