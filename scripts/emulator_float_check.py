@@ -226,6 +226,76 @@ def probe_has(marker):
     return marker in probe_lines()
 
 
+# ---- WebView JS 桥直连断言 ----------------------------------------------------
+# logcat 里的 [probe] AndroidTTS injected=1 只证明"页面侧探针返回 ok"（四个入口
+# 都是 function）。要断言"可调用 speak"，必须真的在浮窗 WebView 里调一次：
+# 走 WebView 自己的 DevTools（uiautomator dump 看不到 WebView DOM），
+# 直接读 window.AndroidTTS 的成员类型并调用 available()/speak()，看返回值类型。
+BRIDGE_JS = r"""
+(() => {
+  const t = window.AndroidTTS;
+  if (!t) return { present: false };
+  const types = {
+    speak: typeof t.speak,
+    speakRate: typeof t.speakRate,
+    stop: typeof t.stop,
+    available: typeof t.available
+  };
+  let avail = null, returned = null, error = "";
+  try { avail = t.available(); } catch (e) { error += "available:" + e + ";"; }
+  try { returned = t.speak("bridge probe"); } catch (e) { error += "speak:" + e + ";"; }
+  try { t.stop(); } catch (e) { }
+  return {
+    present: true, types: types, avail: avail, availableType: typeof avail,
+    returned: returned, returnType: typeof returned, error: error
+  };
+})()
+"""
+
+
+def check_bridge(url_filter, label, port):
+    """在指定浮窗 WebView 里直连 JS 桥：存在 + speak 可调用（返回 boolean）。"""
+    from android_cdp import Cdp
+    cdp = Cdp(port)
+    try:
+        cdp.attach(url_filter=url_filter, timeout=30)
+        r = cdp.eval(BRIDGE_JS)
+    except Exception as e:
+        check(label, False, f"CDP 取桥失败: {str(e)[:100]}")
+        return False
+    finally:
+        try:
+            cdp.close()
+        except Exception:
+            pass
+    t = (r or {}).get("types") or {}
+    ok = (bool((r or {}).get("present"))
+          and all(t.get(k) == "function" for k in ("speak", "speakRate", "stop", "available"))
+          and (r or {}).get("availableType") == "boolean"
+          and (r or {}).get("returnType") == "boolean")
+    return check(label, ok,
+                 f"speak={t.get('speak')} available={t.get('available')} "
+                 f"available()={r.get('avail')} speak()返回={r.get('returned')}"
+                 f"({r.get('returnType')}) err={r.get('error') or '-'}")
+
+
+def open_panel(pframe, base):
+    """双击桌宠 frame 中心展开迷你窗；返回 (big_frame, diff)。结构判定走 dumpsys，
+    不依赖像素（软件 GL 截图差分在本机恒为 0，会把整条交互链误跳过）。"""
+    bx, by = box_center(pframe)
+    sh(f'adb shell "input tap {bx} {by}; input tap {bx} {by}"')
+    big, cnt = None, 0
+    for _ in range(5):
+        time.sleep(3)
+        shot("emulator_06_float_panel.png")
+        cur = gray("emulator_06_float_panel.png")
+        cnt, _ = diff_stat(base, cur)
+        big = big_frame(dumpsys_windows())
+        if big:
+            break
+    return big, cnt
+
+
 def find_collapse_button(img_path, panel_box):
     """面板顶栏右侧深色文字簇 → 「收起」按钮中心（右数第二簇）。
     依据：顶栏按钮字色 #5B4A43（灰度~75）vs 顶栏底 ~247；「关闭」最右、「收起」
@@ -450,10 +520,29 @@ def main():
     check("未降级为圆形悬浮球（主形态=Live2D 桌宠）", bframe is None,
           f"ball_frame={bframe}" if bframe else "")
 
-    if not pet_ok:
+    if not pet_ok and pframe is None:
         print("[FLOAT-SKIP] 桌宠不可见，跳过交互链（后续仍验证停服务/权限/恢复）", flush=True)
         bx = by = ncx = ncy = 0
         panel_box = None
+    elif not pet_ok:
+        # 像素差分是软件 GL 截图的老毛病（本机恒 0，main 分支同轮也红），
+        # 但窗口 frame / dumpsys 结构是权威的：交互链照常跑，只跳过像素型断言。
+        print("[FLOAT-DEGRADE] 像素差分不足，浮窗桥断言改用 dumpsys 结构判定", flush=True)
+        bx, by = box_center(pframe)
+        panel_box, _ = open_panel(pframe, base)
+        check("双击展开迷你窗（结构判定，不依赖像素）", panel_box is not None,
+              f"frame={panel_box}")
+        if panel_box:
+            check("迷你窗 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/index.html?float=1）",
+                  probe_has("[probe] AndroidTTS injected=1 /www/index.html?float=1"))
+            check_bridge("float=1", "迷你窗 WebView JS 桥可调用 AndroidTTS.speak（返回 boolean）", 9226)
+            # 收起面板，让后面的停服务/权限/恢复步骤仍在"桌宠"形态下进行
+            sh(f"adb shell am start -n {MAIN} --ez float_stop true -f 0x20000000")
+            time.sleep(2)
+            sh(f"adb shell am start -n {MAIN} --ez autostart_float true -f 0x20000000")
+            time.sleep(4)
+            sh("adb shell input keyevent 3")
+            time.sleep(2)
     else:
         bx, by = box_center(pframe)
 
@@ -520,6 +609,7 @@ def main():
         # 迷你窗是 index.html?float=1，同样必须拿到 window.AndroidTTS（否则浮窗朗读永远无声）
         check("迷你窗 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/index.html?float=1）",
               probe_has("[probe] AndroidTTS injected=1 /www/index.html?float=1"))
+        check_bridge("float=1", "迷你窗 WebView JS 桥可调用 AndroidTTS.speak（返回 boolean）", 9226)
         check("迷你窗展开（大面积像素差分>30万px）", cnt6 > PANEL_MIN, f"diff={cnt6}px")
         pf6 = pet_frame(wins6)
         hidden_diff = region_diff(base, gray("emulator_06_float_panel.png"), pf6) if pf6 else 0
