@@ -1,5 +1,7 @@
 # w14 · Android AVD 真机复测与收口报告
 
+> 后续：`r4-20261105` 起桌宠已改为分层水彩（LayeredPuppet），本报告里「Live2D 2048 纹理占 88.2%」的包体口径已过时；新的耗电/包体专项见 [`R2_SLIM_POWER_REPORT.md`](R2_SLIM_POWER_REPORT.md)。
+
 - 分支：`feat/android-battery`（worktree `treehole-w14`，基线 `61384a0`）
 - 设备：AVD `treehole_api34`（720×1280 / 320dpi / API 34，`emulator-5554`），全程 `-no-audio -no-window -gpu swiftshader_indirect`
 - 约束：未改 `web/**`、`server/**`、`web/js/stage.js`；未 push / 未合并；未做 release 签名；全程无音频、无 TTS 调用
