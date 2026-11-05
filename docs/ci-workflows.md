@@ -193,4 +193,4 @@ gh run watch <run-id>
 |---|---|---|---|
 | `android-release.yml` | 已在我方分支并跑绿（42023885689） | 触发 `dispatch` + `v*`；artifact `xiaoman-treehole-release-0.6.0-<sha>`，30 天；无 Playwright | ✅ 合规（保留 30 天是发布留档例外） |
 | `perf.yml` | `feat/perf-r3`，未合并 | 触发 `push: feat/perf-r3`；artifact `perf-r3-${run_number}`（无 sha、14 天）；手写装 Playwright（未复用复合动作）；`timeout 35min` | ⚠️ 待改：artifact 名改 `perf-r3-<sha>`、7 天；把安装段换成 `./.github/actions/setup-playwright`；合并前把 `push` 触发收窄/改手动 |
-| `ui-shots.yml` | 尚未出现 | — | 落地时按上表验收 |
+| `ui-shots.yml` | `feat/ui-r3`，未合并 | 触发 `push: feat/ui-r3`（`paths: web/**`）+ 手动；artifact 名 `ui-shots`（**无 sha**）、保留 **14 天**；Playwright 版本 **1.47.0**（与 `e2e.yml` 的 1.63.0 不一致）、手写 `pip install` + `install --with-deps`（未复用复合动作、无缓存）；内含 `XIAOMAN_ALLOW_LOCAL_BROWSER=1` + 自建 `http.server 8911`（离线模式，不依赖 compose） | ⚠️ 待改：artifact 改 `ui-shots-<sha>`、7 天；安装段换 `./.github/actions/setup-playwright`（版本统一 1.63.0，省 30–60s/job）；合并前把 `push` 收窄（保留 `paths` 过滤，避免每改一行 web 就烧一次） |
