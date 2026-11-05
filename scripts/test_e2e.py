@@ -999,17 +999,32 @@ async def main():
             check("⑦l-1 迷你模式布局+Live2D跳过", ok_l1)
 
             # l-2 迷你窗聊天完整可用（同源对话引擎：发消息收回复）
+            # 注意：不能「第一条 them 出现就取样」——分条送达/打字动画期间文本只有几个字，
+            # 在 CPU 紧张的 runner 上会误判成不完整（CI 曾出现 tail='满失眠这' 4 字的假红）。
+            # 这里等到文本连续两次采样不再变化再断言，断言阈值（>4 字）保持不变。
             n_l = await pg7.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
             await pg7.fill("#textInput", "今天好累呀")
             await pg7.click("#sendBtn")
             t_l = ""
-            end_l = time.time() + 15
+            prev_l = ""
+            stable_l = 0
+            end_l = time.time() + 20
             while time.time() < end_l:
                 cnt = await pg7.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
                 if cnt > n_l:
-                    t_l = await them_tail(pg7, n_l)
-                    break
+                    cur_l = await them_tail(pg7, n_l)
+                    if len(cur_l.strip()) > 4:
+                        if cur_l == prev_l:
+                            stable_l += 1
+                            if stable_l >= 2:      # 连续两次（≈1s）无新增字符 = 送达完成
+                                t_l = cur_l
+                                break
+                        else:
+                            stable_l = 0
+                        prev_l = cur_l
                 await asyncio.sleep(0.5)
+            if not t_l:
+                t_l = prev_l
             ok_l2 = len(t_l.strip()) > 4 and not err_l
             print("⑦l-2 迷你窗聊天可用:", "PASS" if ok_l2 else f"FAIL tail={t_l[:40]!r} err={err_l}")
             check("⑦l-2 迷你窗聊天可用", ok_l2)
