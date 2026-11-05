@@ -159,8 +159,8 @@ async def main():
             # （CI 的 dev_up 已设 AI_MODE=mock；本地容器若为 openai 也能复现）
             await pg.evaluate(
                 "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
-                "{mode:'mock', mockBase:'http://127.0.0.1:%d', tts:'off', "
-                "voice:'zh-CN-XiaoyiNeural', ttsRate:'normal'}))" % MOCK_PORT)
+                "{mode:'mock', mockBase:'http://%s:%d', tts:'off', "
+                "voice:'zh-CN-XiaoyiNeural', ttsRate:'normal'}))" % (HOST, MOCK_PORT))
             await pg.reload(wait_until="domcontentloaded")
             await pg.wait_for_selector("#textInput", state="visible", timeout=15000)
             print("① 页面加载:", await pg.title())
@@ -526,8 +526,8 @@ async def main():
             await pg2.wait_for_selector("#textInput", state="visible", timeout=15000)
             await pg2.evaluate(
                 "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
-                "{mode:'openai', apiBase:'http://127.0.0.1:8999', "
-                "mockBase:'http://127.0.0.1:8999', apiKey:'test-key'}))")
+                "{mode:'openai', apiBase:'http://%s:8999', "
+                "mockBase:'http://%s:8999', apiKey:'test-key'}))" % (HOST, HOST))
 
             async def _wait_line(unlike="", timeout=10):
                 end = time.time() + timeout
@@ -605,8 +605,8 @@ async def main():
             # （否则会落到 proxy/mock 连接被拒 → 离线兜底，测不到"注回欠账"）。
             await pg2.evaluate(
                 "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
-                "{mode:'openai', apiBase:'http://127.0.0.1:8999', "
-                "mockBase:'http://127.0.0.1:8999', apiKey:'test-key'}))")
+                "{mode:'openai', apiBase:'http://%s:8999', "
+                "mockBase:'http://%s:8999', apiKey:'test-key'}))" % (HOST, HOST))
             # 注意不能等"信号不太好"——历史恢复里可能已有 g-1 的同名词，会在
             # greet 渲染前就命中，造成时序假 FAIL（16:53 CI 轮实测）。
             greet_g = await wait_contains(pg2, "#messages", "没接上", timeout=20)
@@ -968,8 +968,8 @@ async def main():
             ctx7 = await b.new_context(viewport={"width": 340, "height": 460})   # FloatWindowService 迷你窗物理尺寸
             # w4 后全新安装默认走在线模型；本用例只验证迷你窗布局与聊天链路，显式固定 mock
             await ctx7.add_init_script(
-                "() => localStorage.setItem('xiaoman_cfg', JSON.stringify({mode:'mock', mockBase:'http://127.0.0.1:%d'}))"
-                % MOCK_PORT)
+                "() => localStorage.setItem('xiaoman_cfg', JSON.stringify({mode:'mock', mockBase:'http://%s:%d'}))"
+                % (HOST, MOCK_PORT))
             pg7 = await ctx7.new_page()
             err_l = []
             pg7.on("pageerror", lambda e: err_l.append(str(e)))
@@ -1081,7 +1081,7 @@ async def main():
             await pg10.goto(BASE, wait_until="domcontentloaded")
             await pg10.evaluate(
                 "() => localStorage.setItem('xiaoman_cfg', JSON.stringify("
-                "{mode:'mock', mockBase:'http://127.0.0.1:%d', tts:'off'}))" % MOCK_PORT)
+                "{mode:'mock', mockBase:'http://%s:%d', tts:'off'}))" % (HOST, MOCK_PORT))
             await pg10.reload(wait_until="domcontentloaded")
             await pg10.wait_for_selector("#textInput", state="visible", timeout=15000)
 
@@ -1126,14 +1126,14 @@ async def main():
 
             bypass = await pg10.evaluate(
                 """async () => {
-                  const r = await fetch('http://127.0.0.1:%d/api/chat', {method:'POST',
+                  const r = await fetch('http://%s:%d/api/chat', {method:'POST',
                     headers:{'Content-Type':'application/json'},
                     body: JSON.stringify({mode:'mock', session_id:'e2e-bypass',
                       messages:[{role:'user', content:'我把东西都送人了，也跟家里人好好道过别'}]})});
                   const outer = await r.json();
                   const d = JSON.parse(outer.content);
                   return {status:r.status, crisis:d.crisis, level:d.risk_level, reply:d.reply};
-                }""" % MOCK_PORT)
+                }""" % (HOST, MOCK_PORT))
             ok_bypass = (bypass["status"] == 200 and bypass["crisis"] is True
                          and bypass["level"] == "high" and "12356" in bypass["reply"])
             print("⑦n-5 直连 /api/chat 也被闸门拦住:", "PASS" if ok_bypass else f"FAIL {bypass}")
