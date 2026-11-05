@@ -6,10 +6,12 @@
 
 | 组别 | 场景数 | 通过 | 通过率 | 说明 |
 |---|---|---|---|---|
-| mock 模板引擎 | 112 | 112 | 100% | 本轮唯一完整跑完的一组 |
-| 真实模型（OpenRouter 免费模型） | 112 | — | **未跑** | 免费日配额耗尽，全部 429；**不代表 0 分，也不拿 mock 分冒充** |
+| mock 模板引擎 | 112 | 112 | 100% | 模板引擎基线，不代表真实模型 |
+| 真实模型·免费额度（本轮唯一合规真实样本） | 9 | 8 | **88.9%** | pollinations 匿名池 20 次请求上限用尽后停止；OpenRouter 免费池当日配额 429。**9/112 条，剩余 103 条未跑**，分母只含已跑完的 9 条 |
+| 真实模型·付费（已作废） | 0（原 70） | — | — | 违反“只准免费”硬约束，**整批作废，不采用任何数字** |
 
-**真实分本轮不可得。** 下面所有分数、指标均标注来源；mock 的数字只能说明"模板引擎没退化"，不能说明真实模型不像客服。
+**真实分覆盖率 8%（9/112）。** 9 条真实样本的建议率/重复开头都是 0%，但这只是 17 轮的样本量，
+不能外推成"真实模型已达标"；mock 的 100% 同样不能冒充真实分。
 
 ## 1. 场景集：112 条，16 类，212 轮
 
@@ -46,11 +48,14 @@
 # mock（模板引擎，秒级）
 python scripts/eval_human_feel.py --backend mock --json out.json --md out.md
 
-# 任意 OpenAI 兼容后端（真实模型）
+# 任意 OpenAI 兼容后端（真实模型，模型名必须在免费白名单内）
 python scripts/eval_human_feel.py --backend api \
   --base https://openrouter.ai/api/v1 \
-  --model <model> --delay 1 --timeout 90 --retries 4 --max-tokens 1200 \
-  --json real.json --md real.md
+  --model <model:free> --delay 1 --timeout 90 --retries 4 --max-tokens 1200 \
+  --max-requests 60 --json real.json --md real.md
+
+# 多免费后端轮换（429/402 自动切下一家，每家最多 60 次请求）
+python scripts/eval_human_feel.py --all --auto-rotate --max-requests 60
 ```
 
 - 判定全部走 `check_turn` / `check_case_expect`，mock 与真实模型用**同一套硬约束**，不存在两套标准。
@@ -58,7 +63,7 @@ python scripts/eval_human_feel.py --backend api \
 - `--limit` / `--categories` 可缩样；`--min-rate` 设定退出码阈值。
 - 报告输出：分类别通过率、失败原因归类、反套路四项指标、失败前 5 条原文。
 
-## 3. 真实模型：为什么没跑成（可复现证据）
+## 3. 真实模型：跑到了哪、为什么没跑完（可复现证据）
 
 | 尝试 | 结果 |
 |---|---|
@@ -66,19 +71,30 @@ python scripts/eval_human_feel.py --backend api \
 | 同上，配额耗尽后（112 条全量） | 第 1 条即 `HTTP 429`：`Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day` |
 | `xingchen-agi/xing4.0-29b-a4b:free` | 上游 429（61 条全失败） |
 | `nvidia/nemotron-3.5-lightning:free` | `max_tokens` 被 reasoning 吃光，`content=null`、`finish_reason=length` |
-| pollinations 免密端点（`text.pollinations.ai/openai`） | `HTTP 402 Payment Required`（`openai`/`qwen-coder`），`mistral` 404 |
+| `meta-llama/llama-3.1-8b-instruct:free` | `HTTP 404`：该 slug 已无免费版（“This model is unavailable for free … use this slug instead: meta-llama/llama-3.1-8b-instruct”） |
+| pollinations 免密端点（`text.pollinations.ai/openai`） | 可匿名调用，限速 `FREE_LIMIT: 1 reply every 45 seconds per IP` |
 | 本机 ollama | 未安装，无本地模型 |
 | Windows 凭据管理器 | 只有 Freebuff BYOK 一个目标，无第二家 provider key |
+
+**本轮免费白名单重跑（合规真实样本）**：`--all --auto-rotate --max-requests 20`。
+OpenRouter 第 1 次即 429（账户当日免费池用尽）→ 自动切 pollinations，
+按 46 秒/次放慢跑完 **20 次请求、9 条用例（17 轮）**，到单次上限停止；
+剩余 103 条未跑，第 10 条标 `SKIP` 不进分母。
+
+| 后端 | 模型 | 调用 | 429 | 状态 | 原因（打码/截断） |
+|---|---|---|---|---|---|
+| openrouter-free | `dots-studio/dots-3-note-preview:free` | 1 | 0 | 配额或计费受限，已停用 | `HTTP 429 … free-models-per-day` |
+| pollinations | `openai`（匿名池） | 20 | 0 | 达到单次上限 | 本家已发 20 次请求（上限 20），余下交下一家 |
 
 配额耗尽前的成功探针（**仅作连通性/中文能力证据，不计分**）：
 
 > 用户：`团子又把我耳机线咬了`
 > 模型（dots）：`团子要是看见估计得当场表演一个原地晕倒。那只猫有人管吗，还是蹲门口蹭饭的？`
 
-结论：评测器对真实后端可用（HTTP/解析/记忆回灌链路已验证），但本轮拿不到真实样本。
-**报告不把 mock 的 100% 当作真实分。** 配额恢复后重跑第 2 节命令即可补齐"真实 vs mock"两列。
+结论：评测器对真实后端可用（HTTP/解析/记忆回灌链路已验证），免费额度只够跑 9 条。
+**报告不把 mock 的 100% 当作真实分，也不把付费那 70 条算进来。** 配额更多时加 `--max-requests` 重跑即可补齐覆盖率。
 
-## 4. 反套路指标（来源：mock 112 条 / 212 轮）
+## 4. 反套路指标（mock 112 条 / 212 轮 + 真实 9 条 / 17 轮）
 
 | 指标 | 实测 | 目标 | 判定 |
 |---|---|---|---|
@@ -90,15 +106,40 @@ python scripts/eval_human_feel.py --backend api \
 | JSON 协议不合规 | **0/212 轮** | 仅统计（客户端有纯文本兜底） | — |
 
 高频开头全部是 `嗯，`（13 次），集中在沉默/拒绝池——对单字、省略号回复属于人话，不算套路开头。
-真实模型这一列必须等真机跑出来才有意义，mock 的 0% 不代表真实模型也会 0%。
+
+真实 9 条样本（17 轮，pollinations）单项：
+
+| 指标 | 实测 | 目标 | 判定 |
+|---|---|---|---|
+| 建议出现率 | **0.0%**（0/17） | ≤25% | 样本内达标 |
+| 四字总结式共情 | **0.0%**（0/17） | 越低越好 | 样本内达标 |
+| 高频开头 | **0.0%**（0/17） | 越低越好 | 样本内达标 |
+| 会话内重复开头 | **0.0%**（0/17） | ≤8% | 样本内达标 |
+| JSON 协议不合规 | **0/17 轮** | 仅统计 | 该模型输出稳定 JSON |
+| 记忆引用自然度 | 样本里无主动回溯（0/0） | — | 不可判定 |
+
+注意：9 条里没有长期记忆类、沉默类、拒绝类用例（这些类别排在场景集后段，额度先耗尽），
+所以这张表**只能说明日常倾诉/情绪低落两类在真实模型下没有明显套路化**，不能代表全部 16 类。
 
 ## 5. 失败案例
 
 ### 5.1 最终 mock 全量：0 失败
 
-112/112，`failure_reasons` 为空。**没有真实模型的失败样本**，因为真实调用没成功，不编造 Top5。
+112/112，`failure_reasons` 为空。真实样本的失败见 5.2。
 
-### 5.2 本轮从失败修到通过的 6 个反例（原文可核验）
+### 5.2 真实免费样本的唯一失败（原文，可复现）
+
+`daily-01`（日常倾诉，2 轮）：
+
+> 用户：`楼下那家关东煮出摊了，我家团子蹲在窗台盯了半小时`
+> 模型（pollinations）：`团子都想来一口啊||好像是被香味迷住了！`
+
+判定失败原因：`未体现期望内容（期望其一：猫/关东煮/盯）`。
+不像人的点：接住了“团子+香味”，但没接住“蹲窗台盯半小时”这个具体动作，
+更像泛泛搭话；朋友会先笑它“盯了半小时是有多馋”。
+这是 9 条里的 1 条，真实样本通过 8/9。
+
+### 5.3 本轮从失败修到通过的 6 个反例（原文可核验）
 
 这 6 条是本轮评测真实报红过的用例，修复后转绿；列出"当时为什么不像人"：
 
@@ -182,6 +223,11 @@ python scripts/eval_human_feel.py --backend api \
 | `abaf8cb` | 评测器多后端化 + 场景集 84→112；mock 拒绝/遗忘/回忆自然化、话题池扩容 |
 | `afcc714` | 提示词收敛（1806 字），句子级去重与锚点唯一性测试 |
 | `f914672` | 遗忘校验落到存储层 |
+| `865c2e6` | 提示词单一源派生到 web/Android，客户端补齐真人感与记忆槽规则 |
+| `fccaa49` | lean 只压 REALISM 风格细则，安全与真人感逐字保留 |
+| `c56af95` | 多免费后端轮换 + `--all --auto-rotate` + `--backend local` |
+| `ce41504` | 轮换配置兼容 Windows BOM，示例改为可用免费模型 |
+| `2a883cf` | 只准免费额度：模型白名单、请求体检、402 熔断、单次请求上限 |
 
 文件：`scripts/eval_human_feel.py`（新，686 行）、`server/tests/human_feel_cases.json`（112 条）、
 `server/tests/test_human_feel_eval.py`（重写）、`server/tests/test_human_feel_prompt.py`、
@@ -191,34 +237,177 @@ python scripts/eval_human_feel.py --backend api \
 
 ```
 python -m pytest server/tests -q
-158 passed, 19 subtests passed in 15.78s
+184 passed, 19 subtests passed in 8.27s
 ```
 
-基线 153 passed + 19 subtests，本轮新增 5 个测试，无降级、无放宽断言。
-串行执行，未起浏览器/AVD/Gradle；mock 评测 0.2s，pytest 15.8s。
+基线 153 passed + 19 subtests，本轮净增 31 项，无降级、无放宽断言。
+串行执行，未起浏览器/AVD/Gradle；mock 评测 0.2s，pytest 8.3s。
 
 ## 9. 尚存差距（必须说清）
 
-1. **mock ≠ 真实。** 112/112 只证明模板引擎没退化。真实模型的建议率、开头重复、记忆背诵很可能明显高于 0%，要等配额恢复后补跑。
-2. **免费额度不可靠。** OpenRouter 免费模型日配额 50 次，跑 112 条 × 2 轮需要 ~250 次调用，必然中断。稳定回归要么充值（credits ≥10 解锁 1000 次/天），要么换本地模型（本机未装 ollama）。
-3. **线上客户端提示词未同步。** `web/js/api.js` 只与 `SAFETY/PERSONA/REALISM/MEMORY/BASELINE/OUTPUT_PROTOCOL` 逐字对齐；
-   W20 的 `HUMAN_FEEL_RULES`（默认不给建议/拒绝要落地/记忆像人回忆）与 `MEMORY_SLOT_RULES` 是**服务端独有**，
-   而 `web/**`、`android/**` 在本轮禁止改动。也就是说：真机客户端当前不会带上这两段新硬约束，
-   本轮改动只影响服务端评测链路。
-4. **`lean` profile 会退掉两段新硬约束**（为控首字延迟），退化路径下真人感约束不生效。
+1. **mock ≠ 真实。** 112/112 只证明模板引擎没退化。真实模型只跑到 9/112（88.9%），且集中在前两类；
+   记忆、沉默、拒绝这些最容易露馅的类别**没有真实样本**，仍可能明显差于 mock。
+2. **免费额度不可靠。** OpenRouter 免费池当日配额用尽（429）；pollinations 匿名池 45 秒/次、
+   本轮按 20 次请求上限只够 9 条。跑完 112 条 × 2 轮约需 250 次调用，
+   稳定全量要么有更多免费 key 轮换，要么本地模型（本机未装 ollama）。
+3. **客户端同源已落地（第 11 节）**：`web/js/api.js` 不再手写提示词，改为引用
+   `web/js/persona_rules.js`（由 `server/prompt_core.py` 生成），Android 由 `build_assets.sh` 同步同一份；
+   测试锁住服务端/客户端同时含 12 个硬约束关键词。原先“客户端不带真人感”的问题已消除。
+4. **`lean` 已修（第 12 节）**：现在只压 REALISM 风格细则，安全三条与真人感/记忆槽硬约束逐字保留，
+   测试 `test_lean_and_full_only_differ_by_realism` 锁死，退化路径不会再丢硬约束。
 5. **记忆自然度只在 mock + 槽层验证**：真实模型是否"背清单/逐字复读"没有样本。
 6. **判定是启发式正则**：能抓典型套话，抓不到"语义上像客服"的变体；真实回归时必须人工抽检前 20 条。
 7. **真实模型 JSON 协议不稳定**：免费模型常出围栏/前后缀/纯文本；线上 `api.js` 有纯文本兜底，评测只统计不判负，
    但这会压低结构化字段（emotion/memory_updates）的可用率。
 
-## 10. 复跑命令（配额恢复后）
+## 10. 复跑命令（仍有免费额度时）
+
+```bash
+# 免费白名单 + 多后端轮换 + 每家请求上限（只跑免费模型）
+python scripts/eval_human_feel.py --all --auto-rotate --max-requests 60 \
+  --json docs/eval_real_w20.json --md docs/eval_real_w20.md
+```
+
+单后端直连（模型名必须在免费白名单内，否则脚本在发请求前就拒绝）：
 
 ```bash
 python scripts/eval_human_feel.py --backend api \
   --base https://openrouter.ai/api/v1 \
   --model dots-studio/dots-3-note-preview:free \
-  --delay 2 --timeout 90 --retries 4 --max-tokens 1200 \
-  --json docs/eval_real_w20.json --md docs/eval_real_w20.md
+  --max-requests 60 --max-tokens 1200 --delay 2
 ```
 
-若仍 429：`--limit 61` 跑代表性半量，报告里继续写明覆盖率，不与 112 条 mock 分混算。
+若免费额度仍不够：`--limit 61` 跑代表性半量，报告里继续写明覆盖率，不与 112 条 mock 分混算。
+
+## 11. 客户端提示词同步（本轮扩域）
+
+之前 `HUMAN_FEEL_RULES` / `MEMORY_SLOT_RULES` 只活在服务端，web 与 Android 都不带，
+真机用户体验不到本轮改进。现在改成**单一源 + 生成物**：
+
+| 层 | 文件 | 角色 |
+|---|---|---|
+| 真源 | `server/prompt_core.py` | 唯一手写提示词所在，安全/身份/细则/底线/JSON 全在这里 |
+| 生成器 | `scripts/gen_persona_rules.py` | 把 8 段常量派生为 JS；`--check` 只校验 |
+| Web | `web/js/persona_rules.js` | 生成物（勿手改），UMD：Node `require` / 浏览器 `XMPersonaRules` |
+| Web 调用处 | `web/js/api.js` | 删掉手写副本；Node 走 `require`，浏览器解析期 `document.write` 同步注入（`index.html` 禁改，无法加 script 标签），拿不到就报错，绝不退回旧副本 |
+| Android | `android/app/src/main/assets/www/js/*` | `build_assets.sh` 把 `web/` 整目录同步过去，WebView 加载的就是同一份生成物；不单独维护 |
+
+**同源怎么锁**（`server/tests/test_persona_single_source.py` + `test_prompt_parity.py`）：
+
+1. `test_generated_file_matches_source`：`persona_rules.js` 必须逐字等于生成器输出，
+   手改任何一段立刻红。
+2. `test_api_js_no_handwritten_copy`：`api.js` 里禁止再出现 `const SAFETY_RULES = \``
+   或「【真人感硬约束」原文，必须引用 `persona_rules.js`。
+3. `test_server_and_client_prompt_share_keywords`：对 12 个硬约束关键词
+   （安全三条、长度/跑题、真人感五条、记忆槽、遗忘），断言**服务端拼出的 system prompt**
+   与**客户端 8 段拼出的 system prompt** 同时包含，用测试锁住，不靠人工核对。
+4. `test_sections_are_verbatim_identical`：8 段逐字对齐（含新增两段）。
+5. `test_android_assets_copy_if_built`：本地跑过 `build_assets.sh` 后，Android 副本与
+   web 源逐字一致；未构建则 skip，不假装通过。
+
+实测：`bash scripts/build_assets.sh` 同步 69 文件 / 1.4MB，`ASSET_VERIFY PASS`；
+`node --test web/tests/api.test.js` 224 项全过（新增真人感/记忆槽/心跳安全断言）。
+
+## 12. lean profile 边界
+
+`static_core("lean")` 以前会把【真人感硬约束】【长期记忆槽的用法】整段退掉；
+现在 lean **只允许退 REALISM_RULES**（节奏/句式这类格式提示）：
+
+- `test_lean_profile_keeps_safety_and_human_feel`：安全三条、身份、长度/跑题、真人感、
+  记忆槽、底线、JSON 必须全部在 lean 里；`REALISM` 与「60% 只回 1 条」必须不在。
+- `test_lean_safety_lines_verbatim`：安全三条逐字核对，防压缩改字。
+- `test_lean_and_full_only_differ_by_realism`：lean 必须严格等于 full 去掉 REALISM 段，
+  以后谁再想退硬约束都会红。
+
+lean 1395 字，full 1806 字；lean 只少 411 字的风格细则，安全与真人感一字不少。
+
+## 13. 多后端轮换与凭据实测
+
+### 13.1 轮换机制
+
+```
+python scripts/eval_human_feel.py --all --auto-rotate
+```
+
+- 配置优先级：`--backends-file` → `HUMAN_FEEL_BACKENDS_FILE` → `HUMAN_FEEL_BACKENDS`
+  （内联 JSON/路径）→ `scripts/backends.local.json`（`*.local.json` 已 gitignore）。
+- 每家：`{name, base, model, key_env|key, requires_key, retries, max_tokens, temperature}`。
+  仓库里的 `scripts/backends.example.json` 只允许 `key_env`，测试禁止出现 `sk-`。
+- 429 / 402 / 401 / 403，或连续两次空响应 → 自动切下一家；报告记录每家调用数、
+  429 次数、首次 429 时间与打码原因；全部判死则**中止**，已完成条数照实写，不折算质量分。
+- 本地密钥落在 `C:\Users\xx\.secrets\w20_backends.json`（仓库外），报告与提交里不出现原文。
+- `--backend local` = 本地模板引擎兜底，显式标注“不计真实分”。
+
+### 13.2 两份外部凭据实测（密钥全部打码）
+
+| 凭据 | 端点 | 鉴权结果 | 3 次请求 | 额度线索 | 结论 | 处置 |
+|---|---|---|---|---|---|---|
+| agnes-ai（已删除） | `api.agnes-ai.com/api/v1/chat/completions` | 401 `Login expired`（Bearer/raw/x-api-key/api-key 四种都 401） | 0/3 成功 | 无 | **不可用**：密钥失效 | 已 `Remove-Item` 删除附件 |
+| OpenRouter（`sk-or-...4e09`） | `openrouter.ai/api/v1` | 200 | 免费模型 3/3 = 429；付费 `qwen/qwen-2.5-7b-instruct` 200 | `/auth/key`：free_tier=true，usage=0；免费池 `X-RateLimit-Remaining: 0` | **仅免费池可用时才能用**：当日免费配额已耗尽；付费额度按硬约束禁用 | 保留，写入仓库外 secrets 配置，配置里只放 `:free` 模型 |
+
+补充：同 key 的 `openai/gpt-4o-mini` 403 区域不可用，`google/gemini-2.0-flash-001` 404 已下线；
+付费 `qwen/qwen-2.5-72b-instruct` 当时可用（~40-70s/次），**但按“只准免费”硬约束现已禁用**，
+配置与代码都会在发请求前拒绝这类模型名。
+
+### 13.3 轮换实测
+
+第一轮（OpenRouter 免费 dots + pollinations）：
+`openrouter` 第 1 次即 429 → 自动切 `pollinations`，第 2 次 402
+`FREE_LIMIT: 1 reply every 45 seconds per IP` → 两家判死，**0 条完成，评测中止**。
+这份记录证明切换逻辑会真实触发，也证明当时确实没有能跑全量的免费额度。
+
+第二轮（OpenRouter 付费 qwen 7B，pollinations 备用）：跑至第 70 条时按“只准免费”硬约束人工叫停。
+**这 70 条因调用了付费模型而作废，不计入任何分数**；作废记录本身就是违规证据，保留在此不删。
+
+### 13.4 只准免费额度（硬约束落地）
+
+规则：任何付费模型一律不许调。落到代码里是三道闸 + 一本账：
+
+| 防线 | 位置 | 行为 |
+|---|---|---|
+| 白名单 | `is_free_model()` | 只放行：`*:free` 免费池、显式白名单（`openai` 匿名池）、不指定模型名的匿名端点；`qwen/qwen-2.5-7b-instruct` 这类付费名**发请求前直接拒绝**，不“先试一下” |
+| 配置加载 | `load_providers()` | 非白名单条目直接跳过并写明原因；`max_tokens` 一律压到 1500 |
+| 后端构造 | `ApiBackend` / `RotatingBackend` | 再校验一次，付费模型连对象都建不起来（`ValueError`） |
+| 请求体 | `ApiBackend.chat()` | 只发 `model/temperature/max_tokens/messages` 四项，不带 `provider` 路由、`:nitro`、`:online`、联网检索等计费选项 |
+| 计费熔断 | `BILLING_HINT_RE` | HTTP 402 或返回体出现 `insufficient/balance/payment/credits/充值/余额` → `billing_stop=True`，**当次就停**（`calls==1`），不重试、不换模型升级；轮换表记为“配额或计费受限，已停用” |
+| 单次上限 | `--max-requests`（默认 60） | 每家最多 60 次请求；到上限切下一家；全部到上限就停在已完成条数，未跑完的用例标 `SKIP`，**不进分母** |
+
+锁死用例（`server/tests/test_eval_rotation.py`，本轮 20 项全过）：
+
+- `test_is_free_model`：`*:free` / `openai` / 空模型放行，付费与 `:nitro`/`:online` 拒绝；
+- `test_load_providers_rejects_paid_model`：付费条目被跳过且原因含“白名单”；
+- `test_rotating_backend_refuses_paid_provider`：付费配置构造即抛错；
+- `test_request_body_has_no_paid_options`：请求体键集合严格等于四项，`max_tokens ≤ 1500`；
+- `test_billing_402_stops_without_retry_upgrade`：402 只发 1 次、模型名不变；
+- `test_billing_stop_marks_provider_disabled`：轮换表状态为“配额或计费受限，已停用”；
+- `test_max_requests_switches_to_next_provider` / `test_max_requests_all_used_raises_limit` /
+  `test_limit_skipped_case_not_counted_in_rate`：到上限切家、全满则停、SKIP 不进分母；
+- `test_example_config_only_free_models` / `test_local_config_only_free_models`：仓库内两份配置只许免费模型；
+- `test_provider_delay_is_parsed`：免费端点按 IP 限速时，每家可单独配 `delay`（pollinations 46 秒）。
+
+### 13.5 免费额度现状（真实、打码）
+
+| 通道 | 状态 | 证据 |
+|---|---|---|
+| OpenRouter 免费池（`dots-studio/dots-3-note-preview:free`） | 当日配额用尽：第 1 次即 429 `free-models-per-day` | 13.3 与 13.6 |
+| OpenRouter `meta-llama/llama-3.1-8b-instruct:free` | 404，已无免费版 | 本轮实测 |
+| pollinations 免密端点（`text.pollinations.ai/openai`） | 可匿名调用，但 `FREE_LIMIT: 1 reply every 45 seconds per IP`；配 `delay: 46` 可稳定跑 | 本轮 20 次全成功 |
+| 本地 ollama | 未安装 | `ollama` 不在 PATH |
+
+结论：免费额度能跑但极慢（约 45 秒/次），按 `--max-requests` 的硬上限执行；
+跑不完的条数照实写、标 `SKIP`，不与 mock 分混算。
+
+### 13.6 本轮免费重跑结果
+
+```
+python scripts/eval_human_feel.py --all --auto-rotate --max-requests 20
+```
+
+- openrouter-free：调用 1 次，429（当日免费池用尽）→ 自动切 pollinations；
+- pollinations：调用 20 次，全部成功（`delay: 46` 主动避让限速），达到单次上限；
+- 完成 **9 条 / 17 轮**（daily-01..08 + emotion-01），通过 8 条（**88.9%**）；
+- 第 10 条起 `SKIP` / 中止，**剩余 103 条未跑**；
+- 反套路：建议 0/17、四字共情 0/17、高频开头 0/17、会话内重复开头 0/17、JSON 不合规 0/17；
+- 唯一失败 `daily-01`（原文见 5.2）。
+
+即：真实合规样本 9 条、覆盖率 8%。不追加、不夸大；付费那 70 条继续作废。
