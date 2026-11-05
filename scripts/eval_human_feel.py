@@ -766,6 +766,7 @@ def run_case(case: dict, backend, universal: dict) -> tuple:
 
 
 def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
+             skip_ids=None,
              on_case=None) -> dict:
     data = load_cases(cases_file)
     universal = data["universal"]
@@ -781,7 +782,14 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
     total_cases = len(cases)
     aborted = None
     limit_skips = 0
+    resume_skips = 0
     for i, case in enumerate(cases, 1):
+        if skip_ids and case["id"] in skip_ids:
+            # 断点续跑：已通过的用例不再重跑，也不重复计数（统计用历史明细合并）
+            resume_skips += 1
+            print("%s [%d/%d] %-4s %s（已完成，续跑跳过）"
+                  % (LOG, i, total_cases, case["id"], "SKIP"), flush=True)
+            continue
         try:
             res, adv = run_case(case, backend, universal)
         except AllProvidersExhausted as exc:
@@ -807,9 +815,114 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
     data = {"results": results, "metrics": metrics, "universal": universal}
     if limit_skips:
         data["limit_skips"] = limit_skips
+    if resume_skips:
+        data["resume_skips"] = resume_skips
     if aborted:
         data["aborted"] = aborted
     return data
+
+
+def case_stats(res) -> dict:
+    """单条用例的可合并统计（续跑时用来把历史结果并进来）。"""
+    turns = res.turns
+    tic = Counter()
+    for t in turns:
+        for w in OPENING_TICS:
+            if w in t.reply:
+                tic[w] += 1
+    seen, session_turns, repeat = set(), 0, 0
+    for t in turns:
+        key = opening_key(t.reply)
+        if not key:
+            continue
+        session_turns += 1
+        if key in seen:
+            repeat += 1
+        seen.add(key)
+    recall_checks, recall_natural = 0, 0
+    for v in res.case.get("memory_values", []):
+        for t in turns:
+            if v in t.text and v not in t.user:
+                recall_checks += 1
+                if any(k in t.text for k in RECALL_MARKERS):
+                    recall_natural += 1
+    return {
+        "id": res.case["id"],
+        "category": res.case["category"],
+        "passed": res.passed,
+        "turns": len(turns),
+        "protocol_errors": sum(1 for t in turns if t.payload.get("_parse_error")),
+        "advice_turns": sum(1 for t in turns if ADVICE_RE.search(t.reply)),
+        "summary_empathy": sum(1 for t in turns
+                               if any(w in t.reply for w in SUMMARY_EMPATHY)),
+        "tic": dict(tic),
+        "session_turns": session_turns,
+        "repeat": repeat,
+        "recall_checks": recall_checks,
+        "recall_natural": recall_natural,
+        "failures": list(res.failures),
+    }
+
+
+def metrics_from_stats(stats: list) -> dict:
+    """把逐条统计合并成与 compute_metrics 同口径的指标。"""
+    total_turns = sum(s["turns"] for s in stats)
+    total = total_turns or 1
+    advice = sum(s["advice_turns"] for s in stats)
+    empathy = sum(s["summary_empathy"] for s in stats)
+    tic = Counter()
+    for s in stats:
+        tic.update(s.get("tic") or {})
+    session_turns = sum(s["session_turns"] for s in stats)
+    repeat = sum(s["repeat"] for s in stats)
+    checks = sum(s["recall_checks"] for s in stats)
+    natural = sum(s["recall_natural"] for s in stats)
+    return {
+        "turns": total_turns,
+        "protocol_errors": sum(s["protocol_errors"] for s in stats),
+        "advice_turns": advice,
+        "advice_rate": round(advice / total, 4),
+        "summary_empathy_turns": empathy,
+        "summary_empathy_rate": round(empathy / total, 4),
+        "opening_tic_hits": dict(tic.most_common()),
+        "opening_tic_rate": round(sum(tic.values()) / total, 4),
+        "session_turns": session_turns,
+        "repeat_opening": repeat,
+        "repeat_opening_rate": round(repeat / (session_turns or 1), 4),
+        "recall_checks": checks,
+        "recall_natural": natural,
+        "recall_natural_rate": round(natural / (checks or 1), 4),
+    }
+
+
+def summarize_stats(stats: list, metrics: dict, aborted=None,
+                    limit_skips: int = 0) -> dict:
+    """用逐条统计汇总（续跑合并后走这条，分母只含真正跑完的用例）。"""
+    by_cat = OrderedDict()
+    reasons = Counter()
+    failures = []
+    for s in stats:
+        st = by_cat.setdefault(s["category"], {"passed": 0, "total": 0})
+        st["total"] += 1
+        if s["passed"]:
+            st["passed"] += 1
+        else:
+            failures.append({"case": s["id"], "category": s["category"],
+                             "reasons": [f["reason"] for f in s.get("failures", [])]})
+            for f in s.get("failures", []):
+                reasons[f["reason"].split("：")[0].split("“")[0]] += 1
+    passed = sum(1 for s in stats if s["passed"])
+    return {
+        "cases": len(stats),
+        "passed": passed,
+        "rate": round(passed / (len(stats) or 1), 4),
+        "by_category": by_cat,
+        "failure_reasons": dict(reasons.most_common()),
+        "failures": failures,
+        "metrics": metrics,
+        "aborted": aborted,
+        "limit_skips": limit_skips,
+    }
 
 
 def compute_metrics(results: list, advice_turns: int) -> dict:
@@ -902,6 +1015,13 @@ def render_markdown(summary: dict, backend_name: str, model: str = "",
              "| %d | %d | %.1f%% |" % (summary["cases"], summary["passed"],
                                        summary["rate"] * 100),
              "", "| 类别 | 通过/总数 |", "|---|---|"]
+    cov = summary.get("coverage")
+    if cov:
+        lines.insert(4, "覆盖率：完成 %d/%d 条（%.1f%%）＝续跑带入 %d + 本次新跑 %d，"
+                        "剩余 %d 条未跑。" % (cov["completed"], cov["expected"],
+                                           cov["rate"] * 100, cov["resumed"], cov["new"],
+                                           cov["expected"] - cov["completed"]))
+        lines.insert(5, "")
     for cat, st in summary["by_category"].items():
         lines.append("| %s | %d/%d |" % (cat, st["passed"], st["total"]))
     rot = summary.get("rotation")
@@ -983,6 +1103,9 @@ def main(argv=None) -> int:
     ap.add_argument("--max-requests", type=int, default=DEFAULT_MAX_REQUESTS,
                     help="单次运行里每个后端的最大请求数（默认 %d，到上限切下一家）"
                     % DEFAULT_MAX_REQUESTS)
+    ap.add_argument("--resume", action="store_true",
+                    help="断点续跑：读取 --json 里的逐条统计，跳过已通过的用例，"
+                         "把新结果合并进同一份报告")
     args = ap.parse_args(argv)
 
     skipped = []
@@ -1035,6 +1158,22 @@ def main(argv=None) -> int:
 
     cats = [c for c in args.categories.split(",") if c]
 
+    # 断点续跑：只认带逐条统计（case_stats）的旧结果，逐条合并、覆盖率如实算
+    prior_stats = []
+    if args.resume:
+        if not args.json or not Path(args.json).exists():
+            print("%s --resume 需要已有结果：请用 --json 指定上次的明细文件"
+                  % LOG, file=sys.stderr)
+            return 2
+        old = json.loads(Path(args.json).read_text(encoding="utf-8"))
+        prior_stats = old.get("case_stats") or []
+        if not prior_stats:
+            print("%s 旧结果没有逐条统计（旧版本输出），无法续跑；将从第 1 条开始"
+                  % LOG, flush=True)
+    skip_ids = {s["id"] for s in prior_stats if s["passed"]}
+    if skip_ids:
+        print("%s 续跑：跳过 %d 条已通过用例" % (LOG, len(skip_ids)), flush=True)
+
     progress = {"n": 0}
 
     def on_case(res):
@@ -1048,8 +1187,32 @@ def main(argv=None) -> int:
 
     started = time.time()
     data = evaluate(Path(args.cases), backend, limit=args.limit, categories=cats,
-                    on_case=on_case)
-    summary = summarize(data)
+                    skip_ids=skip_ids, on_case=on_case)
+    new_stats = [case_stats(r) for r in data["results"]]
+    if prior_stats:
+        merged = OrderedDict((s["id"], s) for s in prior_stats)
+        for s in new_stats:
+            merged[s["id"]] = s  # 重跑的失败用例以新结果为准
+        order = {c["id"]: i for i, c in
+                 enumerate(load_cases(Path(args.cases))["cases"])}
+        stats = sorted(merged.values(), key=lambda s: order.get(s["id"], 999))
+        summary = summarize_stats(stats, metrics_from_stats(stats),
+                                  data.get("aborted"), data.get("limit_skips", 0))
+        carried = {s["id"] for s in prior_stats}
+        expected = len(order)
+        summary["coverage"] = {
+            "expected": expected,
+            "completed": len(stats),
+            "resumed": sum(1 for s in stats if s["id"] in carried),
+            "new": len(new_stats),
+            "rate": round(len(stats) / (expected or 1), 4),
+        }
+    else:
+        stats = new_stats
+        summary = summarize(data)
+    summary["case_stats"] = stats
+    summary["passed_ids"] = [s["id"] for s in stats if s["passed"]]
+    summary["failed_ids"] = [s["id"] for s in stats if not s["passed"]]
     if isinstance(backend, RotatingBackend):
         summary["rotation"] = backend.report()
         summary["backend_calls"] = sum(p["calls"] for p in summary["rotation"]["providers"])
@@ -1085,6 +1248,12 @@ def main(argv=None) -> int:
     if skipped:
         summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
             "未配置 key 跳过：%s" % "、".join(s["name"] for s in skipped)
+    cov = summary.get("coverage")
+    if cov:
+        summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
+            ("断点续跑：历史带入 %d 条、本次新跑 %d 条，完成 %d/%d（%.1f%%），剩余 %d 条"
+             % (cov["resumed"], cov["new"], cov["completed"], cov["expected"],
+                cov["rate"] * 100, cov["expected"] - cov["completed"]))
 
     md = render_markdown(summary, summary["backend"], summary["model"], summary["notes"])
     print(md)

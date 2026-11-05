@@ -9,9 +9,12 @@
 
 这里用假后端验证机制，不会消耗真实配额。
 """
+import contextlib
+import io
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -322,6 +325,75 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(skipped, [])
         finally:
             os.unlink(path)
+
+
+class ResumeTest(unittest.TestCase):
+    """断点续跑：跳过已通过用例，合并历史结果，覆盖率如实算。"""
+
+    def _run(self, args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = ev.main(args)
+        return rc, buf.getvalue()
+
+    def test_metrics_from_stats_matches_compute_metrics(self):
+        data = ev.evaluate(ev.CASES_FILE, ev.MockBackend(ev.CASES_FILE), limit=6)
+        stats = [ev.case_stats(r) for r in data["results"]]
+        self.assertEqual(ev.metrics_from_stats(stats), data["metrics"])
+
+    def test_resume_skips_passed_and_keeps_coverage(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "run.json"
+            rc1, _ = self._run(["--backend", "mock", "--limit", "4",
+                                "--json", str(out)])
+            self.assertEqual(rc1, 0)
+            first = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(len(first["case_stats"]), 4)
+            self.assertEqual(len(first["passed_ids"]), 4)
+            self.assertNotIn("coverage", first, "首次运行不应给出覆盖率假象")
+
+            rc2, _ = self._run(["--backend", "mock", "--limit", "4",
+                               "--json", str(out), "--resume"])
+            second = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(rc2, 0)
+            self.assertEqual(second["coverage"]["completed"], 4)
+            self.assertEqual(second["coverage"]["expected"], 112)
+            self.assertEqual(second["coverage"]["resumed"], 4)
+            self.assertEqual(second["coverage"]["new"], 0)
+            self.assertEqual(second["cases"], 4, "续跑不能把总数改大")
+            self.assertIn("断点续跑", second["notes"])
+
+    def test_resume_adds_new_cases_without_double_count(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "run.json"
+            self._run(["--backend", "mock", "--limit", "2", "--json", str(out)])
+            self._run(["--backend", "mock", "--limit", "5", "--json", str(out),
+                       "--resume"])
+            data = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(data["coverage"]["completed"], 5)
+            self.assertEqual(data["coverage"]["resumed"], 2)
+            self.assertEqual(data["coverage"]["new"], 3)
+            self.assertEqual(data["cases"], 5, "合并后按用例 id 去重")
+            self.assertEqual(len(data["passed_ids"]) + len(data["failed_ids"]), 5)
+
+    def test_resume_without_json_returns_2(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "none.json"
+            rc, _ = self._run(["--backend", "mock", "--limit", "1",
+                               "--resume", "--json", str(missing)])
+            self.assertEqual(rc, 2)
+
+    def test_resume_legacy_json_without_stats_starts_fresh(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "legacy.json"
+            out.write_text(json.dumps({"cases": 9, "passed": 8}, ensure_ascii=False),
+                           encoding="utf-8")
+            rc, log = self._run(["--backend", "mock", "--limit", "2",
+                                 "--json", str(out), "--resume"])
+            self.assertEqual(rc, 0)
+            self.assertIn("没有逐条统计", log)
+            data = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(data["cases"], 2)
 
 
 if __name__ == "__main__":
