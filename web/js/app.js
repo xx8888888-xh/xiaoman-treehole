@@ -1445,6 +1445,47 @@ const App = (() => {
     box.appendChild(clearRow);
   }
 
+  // 设置页里的「清空使用统计」：入口在设置里，二次确认规则与首页一致（5 秒内再点一次才生效）
+  let settingsStatsArmed = false;
+  let settingsStatsTimer = null;
+  function injectStatsClearSetting() {
+    const field = document.querySelector("#settingsModal .backup-field");
+    if (!field || field.querySelector("#statsClearSetting")) return;
+    const row = document.createElement("div");
+    row.style.cssText = "margin-top:12px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "statsClearSetting";
+    btn.className = "ghost-btn";
+    const paint = () => { btn.textContent = settingsStatsArmed ? "再点一次，确认清空" : "清空使用统计"; };
+    paint();
+    btn.onclick = () => {
+      if (!settingsStatsArmed) {
+        settingsStatsArmed = true;
+        paint();
+        if (settingsStatsTimer) clearTimeout(settingsStatsTimer);
+        settingsStatsTimer = setTimeout(() => {
+          settingsStatsTimer = null;
+          settingsStatsArmed = false;
+          paint();
+        }, 5000);
+        return;
+      }
+      if (settingsStatsTimer) { clearTimeout(settingsStatsTimer); settingsStatsTimer = null; }
+      settingsStatsArmed = false;
+      if (window.Stats) Stats.clear();
+      renderStats();          // 图表就地归零（空态分支，不会出现 NaN）
+      paint();
+      toast("使用统计已清空；聊天记录与记忆不受影响");
+    };
+    const hint = document.createElement("span");
+    hint.className = "mini";
+    hint.textContent = "只清空计数与图表，不删聊天记录和记忆。";
+    row.appendChild(btn);
+    row.appendChild(hint);
+    field.appendChild(row);
+  }
+
   // ---------- 打字指示（W7：真流式不再靠固定预等） ----------
   function showTypingNow() {
     $("typingRow").classList.remove("hidden");
@@ -2317,6 +2358,7 @@ const App = (() => {
       syncAppearancePanel();
       $("cfgTheme").value = (() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })();
       $("cfgTestResult").textContent = "";
+      injectStatsClearSetting();
       openPanel($("settingsModal"), $("settingsBtn"));
     };
     $("settingsClose").onclick = () => closePanel($("settingsModal"));
