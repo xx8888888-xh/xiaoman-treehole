@@ -371,9 +371,9 @@
  "coverage": {
   "expected": 112,
   "completed": 112,
-  "resumed": 88,
-  "new": 24,
-  "retried": 24,
+  "resumed": 75,
+  "new": 37,
+  "retried": 37,
   "rate": 1.0
  },
  "case_stats": [
@@ -2499,7 +2499,7 @@
     "name": "pollinations",
     "model": "openai",
     "base": "https://text.pollinations.ai/openai",
-    "calls": 47,
+    "calls": 73,
     "errors": 0,
     "429": 0,
     "first_429_at": "",
@@ -2508,11 +2508,11 @@
    }
   ]
  },
- "backend_calls": 48,
+ "backend_calls": 74,
  "backend_errors": 1,
  "backend_throttled": 0,
  "model": "openrouter-free、pollinations",
  "backend": "rotate",
- "seconds": 1928.2,
- "notes": "后端调用失败 1 次（限流 0 次）；失败用例不计入质量分；断点续跑：历史带入 88 条、本次新跑 24 条（其中重试历史失败 24 条），完成 112/112（100.0%），剩余 0 条"
+ "seconds": 2994.8,
+ "notes": "后端调用失败 1 次（限流 0 次）；失败用例不计入质量分；断点续跑：历史带入 75 条、本次新跑 37 条（其中重试历史失败 37 条），完成 112/112（100.0%），剩余 0 条"
 }
