@@ -93,30 +93,27 @@ class NameExtractionTest(unittest.TestCase):
 
 
 class MemoryAwareCooldownTest(unittest.TestCase):
-    def test_write_turn_catches_then_starts_cooldown(self):
-        """写入轮当场接住新介绍，并从这一轮开始计 3 轮冷却。
+    def test_user_mentions_always_get_heard(self):
+        """W20 口径：用户本轮主动提已存记忆 → 必须当场被听见，不再"隔轮失忆"。
 
-        为什么改掉原断言「写入轮不复述=炫耀记忆」：
-        ① 用户主动介绍"我家猫叫年糕"时，回复一个字不提"年糕"=根本没接住，
-           比复述更像失忆；真正该防的是"连着几轮句句带年糕"，不是第一次回应。
-        ② 离线引擎 mock_engine.js 写入轮就接住（G11-5① 同款断言），服务端跳过
-           造成 HTTP 直连与离线两种表现；G11-2①（介绍轮接住）/②（下一轮不复读）
-           从 r3 起长期红，正是这条单端改动造成的。
-        新断言依据：接住一次后立即进入冷却（同一轮记 hits），随后两轮静默、
-        第三轮冷却满可再提——既"听见"又不连提，比原断言覆盖更严。
+        旧口径是同键 3 轮冷却，结果用户隔一轮再说"年糕拆家了"，助手像没听见；
+        W20 评测把这种"接不住"直接判失败。现在冷却只挡同一轮的重复触发，
+        跨轮不再拉黑；重复感靠模板近轮去重解决（不与上一轮同句/同头）。
         """
         payloads = say("aware-cool", [
-            "我家猫叫年糕",          # 轮0 写入：当场接住并开始冷却
-            "你猜年糕在干嘛",        # 轮1 冷却中：不应再提
-            "年糕今天拆家了",        # 轮2 冷却中：不应再提
-            "年糕是不是欠揍",        # 轮3 冷却满：可再次感知
-            "年糕最近乖不乖",        # 轮4 冷却中：不应再提
+            "我家猫叫年糕",          # 轮0 写入：当场接住
+            "你猜年糕在干嘛",        # 轮1 用户主动提：必须接住
+            "年糕今天拆家了",        # 轮2 用户主动提：必须接住
+            "年糕是不是欠揍",        # 轮3 用户主动提：必须接住
+            "年糕最近乖不乖",        # 轮4 用户主动提：必须接住
         ])
-        self.assertIn("年糕", payloads[0]["reply"], "介绍轮必须当场接住")
-        self.assertNotIn("年糕", payloads[1]["reply"], "冷却期不应连提")
-        self.assertNotIn("年糕", payloads[2]["reply"], "冷却期不应连提")
-        self.assertIn("年糕", payloads[3]["reply"], "冷却结束后应可再提")
-        self.assertNotIn("年糕", payloads[4]["reply"], "再提之后重新进入冷却")
+        for i, p in enumerate(payloads):
+            self.assertIn("年糕", p["reply"], "第 %d 轮用户主动提却没接住：%r"
+                          % (i, p["reply"]))
+        # 接住 ≠ 复读：相邻两轮不得整句相同，也不得同头 4 字
+        for a, b in zip(payloads, payloads[1:]):
+            self.assertNotEqual(a["reply"], b["reply"])
+            self.assertNotEqual(a["reply"][:4], b["reply"][:4])
 
     def test_greet_turn_skips_awareness(self):
         """开场引用不是用户主动提，不应烧冷却（既有守卫保持）。"""
