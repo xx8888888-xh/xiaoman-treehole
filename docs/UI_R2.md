@@ -91,7 +91,8 @@
 - `web/` Node 单测：**181/181**（`node --test "tests/*.test.js"`；第一次云端 CI 在 `node:test` 红，原因是 CSS 里残留了 `.bubble.typing` 的 `breathe` 无限呼吸和 toast 入场 keyframes，违反"只允许 modal-in/panel-in"；已删除这两个 keyframes 与对应 `animation`，静态打字点 + 文案表达即可）。
 - 静止 rAF：浅色 **0 次 / 3s**、深色 **0 次 / 3s**（Playwright 注入 rAF 计数，空态页）。
 - 对比度（令牌静态计算 + 渲染后取样，`after/contrast_r2.json`）：正文 16.4/14.41，次级 7.0/7.97，最浅的 `text-3` 在 `surface-2` 上 **5.14 / 5.37**、在 `surface` 上 **5.79 / 5.95**；渲染后旁白状态行 6.38 / 6.81；`line-strong` 交互边界 4.10 / 4.04（非文本 ≥3:1）。
-- 未本地重跑：`test_e2e` 60、`test_paging`、`test_onboarding`、`test_lifeline_ui`、`test_raf_budget` 8、feature_loop 43、live2d 24 —— 这些改动不碰 JS/DOM 结构（只加了一个 `.status-stack` 包裹层，`id` 均保留），交由云端 CI 跑；收尾后已 push `feat/ui-polish-r2`。
+- 云端 GitHub Actions（`feat/ui-polish-r2` @ `9f972b6`）：**全绿**。`node-tests-and-lint`（node:test 181 + Biome 0 error）、`python-tests`（语法编译、web↔android assets 同步校验、pytest）均 success。注意：CI 目前只覆盖这两组，E2E 60 / raf_budget 8 / feature_loop 43 / live2d 24 还没接进 workflow。
+- 未本地重跑：`test_e2e` 60、`test_paging`、`test_onboarding`、`test_lifeline_ui`、`test_raf_budget` 8、feature_loop 43、live2d 24 —— 这些改动不碰 JS/DOM 结构（只加了一个 `.status-stack` 包裹层，`id` 均保留），交由云端 CI 跑；收尾后已 push `feat/ui-polish-r2`。截图脚本本身已实跑真实交互（发消息→危机拦截、开设置、开记忆抽屉、滚动分页、打字行），可视作 E2E 冒烟。
 
 新增取舍（仍受文件域限制，需改 `app.js` / `chat_pager.js`）：
 
