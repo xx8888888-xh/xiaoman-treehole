@@ -36,6 +36,7 @@ import credentials
 import risk_guard
 import prompt_core
 import provider_policy
+import memory_slots
 from log_redact import mask_sensitive, redact_log_line
 
 # ---------------- 日志配置 ----------------
@@ -935,6 +936,78 @@ class _DiskStore:
 
 
 _DISK = _DiskStore(DATA_DIR) if DATA_DIR else None
+# W11 长期记忆槽：与聊天记录共用同一个 DATA_DIR（/data/sessions），
+# 导出/导入要一起搬走，否则换机后"记得的事"会断。
+_SLOTS = memory_slots.SlotStore(DATA_DIR) if DATA_DIR else None
+
+MAX_SESSION_MESSAGES = 200
+
+
+def _clean_sid(sid):
+    """会话 id 只允许安全字符，避免被拼进磁盘路径（sid→哈希前先校验）。"""
+    sid = str(sid or "").strip()
+    if not sid or len(sid) > 64:
+        return ""
+    return sid if re.fullmatch(r"[A-Za-z0-9._:@-]+", sid) else ""
+
+
+def _int_or(value, default=0):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _norm_history(raw):
+    """只保留可辨识的消息结构；上限 200 条（与持久化窗口一致）。"""
+    out = []
+    for m in (raw or []):
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            continue
+        out.append({
+            "role": m["role"],
+            "content": str(m.get("content") or "")[:4000],
+            "at": _int_or(m.get("at", 0), 0),
+        })
+    return out[-MAX_SESSION_MESSAGES:]
+
+
+_STATE_SCALARS = ("crisis_count", "depress_count", "turns", "recall_count", "mem_aware_ts")
+_STATE_BOOLS = ("depress_esc",)
+_STATE_DICTS = ("memories", "memory_hits", "risk_state")
+_STATE_LISTS = ("told_v", "mem_extracted", "recent_replies")
+
+
+def _norm_state(raw):
+    """导入的会话状态白名单化：类型不对就丢，不让脏数据污染下一轮对话。"""
+    state = {}
+    if not isinstance(raw, dict):
+        return state
+    for key in _STATE_SCALARS:
+        if key in raw:
+            state[key] = max(0, _int_or(raw[key], 0))
+    for key in _STATE_BOOLS:
+        if key in raw:
+            state[key] = bool(raw[key])
+    for key in _STATE_DICTS:
+        val = raw.get(key)
+        if isinstance(val, dict):
+            state[key] = copy.deepcopy(val)
+    for key in _STATE_LISTS:
+        val = raw.get(key)
+        if isinstance(val, list):
+            state[key] = copy.deepcopy(val[:200])
+    if isinstance(raw.get("last_topic"), str):
+        state["last_topic"] = raw["last_topic"][:80]
+    mem = state.get("memories")
+    if isinstance(mem, dict):
+        clean = {}
+        for k, v in list(mem.items())[:200]:
+            k, v = str(k)[:20], str(v)[:120]
+            if k and v:
+                clean[k] = v
+        state["memories"] = clean
+    return state
 
 
 # ---------------- 会话状态（支持 session_id 隔离） ----------------
@@ -1045,6 +1118,39 @@ class _State:
         sess["recall_count"] = sess.get("recall_count", 0) + 1
         return sess["recall_count"]
 
+    def restore(self, session_id, state):
+        """备份还原：用白名单状态整体替换内存会话（不合并，避免新旧值互相污染）。"""
+        with self._lock:
+            sess = {
+                "last_topic": None, "memories": {}, "crisis_count": 0, "turns": 0,
+                "risk_state": None, "updated": time.time(),
+            }
+            sess.update(copy.deepcopy(state or {}))
+            sess["updated"] = time.time()
+            self._sessions[session_id] = sess
+            self._loaded.add(session_id)
+            return sess
+
+    def drop_memories(self, session_id, fragment, keep_fragment=None):
+        """删除消息时同步清掉"由这条消息产生"的记忆（值出现在被删原文里）。
+        keep_fragment 用于编辑场景：新文案里仍然保留的记忆不删。"""
+        frag = str(fragment or "").strip()
+        keep = str(keep_fragment or "")
+        if not frag:
+            return []
+        sess = self._get_session(session_id)
+        mem = sess.get("memories")
+        if not isinstance(mem, dict):
+            return []
+        dropped = []
+        for key, val in list(mem.items()):
+            val = str(val or "")
+            if not val or val not in frag or val in keep:
+                continue
+            mem.pop(key, None)
+            dropped.append(key)
+        return dropped
+
 
 _STATE = _State()
 
@@ -1063,6 +1169,150 @@ def load_history(session_id):
     if not _DISK or not session_id:
         return []
     return (_DISK.load(session_id) or {}).get("messages", [])
+
+
+# ---------------- 备份导出 / 还原（会话状态 + 历史 + 记忆槽） ----------------
+def _mutate_history(session_id, mutate):
+    """对落盘历史做一次原地修改；mutate(msgs) -> (new_msgs, changed_count)"""
+    if not _DISK or not session_id:
+        return 0
+    data = _DISK.load(session_id) or {}
+    msgs = data.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return 0
+    new_msgs, changed = mutate(msgs)
+    if changed:
+        data["messages"] = new_msgs
+        _DISK.save(session_id, data)
+    return changed
+
+
+def _save_state_only(session_id):
+    """只回写会话状态，保留磁盘上已有历史（避免用内存空历史覆盖）"""
+    if not _DISK or not session_id:
+        return False
+    data = _DISK.load(session_id) or {}
+    data.update(_STATE.snapshot(session_id))
+    _DISK.save(session_id, data)
+    return True
+
+
+def export_session(session_id):
+    """导出单个会话：内存状态 + 落盘历史 + 记忆槽。sid 非法返回 None。"""
+    sid = _clean_sid(session_id)
+    if not sid:
+        return None
+    return {
+        "session_id": sid,
+        "state": _STATE.snapshot(sid),
+        "messages": load_history(sid),
+        "slots": _SLOTS.export(sid) if _SLOTS else {"version": 1, "slots": []},
+        "persist": bool(_DISK),
+    }
+
+
+def import_session(session_id, payload):
+    """还原单个会话：白名单校验后整体覆盖状态、历史与记忆槽。"""
+    sid = _clean_sid(session_id)
+    if not sid:
+        return {"ok": False, "error": "session_id 不合法"}
+    payload = payload if isinstance(payload, dict) else {}
+    state = _norm_state(payload.get("state"))
+    messages = _norm_history(payload.get("messages"))
+    _STATE.restore(sid, state)
+    slots_n = 0
+    if _SLOTS:
+        slots_n = _SLOTS.import_(sid, payload.get("slots") or [])
+    if _DISK:
+        data = _STATE.snapshot(sid)
+        data["messages"] = messages
+        _DISK.save(sid, data)
+    return {
+        "ok": True,
+        "session_id": sid,
+        "messages": len(messages),
+        "memories": len(state.get("memories") or {}),
+        "slots": slots_n,
+        "persist": bool(_DISK),
+    }
+
+
+def delete_message(session_id, message):
+    """删除单条消息：落盘历史 → 会话记忆 → 记忆槽，三处一起清，避免幽灵引用。"""
+    sid = _clean_sid(session_id)
+    if not sid or not isinstance(message, dict):
+        return {"ok": False, "error": "参数不合法"}
+    role = message.get("role")
+    content = str(message.get("content") or "")
+    at = _int_or(message.get("at"), 0)
+
+    def mutate(msgs):
+        for i, m in enumerate(msgs):
+            if not isinstance(m, dict):
+                continue
+            if role and m.get("role") != role:
+                continue
+            # 落盘历史由对话请求写入，不总是带 at：只有两边都有时间戳时才拿来比对，
+            # 否则退回"角色 + 原文"匹配，避免删不掉旧记录留下幽灵节点
+            stored_at = _int_or(m.get("at"), 0)
+            if at and stored_at and stored_at != at:
+                continue
+            if content and str(m.get("content") or "") != content:
+                continue
+            if not content and not at:
+                continue
+            return msgs[:i] + msgs[i + 1:], 1
+        return msgs, 0
+
+    removed = _mutate_history(sid, mutate)
+    memories = _STATE.drop_memories(sid, content)
+    slots = []
+    if _SLOTS and content:
+        slots = [s["id"] for s in _SLOTS.all(sid)
+                 if str(s.get("value") or "") and s["value"] in content]
+        if slots:
+            _SLOTS.delete(sid, ids=slots)
+    if memories:
+        _save_state_only(sid)
+    return {"ok": True, "removed": removed, "memories": memories, "slots": slots}
+
+
+def update_message(session_id, message, new_content):
+    """编辑单条消息：落盘历史就地改文案，并清掉只属于旧文案的记忆/记忆槽。"""
+    sid = _clean_sid(session_id)
+    if not sid or not isinstance(message, dict):
+        return {"ok": False, "error": "参数不合法"}
+    role = message.get("role")
+    old = str(message.get("content") or "")
+    at = _int_or(message.get("at"), 0)
+    new = str(new_content or "")[:4000]
+
+    def mutate(msgs):
+        for i, m in enumerate(msgs):
+            if not isinstance(m, dict):
+                continue
+            if role and m.get("role") != role:
+                continue
+            stored_at = _int_or(m.get("at"), 0)
+            if at and stored_at and stored_at != at:
+                continue
+            if old and str(m.get("content") or "") != old:
+                continue
+            msgs[i] = dict(m, content=new)
+            return msgs, 1
+        return msgs, 0
+
+    changed = _mutate_history(sid, mutate)
+    memories = _STATE.drop_memories(sid, old, keep_fragment=new)
+    slots = []
+    if _SLOTS and old:
+        slots = [s["id"] for s in _SLOTS.all(sid)
+                 if str(s.get("value") or "") and s["value"] in old and s["value"] not in new]
+        if slots:
+            _SLOTS.delete(sid, ids=slots)
+    if memories:
+        _save_state_only(sid)
+    return {"ok": True, "updated": changed, "memories": memories, "slots": slots}
 
 
 def guard_result(result, user_text):
@@ -1842,10 +2092,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         start = time.time()
         path = self.path.rstrip("/")
-        if path not in ("/v1/chat/completions", "/api/chat", "/api/chat/stream"):
+        if path not in ("/v1/chat/completions", "/api/chat", "/api/chat/stream",
+                        "/api/session/import", "/api/message/delete", "/api/message/update"):
             return self._error(404, "not found")
         try:
             data = self._read_body()
+            if path in ("/api/session/import", "/api/message/delete", "/api/message/update"):
+                return self._session_op(path, data)
             messages = data.get("messages", [])
             # 从 Header 或 body 获取 session_id（可选，向后兼容）
             session_id = data.get("session_id") or self.headers.get("X-Session-ID")
@@ -1911,9 +2164,33 @@ class Handler(BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             sid = (qs.get("session_id") or [None])[0]
             self._json({"messages": load_history(sid), "persist": bool(DATA_DIR)})
+        elif path == "/api/session/export":
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = (qs.get("session_id") or [None])[0]
+            payload = export_session(sid)
+            if payload is None:
+                self._error(400, "session_id 不合法")
+            else:
+                self._json(payload)
         else:
             self._error(404, "not found")
         logger.debug("GET %s %dms", self.path, int((time.time() - start) * 1000))
+
+    def _session_op(self, path, data):
+        """备份还原 / 单条消息删改：校验 sid 后转发到会话层。"""
+        if not isinstance(data, dict):
+            return self._error(400, "invalid body")
+        sid = data.get("session_id") or self.headers.get("X-Session-ID")
+        if path == "/api/session/import":
+            res = import_session(sid, data)
+        elif path == "/api/message/delete":
+            res = delete_message(sid, data.get("message") or data)
+        else:
+            msg = data.get("message") or data
+            res = update_message(sid, msg, data.get("content", ""))
+        if not res.get("ok"):
+            return self._error(400, res.get("error") or "invalid request")
+        self._json(res)
 
     @staticmethod
     def _models_payload():
