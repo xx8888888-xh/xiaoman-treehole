@@ -1,0 +1,19 @@
+# CI 专用 compose 覆盖层（只被 .github/workflows/e2e.yml 使用）
+#
+# 背景：docker-compose.yml 的 build.network=host 是为本地受限网络环境的兜底；
+# GitHub Actions 的新版 BuildKit 把 network.host 视为特权，直接报
+#   additional privileges requested: pass "--allow=network.host" to grant requested privileges
+# 本项目 Dockerfile 只做 COPY，无 RUN 联网步骤，因此 CI 里用默认桥接网络即可。
+# 用法：COMPOSE_FILE=docker-compose.yml:.github/ci/docker-compose.ci.yml docker compose up -d --build
+name: treehole
+
+services:
+  web:
+    build:
+      network: default
+  mock:
+    build:
+      network: default
+  tts:
+    build:
+      network: default

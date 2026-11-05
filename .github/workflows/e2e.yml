@@ -40,6 +40,8 @@ env:
   XIAOMAN_SHOTS_DIR: artifacts/shots
   RAF_SECONDS: ${{ inputs.raf_seconds || '60' }}
   PYTHONUNBUFFERED: "1"
+  # 覆盖 build.network=host：新版 BuildKit 需要 network.host 特权，CI 用默认网络即可
+  COMPOSE_FILE: docker-compose.yml:.github/ci/docker-compose.ci.yml
 
 jobs:
   browser-e2e:
