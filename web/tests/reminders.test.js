@@ -112,3 +112,32 @@ test("时间解析与展示：8点/今晚/明天等常见说法仍可用", () =>
   assert.match(label, /今天|明天|\d+月\d+日/);
   assert.match(Reminders.fmtFull(t.getTime()), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
 });
+
+test("备份合并：按 id/文案+时刻去重，保留更新的那份；空库完整还原", () => {
+  store.clear();
+  const now = Date.now();
+  Reminders.add("喝水", new Date(now + 60e3));
+  const one = Reminders.all()[0];
+  const backup = JSON.parse(JSON.stringify(Reminders.all()));
+  Reminders.markDone([one.id]);
+  Reminders.merge(backup);
+  assert.equal(Reminders.all().length, 1, "同一提醒不能因为导入变两条");
+  Reminders.clearDone();
+  const r = Reminders.merge(backup);
+  assert.equal(r.added, 1, "清空后再导入要能还原");
+  assert.equal(Reminders.all()[0].text, "喝水");
+  assert.equal(Reminders.all()[0].at, one.at);
+});
+
+test("备份合并：非法提醒（无文案/坏时间）被跳过", () => {
+  store.clear();
+  const r = Reminders.merge([
+    { text: "", at: 100 },
+    { text: "没有时间", at: "x" },
+    { text: "正常", at: 200 },
+    "not-an-object",
+  ]);
+  assert.equal(r.added, 1);
+  assert.equal(r.total, 1);
+  assert.equal(Reminders.all()[0].text, "正常");
+});

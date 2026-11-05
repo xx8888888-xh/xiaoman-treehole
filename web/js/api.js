@@ -418,7 +418,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     const t0 = nowMs();
     const out = streamOut("offline", "local", "offline");
     notifyMode("offline");
-    const r = await MockEngine.reply(history);
+    const r = await MockEngine.reply(history, sessionId());
     const text = String((r && r.reply) || "");
     await emitLocalReply(text, handlers, "offline");
     out.ttfb = out.firstToken = nowMs() - t0;
@@ -496,7 +496,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       const providerReply = extractReplyPrefix(donePayload.content || "") || "";
       if (!acc && !providerReply) {
         // 空回复 → 切回本地离线引擎，mode=mock，UI 明确标注"离线示例模式"
-        const local = await MockEngine.reply(history);
+        const local = await MockEngine.reply(history, sessionId());
         const text = String((local && local.reply) || FALLBACK_REPLY);
         await emitLocalReply(text, handlers, "mock");
         out.mode = "mock";
@@ -608,7 +608,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     out.tokens = out.tokens || raw.length;
     if (!emitted && !raw) {
       // 空回复同样不能标成真模型：切本地引擎 + mode=mock 明确告知
-      const local = await MockEngine.reply(history);
+      const local = await MockEngine.reply(history, sessionId());
       const text = String((local && local.reply) || FALLBACK_REPLY);
       await emitLocalReply(text, handlers, "mock");
       out.mode = "mock";
@@ -762,7 +762,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   async function chatMock(history) {
     // 安卓 WebView 里没有本地 8902 服务：直接走同进程离线规则引擎
     // （否则每次都要等 15s 超时才发现不可达）
-    if (nativeBridge()) return MockEngine.reply(history);
+    if (nativeBridge()) return MockEngine.reply(history, sessionId());
     const cfg = loadCfg();
     const base = mockBase(cfg);
     let res;
@@ -981,7 +981,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     }
     markDegraded("offline");
     notifyMode("offline");
-    return MockEngine.reply(history);
+    return MockEngine.reply(history, sessionId());
   }
 
   async function chat(history, opts) {
@@ -989,12 +989,12 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     // 降级链：自填 key 直连 / 服务端代理 / 安卓原生（需授权）→ mock → 离线引擎
     if (cfg.mode === "offline") {
       notifyMode("offline");
-      return MockEngine.reply(history);
+      return MockEngine.reply(history, sessionId());
     }
     if (cfg.mode === "mock") {
       if (nativeBridge()) {
         notifyMode("offline");
-        return MockEngine.reply(history);
+        return MockEngine.reply(history, sessionId());
       }
       return fallbackMock(history);
     }
@@ -1069,10 +1069,58 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     }
   }
 
+  /** 备份用：取服务端会话（状态 + 落盘历史 + 记忆槽） */
+  async function sessionExport(sid) {
+    const cfg = loadCfg();
+    const url = `${mockBase(cfg)}/api/session/export?session_id=${encodeURIComponent(sid || sessionId())}`;
+    const res = await fetchWithTimeout(url, {}, 8000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }
+
+  /** 备份还原：整体写回服务端会话（状态 + 历史 + 记忆槽） */
+  async function sessionImport(sid, payload) {
+    const cfg = loadCfg();
+    const res = await fetchWithTimeout(`${mockBase(cfg)}/api/session/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.assign({ session_id: sid || sessionId() }, payload || {})),
+    }, 8000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }
+
+  /** 单条消息删除：同步服务端历史与记忆，避免"界面删了、服务端还留着" */
+  async function messageDelete(sid, message) {
+    const cfg = loadCfg();
+    const res = await fetchWithTimeout(`${mockBase(cfg)}/api/message/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sid || sessionId(), message: message || {} }),
+    }, 6000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }
+
+  /** 单条消息编辑：服务端落盘历史就地改文案 */
+  async function messageUpdate(sid, message, content) {
+    const cfg = loadCfg();
+    const res = await fetchWithTimeout(`${mockBase(cfg)}/api/message/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sid || sessionId(), message: message || {}, content: String(content || ""),
+      }),
+    }, 6000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }
+
   return {
     chat, chatStream, loadCfg, saveCfg, buildSystemPrompt, SYSTEM_PROMPT, HEARTBEAT_PROMPT,
     REALISM_RULES, MEMORY_RULES, PERSONA_RULES, BASELINE, OUTPUT_PROTOCOL,
     sessionId, bootstrap, serverConfig, testConnection,
+    sessionExport, sessionImport, messageDelete, messageUpdate,
     getApiKey, setApiKey, parseStructured, effectiveMode, routePlan,
     // 测试与观测用（不参与业务逻辑）
     parseSseBlock, createSseDecoder, extractReplyPrefix,

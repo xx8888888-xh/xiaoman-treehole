@@ -180,6 +180,22 @@ class FakeStoreHandle {
     if (!keyPath) throw new Error("NotFoundError: index " + name);
     return new FakeIndex(this.store, keyPath, this.tx);
   }
+
+  get(key) {
+    return this.tx._request(() => this.store.records.get(key));
+  }
+
+  put(value) {
+    const s = this.store;
+    const key = s.keyPath ? value[s.keyPath] : undefined;
+    s.records.set(key, value);
+    return this.tx._request(() => key);
+  }
+
+  delete(key) {
+    const existed = this.store.records.delete(key);
+    return this.tx._request(() => existed);
+  }
 }
 
 class FakeObjectStoreNames {

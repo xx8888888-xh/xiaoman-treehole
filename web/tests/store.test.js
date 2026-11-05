@@ -137,3 +137,25 @@ test("prune 上限 300：只删最旧的，游标尾部仍可翻到", async () =
   assert.equal(msgs[29].content, "m319");
   assert.equal(msgs[0].content, "m290");
 });
+
+test("单条删除/编辑：remove / update / removeMatch 只动目标那条", async () => {
+  const sid = nextSid();
+  await seed(sid, 4);
+  const before = await Store.list(sid, 30);
+  const target = before[2];
+  const total = await Store.count(sid);
+  assert.equal(await Store.remove(target.id), true);
+  assert.equal(await Store.count(sid), total - 1);
+  const rest = await Store.list(sid, 30);
+  assert.equal(rest.length, 3);
+  assert.ok(!rest.some(m => m.id === target.id), "被删的不能留在库里");
+  assert.equal(await Store.remove(target.id), false, "重复删除返回 false，不误删别的");
+
+  assert.equal(await Store.update(rest[0].id, "改过的"), true);
+  const after = await Store.list(sid, 30);
+  assert.equal(after[0].content, "改过的");
+  assert.equal(after[0].at, rest[0].at, "编辑保留时间与游标键");
+
+  assert.equal(await Store.removeMatch(sid, rest[1].at, rest[1].content), true);
+  assert.equal(await Store.count(sid), 2);
+});
