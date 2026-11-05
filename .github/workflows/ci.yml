@@ -89,3 +89,79 @@ jobs:
             echo "- 运行命令：\`python -m pytest server/tests -q\`"
             echo "- 发布物：\`python scripts/verify_assets.py\`（web ↔ assets/www）"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  python-scripts:
+    name: python-scripts (${{ matrix.script }})
+    # 这两个脚本是纯 Python（G3 用 node 直调 mock_engine.js），不需要浏览器；
+    # 但必须有一个 mock 对话服务。这里直接 `python server/mock_api.py` 起进程，
+    # 不引入 Docker，保持 ci.yml 的快闸门属性。
+    # 基线（main，2026-11-05）：test_mock_api 12/12；test_memory_recall 152/152。
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        script: [test_mock_api, test_memory_recall]
+    env:
+      AI_MODE: mock
+      XIAOMAN_HOST: 127.0.0.1
+      XIAOMAN_MOCK_PORT: "8902"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node (test_memory_recall G3 离线引擎)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Start mock service (no Docker)
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          nohup python server/mock_api.py > artifacts/mock.log 2>&1 &
+          echo $! > /tmp/xiaoman_mock.pid
+          for i in $(seq 1 30); do
+            if curl -sf "http://${XIAOMAN_HOST}:${XIAOMAN_MOCK_PORT}/health" >/dev/null; then
+              echo "mock ready on ${XIAOMAN_HOST}:${XIAOMAN_MOCK_PORT}"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "mock 启动超时"
+          cat artifacts/mock.log
+          exit 1
+
+      - name: Run ${{ matrix.script }}
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          python "scripts/${{ matrix.script }}.py" 2>&1 | tee "artifacts/${{ matrix.script }}.log"
+
+      - name: Stop mock service
+        if: always()
+        run: |
+          if [ -f /tmp/xiaoman_mock.pid ]; then
+            kill "$(cat /tmp/xiaoman_mock.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-${{ matrix.script }}-log
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### ci · ${{ matrix.script }}"
+            grep -hE "\[SUMMARY\]|[0-9]+/[0-9]+ passed" "artifacts/${{ matrix.script }}.log" 2>/dev/null || echo "(未运行/无汇总)"
+          } >> "$GITHUB_STEP_SUMMARY"
