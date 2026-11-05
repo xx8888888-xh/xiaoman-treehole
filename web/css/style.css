@@ -428,6 +428,29 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
 #typingRow { padding-left: 40px; }
 .msg-row.me { justify-content: flex-end; }
 
+/* 时间分隔：两侧发丝线 + 一行小字。与旁白同一字号档（--text-caption 12.5px），
+   用第三级文字色（明暗两套都 ≥4.5:1），不抢气泡。只在间隔 ≥5 分钟或跨天时出现；
+   窗口滑动/翻页按 (上一条时间, 本条时间) 重算，不会重复也不会错位。 */
+.msg-unit { display: block; }
+.msg-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+  color: var(--text-3);
+  font-size: var(--text-caption);
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.msg-divider::before,
+.msg-divider::after {
+  content: "";
+  flex: 1 1 0;
+  height: 1px;
+  background: var(--line-soft);
+}
+
 .avatar-mini {
   flex-shrink: 0;
   width: 30px;

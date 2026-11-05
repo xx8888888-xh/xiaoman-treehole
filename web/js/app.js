@@ -362,7 +362,8 @@ const App = (() => {
   /** 统一写历史：内存滑动窗口 + IndexedDB 持久化（刷新/重启不丢）
    *  rec：可选的 ChatPager 记录句柄；append 完成后回填 id，供历史分页游标使用 */
   function pushHistory(role, content, at, rec) {
-    const ts = at || Date.now();
+    // 复用记录上已有的时间戳：内存历史 / IndexedDB / 时间分隔三处必须一致
+    const ts = at || (rec && rec.at) || Date.now();
     const entry = { role, content, at: ts };
     history.push(entry);
     if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -658,7 +659,7 @@ const App = (() => {
   // ---------- 渲染 ----------
   // 长会话分页交给 ChatPager（chat_pager.js）：DOM 只保留当前页 + 缓冲，
   // 这里只负责「一条记录 → 一个节点」的构造，重建时可重放（含语音标记）。
-  function buildRow(rec, i, prev) {
+  function buildRow(rec, i, prev, prevAt) {
     const text = rec.text;
     const who = rec.who;
     const opts = rec.opts || {};
@@ -666,6 +667,11 @@ const App = (() => {
     const sameGroup = !!(prev && prev.who === who
       && !(prev.opts && (prev.opts.tip || prev.opts.crisis))
       && !(opts.tip || opts.crisis));
+    // 时间分隔：按 (上一条时间, 本条时间) 现算，窗口重建也不会重复或错位。
+    // 系统旁白（tip）不插分隔，避免"认识30天"这类提示顶着日期条。
+    const stamp = prevAt == null ? (prev && prev.at) : prevAt;
+    const timeLabel = (!opts.tip && window.XMTimeDivider)
+      ? XMTimeDivider.label(stamp, rec.at) : null;
     const row = document.createElement("div");
     row.className = `msg-row ${who}${sameGroup ? " same-group" : ""}`;
     if (opts.crisis) {
@@ -712,7 +718,17 @@ const App = (() => {
       row.appendChild(bubble);
     }
     attachMsgMenu(row, rec);
-    return row;
+    if (!timeLabel) return row;
+    // 有分隔时用一层薄包裹：分隔条 + 原来的行；窗口重建/翻页按记录重算，天然幂等
+    const unit = document.createElement("div");
+    unit.className = "msg-unit";
+    const div = document.createElement("div");
+    div.className = "msg-divider";
+    div.setAttribute("role", "separator");
+    div.textContent = timeLabel;
+    unit.appendChild(div);
+    unit.appendChild(row);
+    return unit;
   }
 
   function addMsg(text, who, opts = {}, meta) {
@@ -720,7 +736,8 @@ const App = (() => {
     try { console.log("[probe] msg " + who + " len=" + String(text == null ? "" : text).length); } catch (e) {}
     const rec = { text, who, opts };
     if (meta && meta.id != null) rec.id = meta.id;
-    if (meta && meta.at != null) rec.at = meta.at;
+    // 时间戳先落到记录上：时间分隔在该行首次渲染时就要算得出来（pushHistory 随后复用同一个值）
+    rec.at = (meta && meta.at != null) ? meta.at : Date.now();
     return ChatPager.push(rec);
   }
 
@@ -2192,6 +2209,19 @@ const App = (() => {
         build: buildRow,
         loader: loadOlderPage   // IndexedDB：首屏 30 条 → 上翻可回看全部 300 条
       });
+      // 状态区（错误卡/旁白行）出现或收起会改变可视高度：只在"跟随最新"时贴底，
+      // 用户主动上滑后 pinned=false，不会被强行拉回。
+      const stack = $("statusStack");
+      if (stack && typeof ResizeObserver === "function") {
+        let lastH = -1;
+        const ro = new ResizeObserver(() => {
+          const h = stack.getBoundingClientRect ? stack.getBoundingClientRect().height : 0;
+          if (Math.abs(h - lastH) < 1) return;
+          lastH = h;
+          if (typeof ChatPager.followBottom === "function") ChatPager.followBottom();
+        });
+        ro.observe(stack);
+      }
     } catch (e) { console.warn("[probe] PAGER_FAIL", e.message); }
 
     // 2) 服务端默认配置改为非阻塞：慢网/离线时不再拖住首屏
