@@ -37,3 +37,16 @@
 - 不启动 `server/tts_server.py` / `edge_tts`，不跑会发声的用例；TTS 只校验 HTTP 与文件生成，或标 `SKIP: muted by user`
 - 不在宿主侧起 8901/8902/8903；端到端走 Docker（容器未起时先停下等用户）
 - 浏览器一律 headless，且 `--mute-audio`
+
+## w18 · feat/ui-r3（视觉高级感第三轮）
+
+| 项 | 内容 |
+|---|---|
+| worktree | `treehole-w18` |
+| 分支 | `feat/ui-r3`（基线 `r5-20261105` / `a283342`） |
+| 可改 | `web/css/**`、`web/index.html`、`web/js/icons.js`（新建）、`web/tests/appearance.test.js`、`docs/UI_R3.md`、`.github/workflows/ui-shots.yml`（新建，唯一允许新增的 workflow） |
+| 禁止 | `web/js/app.js`、`web/js/stage.js`、`web/js/pet.js`、`web/js/chat_pager.js`、`web/js/mock_engine.js`、`server/**`、`android/**`、`web/assets/**`、`package.json`、`ci.yml`、其它 workflow |
+
+- 目标：字号/间距令牌化（4–6 档）、单一主焦点、微交互 80–120ms 按压、统一 24px/1.5px 描边图标、双主题对比度脚本量化、空态/骨架静态占位。
+- 本地只跑轻量校验：`node --test "tests/*.test.js"`（串行，基线 222 不降）、`node --test tests/appearance.test.js`、令牌/对比度扫描（断言在 `appearance.test.js` 内）。
+- **不在本地起 headless 浏览器 / Playwright / AVD / Gradle**；截图一律走 `ui-shots.yml` 云端 artifact。
