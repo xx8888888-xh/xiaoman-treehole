@@ -1,7 +1,7 @@
 name: perf
 
 # 第六轮性能收口（w21）：只采样、不设门槛。改前/改后同一脚本同一 runner 出硬数字。
-# 触发：feat/perf-r3 push（改前基线 commit 与改后 commit 各跑一次）/ 手动。
+# 触发：仅手动（原 `push: feat/perf-r3` 已收窄——分支已合并，日常 push 不再每次烧 35min 采样）。
 # 服务：本 worktree 的 web/ 静态站（8911）+ server/mock_api.py（8912，AI_MODE=mock）；
 #       不起 TTS（provider=none，全程静音），不复用 8901-8903。
 # 浏览器：Playwright Chromium headless + --mute-audio；本地不跑（browser_guard 硬闸门）。
@@ -10,8 +10,6 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches: [feat/perf-r3]
   workflow_dispatch:
     inputs:
       only:
@@ -38,7 +36,6 @@ env:
   XIAOMAN_MOCK_PORT: "8912"
   XIAOMAN_TTS_PROVIDER: none
   PYTHONUNBUFFERED: "1"
-  PLAYWRIGHT_VERSION: "1.63.0"
 
 jobs:
   perf:
@@ -49,6 +46,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Resolve short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Restore baseline app.js
         if: inputs.baseline == '1'
@@ -62,19 +63,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ env.PLAYWRIGHT_VERSION }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Install Playwright
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "playwright==${PLAYWRIGHT_VERSION}"
-          python -m playwright install --with-deps chromium
+      # 共享复合动作：版本只在 .github/actions/setup-playwright 里定义
+      - uses: ./.github/actions/setup-playwright
 
       - name: Start web + mock
         run: |
@@ -181,7 +171,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perf-r3-${{ github.run_number }}
+          name: perf-r3-${{ steps.sha.outputs.short }}
           path: artifacts/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7

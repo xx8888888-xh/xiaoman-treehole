@@ -13,6 +13,8 @@
 | `gates.yml` | 仅 `workflow_dispatch` | 并行复用 ci / e2e / android 三条（一键全套，手动用；**不再挂 cron**，定时统一由 `nightly.yml` 负责，避免重复计费） | 与最慢的 e2e 接近 | 视子流程 |
 | `nightly.yml` | `schedule`（只在默认分支生效）+ 手动 | 每日 18:00 UTC（北京时间次日 02:00，周一–周六）跑 `ci.yml` 快闸门；每周日同一时刻跑全套慢闸门（ci + e2e 核心四套 + 9 套 ui 矩阵 + android APK） | 每日 ~0.8 min；每周日 ~22 min | 视子流程 |
 | `android-ci.yml`（legacy） | 仅 `workflow_dispatch` | 旧的内置模拟器 smoke（AVD + 悬浮窗证据） | 8–12 min | 是（KVM） |
+| `ui-shots.yml` | 仅 `workflow_dispatch`（原 `push: feat/ui-r3` 已收窄） | UI 第三轮云端渲染截图（双主题/桌面/大字号共 8 张），离线 `http.server 8911`，不回放 TTS | 2–3 min | 是（Chromium） |
+| `perf.yml` | 仅 `workflow_dispatch`（原 `push: feat/perf-r3` 已收窄） | 性能采样（load / stream / micro / memory 四段），本地 web 8911 + mock 8912，`AI_MODE=mock`；只出数字不设门槛 | 6–10 min | 是（Chromium） |
 
 旧的 `quick.yml`（ci.yml 已覆盖）与 `healthcheck.yml`（一次性探针）已删除。
 
@@ -110,7 +112,7 @@ gh run watch <run-id>
 |---|---|---|---|
 | npm（`web/package-lock.json`） | `ci.yml` | 内置 `setup-node cache: npm` | 省 20–40s |
 | Gradle（`~/.gradle/caches`） | `android.yml` | 内置 `setup-java cache: gradle` | 二次构建约省 30s |
-| Playwright Chromium（`~/.cache/ms-playwright`） | `e2e.yml` | `${{ runner.os }}-playwright-${PLAYWRIGHT_VERSION}` | 省 30–60s（压缩包 ~170MB） |
+| Playwright Chromium（`~/.cache/ms-playwright`） | `e2e.yml` / `ui-shots.yml` / `perf.yml` / `android-ci.yml`（全部经 `./.github/actions/setup-playwright`） | `${{ runner.os }}-playwright-<version>`（version 只在复合动作里定义） | 省 30–60s（压缩包 ~170MB） |
 | pip | 未做 | 无 `requirements.txt` 作为 key，收益小（playwright wheel ~40MB，数秒） | — |
 
 **并行度**
@@ -179,8 +181,8 @@ gh run watch <run-id>
 
 | 检查项 | 要求 |
 |---|---|
-| 触发 | `workflow_dispatch` 必备；`push` 只精确到需要的分支或 tag（`perf.yml` 只吃 `feat/perf-r3`，`android-release.yml` 只吃 `v*` tag）；**feature 分支默认不接 cron** |
-| Playwright | 必须 `uses: ./.github/actions/setup-playwright`，禁止在 job 里手写 `pip install playwright` + `playwright install`；缓存 key 统一 `${runner.os}-playwright-<version>` |
+| 触发 | `workflow_dispatch` 必备；`push` 只精确到需要的分支或 tag（`android-release.yml` 只吃 `v*` tag；`perf.yml` / `ui-shots.yml` 已收窄为仅手动）；**feature 分支默认不接 cron** |
+| Playwright | 必须 `uses: ./.github/actions/setup-playwright`，禁止在 job 里手写 `pip install playwright` + `playwright install`，也不得再定义 `PLAYWRIGHT_VERSION`；**版本号只在 `action.yml` 的 `default` 一处**（当前 1.63.0），缓存 key 统一 `${runner.os}-playwright-<version>` |
 | artifact 命名 | `<用途>-<commit 短 sha>`（如 `ui-shots-76b9912`、`perf-r3-f89d62c`）；**不要用 `run_number`**（跨分支不可读） |
 | artifact 保留 | 截图/JSON 证据 **7 天**；唯一例外是签名 APK（30 天，发布要留档），需在文件里写明理由 |
 | artifact 内容 | 截图 + 关键 JSON（`<script>.json` 的 checks/ok/明细），失败时 `::error::` 打印具体断言而不是"step failed" |
@@ -192,5 +194,6 @@ gh run watch <run-id>
 | workflow | 位置 | 现状 | 结论 |
 |---|---|---|---|
 | `android-release.yml` | 已在我方分支并跑绿（42023885689） | 触发 `dispatch` + `v*`；artifact `xiaoman-treehole-release-0.6.0-<sha>`，30 天；无 Playwright | ✅ 合规（保留 30 天是发布留档例外） |
-| `perf.yml` | `feat/perf-r3`，未合并 | 触发 `push: feat/perf-r3`；artifact `perf-r3-${run_number}`（无 sha、14 天）；手写装 Playwright（未复用复合动作）；`timeout 35min` | ⚠️ 待改：artifact 名改 `perf-r3-<sha>`、7 天；把安装段换成 `./.github/actions/setup-playwright`；合并前把 `push` 触发收窄/改手动 |
-| `ui-shots.yml` | `feat/ui-r3`，未合并 | 触发 `push: feat/ui-r3`（`paths: web/**`）+ 手动；artifact 名 `ui-shots`（**无 sha**）、保留 **14 天**；Playwright 版本 **1.47.0**（与 `e2e.yml` 的 1.63.0 不一致）、手写 `pip install` + `install --with-deps`（未复用复合动作、无缓存）；内含 `XIAOMAN_ALLOW_LOCAL_BROWSER=1` + 自建 `http.server 8911`（离线模式，不依赖 compose） | ⚠️ 待改：artifact 改 `ui-shots-<sha>`、7 天；安装段换 `./.github/actions/setup-playwright`（版本统一 1.63.0，省 30–60s/job）；合并前把 `push` 收窄（保留 `paths` 过滤，避免每改一行 web 就烧一次） |
+| `perf.yml` | 已合并进 main | 触发仅 `dispatch`（原 `push: feat/perf-r3` 已收窄）；artifact `perf-r3-<sha>`、7 天；Playwright 走 `./.github/actions/setup-playwright`（统一 1.63.0） | ✅ 合规 |
+| `ui-shots.yml` | 已合并进 main | 触发仅 `dispatch`（原 `push: feat/ui-r3` 已收窄）；artifact `ui-shots-<sha>`、7 天；Playwright 走 `./.github/actions/setup-playwright`（统一 1.63.0，省 30–60s/job） | ✅ 合规 |
+| `android-ci.yml` | 已合并进 main | `web-tests` job 的 Playwright 安装段也换成同一复合动作，版本单源 | ✅ 合规 |

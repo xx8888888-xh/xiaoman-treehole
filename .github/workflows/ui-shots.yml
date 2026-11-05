@@ -4,11 +4,9 @@ name: ui-shots
 # 本地一律不起 headless 浏览器（见 AGENT_SCOPE.md / w18）。
 on:
   workflow_dispatch:
-  push:
-    branches: [feat/ui-r3]
-    paths:
-      - "web/**"
-      - ".github/workflows/ui-shots.yml"
+
+# 原 `push: feat/ui-r3`（paths web/**）已收窄为仅手动：分支合并进 main 后，
+# 随手改一行 web 就烧一整套 Chromium 渲染不再划算（docs/ci-workflows.md §9 契约）。
 
 permissions:
   contents: read
@@ -27,15 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install Playwright (chromium only)
-        run: |
-          python -m pip install --upgrade pip
-          pip install "playwright==1.47.0"
-          python -m playwright install --with-deps chromium
+      # 共享复合动作：版本只在 .github/actions/setup-playwright 里定义
+      - uses: ./.github/actions/setup-playwright
 
       - name: Serve web/ statically
         run: |
@@ -178,6 +177,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-shots
+          name: ui-shots-${{ steps.sha.outputs.short }}
           path: shots/
-          retention-days: 14
+          retention-days: 7

@@ -272,11 +272,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install test deps (playwright)
-        run: |
-          python -m pip install --upgrade pip
-          pip install playwright==1.63.0
-          python -m playwright install --with-deps chromium
+      # 共享复合动作：版本只在 .github/actions/setup-playwright 里定义
+      - uses: ./.github/actions/setup-playwright
 
       - name: Install ffmpeg (TTS verify dependency)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
