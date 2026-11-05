@@ -8,8 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ---- 版本统一定义（单一变量三处引用；与 CHANGELOG / web 关于页一致）----
-VER_CODE=5
-VER_NAME="0.5.0"
+VER_CODE=6
+VER_NAME="0.6.0"
 APK_BASE="xiaoman-treehole-v${VER_NAME//./}-debug"
 
 # ---- 发布物单一真源：打包前强制把 web/ 同步进 assets/www 并生成哈希清单 ----
