@@ -827,32 +827,53 @@ const App = (() => {
       timer = setTimeout(() => toggleMsgMenu(row, rec), 450);
     };
     const disarm = () => { if (timer) { clearTimeout(timer); timer = null; } };
-    row.addEventListener("touchstart", arm, { passive: true });
+    // 触屏：长按 450ms 或向左滑 ≥36px 都能出菜单；竖向滚动不抢手势
+    let sx = 0, sy = 0, swiped = false;
+    row.addEventListener("touchstart", ev => {
+      const t = ev.touches && ev.touches[0];
+      if (t) { sx = t.clientX; sy = t.clientY; }
+      swiped = false;
+      arm();
+    }, { passive: true });
+    row.addEventListener("touchmove", ev => {
+      const t = ev.touches && ev.touches[0];
+      if (!t) return;
+      const dx = t.clientX - sx, dy = t.clientY - sy;
+      if (!swiped && dx <= -36 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        swiped = true;
+        disarm();
+        if (!openMsgMenu || openMsgMenu.__rec !== rec) toggleMsgMenu(row, rec);
+        return;
+      }
+      if (Math.abs(dy) > 12) disarm();
+    }, { passive: true });
     row.addEventListener("touchend", disarm);
-    row.addEventListener("touchmove", disarm);
+    row.addEventListener("touchcancel", disarm);
   }
 
-  /** 删除消息时清掉由它产生的记忆引用（旧文本记忆 + 结构化记忆） */
-  function purgeMemory(fragment) {
+  /** 删除/编辑消息时清掉由它产生的记忆引用（旧文本记忆 + 结构化记忆）
+   *  keepText 用于编辑：新文案里仍然提到的记忆要留下，不能改一个字就清空 */
+  function purgeMemory(fragment, keepText) {
     const frag = String(fragment || "").trim();
     if (frag.length < 2) return 0;
+    const keep = String(keepText == null ? "" : keepText);
     let n = 0;
     const mem = loadMem();
     for (const key of Object.keys(mem)) {
       const val = String(mem[key] == null ? "" : mem[key]);
-      if (val && (frag.includes(val) || (val.length >= 4 && val.includes(frag)))) {
-        delete mem[key];
-        n++;
-      }
+      if (!val || !(frag.includes(val) || (val.length >= 4 && val.includes(frag)))) continue;
+      if (keep && keep.includes(val)) continue;
+      delete mem[key];
+      n++;
     }
     if (n) saveMem(mem);
     if (window.MemoryStore) {
       for (const m of MemoryStore.all()) {
         const t = String(m && m.text ? m.text : "");
         if (!t) continue;
-        if (t.includes(frag) || (t.length >= 4 && frag.includes(t))) {
-          if (typeof MemoryStore.remove === "function") { MemoryStore.remove(m.id); n++; }
-        }
+        if (!(t.includes(frag) || (t.length >= 4 && frag.includes(t)))) continue;
+        if (keep && keep.includes(t)) continue;
+        if (typeof MemoryStore.remove === "function") { MemoryStore.remove(m.id); n++; }
       }
     }
     return n;
@@ -993,6 +1014,14 @@ const App = (() => {
     if (window.API && typeof API.messageUpdate === "function") {
       API.messageUpdate(SID, { role, at, content: old }, text).catch(() => {});
     }
+    // 改文案同样要动统计：先回退旧文案那一份，再按新文案记一份（同一时间点，不跨天）
+    let pruned = 0;
+    if (role === "user") {
+      if (window.Stats) { Stats.unbump(old, at || undefined); Stats.bump(text, at || undefined); }
+      pruned = purgeMemory(old, text);
+      renderMem();
+      if (window.Stats) renderStats();
+    }
     if (role === "user") {
       // 旧回复是按旧文案生成的，留着会变成"幽灵答案"：先把紧随其后的整串回复删掉再重发
       const rows = ChatPager.list();
@@ -1005,7 +1034,7 @@ const App = (() => {
       }
       for (const n of tail) await deleteMsg(n, { silent: true });
       await send(text, { resend: true });
-      toast("已按新内容重发");
+      toast(pruned ? `已按新内容重发，同时清掉 ${pruned} 条旧记忆` : "已按新内容重发");
     } else {
       toast("已修改这条回复");
     }
@@ -1305,6 +1334,47 @@ const App = (() => {
     };
     clearRow.appendChild(clearBtn);
     box.appendChild(clearRow);
+  }
+
+  // 设置页里的「清空使用统计」：入口在设置里，二次确认规则与首页一致（5 秒内再点一次才生效）
+  let settingsStatsArmed = false;
+  let settingsStatsTimer = null;
+  function injectStatsClearSetting() {
+    const field = document.querySelector("#settingsModal .backup-field");
+    if (!field || field.querySelector("#statsClearSetting")) return;
+    const row = document.createElement("div");
+    row.style.cssText = "margin-top:12px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "statsClearSetting";
+    btn.className = "ghost-btn";
+    const paint = () => { btn.textContent = settingsStatsArmed ? "再点一次，确认清空" : "清空使用统计"; };
+    paint();
+    btn.onclick = () => {
+      if (!settingsStatsArmed) {
+        settingsStatsArmed = true;
+        paint();
+        if (settingsStatsTimer) clearTimeout(settingsStatsTimer);
+        settingsStatsTimer = setTimeout(() => {
+          settingsStatsTimer = null;
+          settingsStatsArmed = false;
+          paint();
+        }, 5000);
+        return;
+      }
+      if (settingsStatsTimer) { clearTimeout(settingsStatsTimer); settingsStatsTimer = null; }
+      settingsStatsArmed = false;
+      if (window.Stats) Stats.clear();
+      renderStats();          // 图表就地归零（空态分支，不会出现 NaN）
+      paint();
+      toast("使用统计已清空；聊天记录与记忆不受影响");
+    };
+    const hint = document.createElement("span");
+    hint.className = "mini";
+    hint.textContent = "只清空计数与图表，不删聊天记录和记忆。";
+    row.appendChild(btn);
+    row.appendChild(hint);
+    field.appendChild(row);
   }
 
   // ---------- 打字指示（W7：真流式不再靠固定预等） ----------
@@ -1993,6 +2063,7 @@ const App = (() => {
       syncAppearancePanel();
       $("cfgTheme").value = (() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })();
       $("cfgTestResult").textContent = "";
+      injectStatsClearSetting();
       openPanel($("settingsModal"), $("settingsBtn"));
     };
     $("settingsClose").onclick = () => closePanel($("settingsModal"));
