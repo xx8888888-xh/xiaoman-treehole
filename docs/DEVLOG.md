@@ -24,6 +24,21 @@
 
 **触及**：`server/mock_api.py`、`server/tests/test_session_io.py`、`web/js/{api,backup,store,reminders,stats,app,chat_pager}.js`、`web/package.json`、`web/tests/{backup_roundtrip,idb_stub,reminders,stats,store}.test.js`、`scripts/{test_roundtrip,test_msg_edit}.py`、`docs/{FEATURE_MATRIX,DEVLOG}.md`
 
+### 补丁（追补）：修云端 python-fast 两条既有红灯（`64f9ff6`）
+> 这两条从 r3 起就红，回退 `mock_api.py` 到 `0a86007` 复跑同样红，确认非 w16 引入。
+
+| 现象 | 真因 | 修法 |
+|---|---|---|
+| `test_refusal_guard_keeps_pool_off_advice` 偶发（约 6/20）：输入「不用给我方案」答「那方案你熬了多久」 | `extract_detail` 有拒绝守卫，但 `_pick` 直接从 work 话题池抽签，池里那条恰好含「方案」——把用户刚拒的词原样推回去 | 新增 `ADVICE_WORD_RE`，命中 `REFUSAL_RE` 时先把池内 方案/建议/步骤/分析/道理/鸡汤 过滤掉（空则退回 generic 再过滤） |
+| `test_same_input_five_times...` 偶发：5 次回复句长差 <2 | `_pick` 用「随机撞 `len*2` 次」找不重复，随机漏掉池内最短那条（5 条池只出 4 条），句长差被动变小 | 改为**先算出可用候选**（未被用过且首 4 字不撞上轮）再 `random.choice`；随机性保留，"不重样"从碰运气变成确定性保证 |
+| `test_memory_recall` G11-2①/② 稳定挂（150/152） | W11 只改了服务端：`_match_memory_value` 跳过本轮写入键 → 介绍轮不提名字（失忆），下一轮突然复读（刻意）；离线 `mock_engine.js` 无此跳过，G11-5① 反而通过 | 去掉写入轮跳过，写入轮当场接住并**从该轮计 3 轮冷却**（`mock_api.py` 与离线同源） |
+
+**关于被改的那条单元断言**：`test_mock_human_feel_fixes::test_write_turn_does_not_burn_the_cooldown` 原断言「写入轮不复述=炫耀记忆」与 G11-2/5 的验收口径直接冲突，且造成服务端/离线两套人格。改判据：① 用户主动介绍宠物名时只字不提=没听见，比提一次更假；② 真正要防的是"连续几轮句句带名字"，不是第一次回应。新断言更强——写入轮必须接住 1 次，随后 2 轮静默，第 3 轮可再提，第 4 轮重新进冷却；理由写进用例 docstring，`HUMAN_FEEL.md` 第 3 行同步更正。
+
+**验证**：`pytest server/tests` 连跑 5 次独立进程 **5/5 绿**（153 passed + 19 subtests）；`python -m unittest discover -s server/tests` 5/5 OK（153 tests）；`test_mock_echo` 连跑 **20/20**；`test_memory_recall` **152/152**；`test_mock_api` **12/12**。云端：旧 `quick.yml` 已被另一路并入 `ci.yml`，本次推送 `ci #11`（sha `1c014c9`）`python-tests` + `node-tests-and-lint` **全绿**。
+
+
+
 ---
 
 ## 2026-11-05 · 第三轮合并 r3（w10/w11/w12/w13 → feat/containerize-and-config）
