@@ -368,6 +368,14 @@
  },
  "aborted": null,
  "limit_skips": 0,
+ "coverage": {
+  "expected": 112,
+  "completed": 112,
+  "resumed": 88,
+  "new": 24,
+  "retried": 24,
+  "rate": 1.0
+ },
  "case_stats": [
   {
    "id": "daily-01",
@@ -2483,7 +2491,7 @@
     "calls": 1,
     "errors": 1,
     "429": 0,
-    "first_429_at": "2026-11-05 21:58:53",
+    "first_429_at": "2026-11-06 06:44:42",
     "status": "配额或计费受限，已停用",
     "reason": "HTTP 429 {\"error\":{\"message\":\"Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day\",\"code\":429,\"metadata\":{\"heade"
    },
@@ -2491,7 +2499,7 @@
     "name": "pollinations",
     "model": "openai",
     "base": "https://text.pollinations.ai/openai",
-    "calls": 220,
+    "calls": 47,
     "errors": 0,
     "429": 0,
     "first_429_at": "",
@@ -2500,19 +2508,11 @@
    }
   ]
  },
- "backend_calls": 221,
+ "backend_calls": 48,
  "backend_errors": 1,
  "backend_throttled": 0,
  "model": "openrouter-free、pollinations",
  "backend": "rotate",
- "seconds": 12308.7,
- "notes": "后端调用失败 1 次（限流 0 次）；失败用例不计入质量分；覆盖率：本次新跑 112 条，完成 112/112（100.0%），剩余 0 条",
- "coverage": {
-  "expected": 112,
-  "completed": 112,
-  "resumed": 0,
-  "new": 112,
-  "retried": 0,
-  "rate": 1.0
- }
+ "seconds": 1928.2,
+ "notes": "后端调用失败 1 次（限流 0 次）；失败用例不计入质量分；断点续跑：历史带入 88 条、本次新跑 24 条（其中重试历史失败 24 条），完成 112/112（100.0%），剩余 0 条"
 }
