@@ -229,6 +229,34 @@ const ChatPager = (() => {
     return true;
   }
 
+  /** 删除一条记录（单条消息删除用）：窗口起点随时间前移，避免越界后整页空白 */
+  function remove(rec) {
+    const i = recs.indexOf(rec);
+    if (i < 0) return false;
+    recs.splice(i, 1);
+    if (i < start) start = Math.max(0, start - 1);
+    render(pinned ? "bottom" : "keep");
+    return true;
+  }
+
+  /** 就地改文案（编辑后重发用）：记录在窗口内则原地重建该行，否则等下次重建 */
+  function patch(rec, text) {
+    if (!rec) return false;
+    rec.text = String(text == null ? "" : text);
+    const i = recs.indexOf(rec);
+    if (i < start || i >= start + VIEW) return true;
+    const old = rendered[i - start];
+    if (!old || old.parentElement !== host) return true;
+    const abs = i;
+    const fresh = build(rec, abs, abs > 0 ? recs[abs - 1] : null);
+    host.replaceChild(fresh, old);
+    rendered[i - start] = fresh;
+    return true;
+  }
+
+  /** 全量记录快照（只读；单条删除/编辑定位用） */
+  function list() { return recs.slice(); }
+
   function stats() {
     return {
       total: recs.length,
@@ -246,7 +274,7 @@ const ChatPager = (() => {
     };
   }
 
-  const api = { mount, push, older, jumpLatest, markVoice, stats, PAGE, VIEW };
+  const api = { mount, push, older, jumpLatest, markVoice, remove, patch, list, stats, PAGE, VIEW };
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof window !== "undefined") window.ChatPager = api;   // classic script 顶层 const 不挂 window
   return api;
