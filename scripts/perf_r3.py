@@ -580,7 +580,7 @@ def _top_alloc(profile, limit=15):
 
 
 async def _memory_run(browser, rounds, warmup, silence_console,
-                      sample_alloc=False, disable_store=False):
+                      sample_alloc=False, disable_store=False, phase2=False):
     """warmup 轮先吸收启动一次性分配，再做 rounds 轮长会话采样。
     silence_console=True：把 [probe] 埋点日志静音——Chromium 控制台缓冲是给安卓
     logcat 用的诊断通道，不属于应用状态（且有容量上限），不能混进"消息数据是否泄漏"。"""
@@ -650,6 +650,23 @@ async def _memory_run(browser, rounds, warmup, silence_console,
         """() => ({ vram: window.__stageVram || null,
                     decode: window.__stageDecode || null, mode: window.__stageMode,
                     imgDecode: window.__perf ? window.__perf.decode : null })""")
+    # 第二段 200 轮：若增量明显收敛，说明前段是 V8 优化/预热的一次性，不是泄漏
+    marks2, growth2 = [], None
+    if phase2:
+        s2b = s2["JSHeapUsedSize"]
+        for i in range(rounds):
+            await send_and_reply(page, f"再聊一会儿，第{i}轮")
+            if (i + 1) % 40 == 0:
+                print(f"[memory] phase2 {i + 1}/{rounds}", flush=True)
+            if i % 40 == 39:
+                st = await js_state(page, session)
+                marks2.append({"round": i + 1,
+                               "heapMB": round(st["JSHeapUsedSize"] / 1048576, 2),
+                               "held": (st["pager"] or {}).get("held"),
+                               "total": (st["pager"] or {}).get("total")})
+        await asyncio.sleep(1.2)
+        s3 = await js_state(page, session)
+        growth2 = round((s3["JSHeapUsedSize"] - s2b) / 1048576, 2)
     # 翻页自检放在堆取样之后：取回淘汰段会让内存短暂变大，不能污染 heapEnd
     paging = await paging_audit(page, pages=20)
     idb_rows = await page.evaluate(
@@ -670,6 +687,10 @@ async def _memory_run(browser, rounds, warmup, silence_console,
         "lsEndTop": ls1.get("top"),
         "idbRows": idb_rows,
         "allocTop": profile_top,
+        "phase2GrowthMB": growth2,
+        "phase2Per40MB": [round(marks2[i]["heapMB"] - marks2[i - 1]["heapMB"], 2)
+                          for i in range(1, len(marks2))],
+        "phase2Marks": marks2,
         "domNodesStart": s0["domNodes"], "domNodesEnd": s1["domNodes"],
         "pager": s1["pager"],
         "paging": paging,
@@ -683,7 +704,8 @@ async def measure_memory(browser, rounds=200, warmup=40):
     """口径：先 warmup 轮吸收启动一次性分配，再 200 轮长会话。
     - top-level = 控制台静音（应用真实状态），验收用这组
     - consoleOn = 保留 [probe] 日志的对照，用来证明日志缓冲贡献"""
-    quiet = await _memory_run(browser, rounds, warmup, silence_console=True, sample_alloc=True)
+    quiet = await _memory_run(browser, rounds, warmup, silence_console=True,
+                              sample_alloc=True, phase2=True)
     loud = await _memory_run(browser, rounds, warmup, silence_console=False)
     nodisk = await _memory_run(browser, rounds, warmup, silence_console=True,
                                sample_alloc=True, disable_store=True)
