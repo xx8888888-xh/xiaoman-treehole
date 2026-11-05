@@ -18,7 +18,7 @@
   /* 键名即 index.html 里的 data-icon 值；值是若干条 path 的 d */
   const ICONS = {
     close: ["M7 7 L17 17", "M17 7 L7 17"],
-    settings: ["M4 7 L20 7", "M4 12 L20 12", "M4 17 L20 17"],
+    settings: ["M4 8 L20 8", "M4 16 L20 16"],
     memory: ["M7 4.5 L17 4.5 L17 20 L12 16.4 L7 20 Z"],
     widget: ["M9 4 L9 9 L4 9", "M15 20 L15 15 L20 15"],
     send: ["M4.5 11.8 L19.5 5 L13.6 19.2 L10.9 13 Z", "M10.9 13 L19.5 5"],
@@ -33,9 +33,8 @@
   /* 设置/记忆两个图标上的圆点（不写进 ICONS，避免把结构混进路径列表） */
   const DOTS = {
     settings: [
-      { cx: 9.5, cy: 7, r: 2.4 },
-      { cx: 15.5, cy: 12, r: 2.4 },
-      { cx: 8, cy: 17, r: 2.4 },
+      { cx: 9, cy: 8, r: 2.4 },
+      { cx: 15, cy: 16, r: 2.4 },
     ],
   };
 

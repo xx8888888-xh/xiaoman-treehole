@@ -758,10 +758,15 @@ html[data-preset="minimal"] { --bubble-me: var(--surface-2); }
 .drawer-head h2 { font-size: var(--text-title); line-height: var(--lh-tight); font-weight: var(--w-semibold); letter-spacing: .01em; }
 .drawer-head .icon-btn { width: var(--tap); height: var(--tap); border-radius: var(--radius-sm); color: var(--text-2); }
 .drawer-sub { margin-bottom: var(--space-3); font-size: var(--text-caption); line-height: var(--lh-body); color: var(--text-2); text-align: left; }
+#reminderList { margin-top: var(--space-5); }
+#reminderList .drawer-sub { margin-bottom: var(--space-2); }
+#statsBox { margin-top: var(--space-5); }
 
 .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); min-height: var(--tap); }
 .chip {
   display: inline-flex;
+  flex: 1 1 calc(50% - var(--space-2));
+  min-width: 0;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
@@ -1167,6 +1172,10 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   height: var(--avatar);
   margin-bottom: var(--space-2);
   color: var(--line-strong);
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 .empty-title {
   font-size: var(--text-title);
@@ -1519,3 +1528,23 @@ body.float-mode .float-hidden { display: none !important; }
   :root { --line-strong: #6B6055; --text-2: #45403A; --text-3: #4A443D; }
   body.theme-dark { --line-strong: #8F8896; --text-2: #CFC8BF; --text-3: #C0B9B0; }
 }
+
+/* ---------- 记忆页层级：一个主按钮 + 次级动作 ---------- */
+#reminderList .solid-btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  box-shadow: none;
+}
+#memoryClear {
+  display: block;
+  width: auto;
+  min-height: var(--tap-sm);
+  margin: var(--space-2) auto 0;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--text-caption);
+}
+#memoryClear:hover { color: var(--crisis); background: var(--crisis-soft); }

@@ -74,6 +74,9 @@ jobs:
                       localStorage.setItem("xiaoman_theme", theme);
                       localStorage.setItem("xiaoman_appearance_v1", JSON.stringify(appearance));
                       localStorage.setItem("xiaoman_told_v", "999");
+                      // 截图里不要环境旁白（真实用户首启也会关掉一次）
+                      sessionStorage.setItem("xiaoman_degrade_off", "1");
+                      sessionStorage.setItem("xiaoman_voice_tip_off", "1");
                   }""",
                   [CFG, MEM, theme, appearance],
               )
@@ -147,8 +150,9 @@ jobs:
           with open(os.path.join(OUT, "manifest.json"), "w", encoding="utf-8") as f:
               json.dump(
                   sorted(
-                      {"file": n, "bytes": os.path.getsize(os.path.join(OUT, n))}
-                      for n in os.listdir(OUT) if n.endswith(".png")
+                      ({"file": n, "bytes": os.path.getsize(os.path.join(OUT, n))}
+                       for n in os.listdir(OUT) if n.endswith(".png")),
+                      key=lambda item: item["file"],
                   ),
                   f,
                   ensure_ascii=False,
