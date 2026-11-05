@@ -5,15 +5,15 @@ name: android-ci
 # 多AI协同分支策略：知秋=zhiqiu/**，另一协作者用其自己的分支，main 保持稳定。
 # 说明：GitHub ubuntu runner 自带 /dev/kvm，模拟器可硬件加速启动（约1-2分钟冷启）。
 # 前提：仓库根放本项目（含 android/ 与 scripts/build_apk.sh）。
+#
+# 2026-11-05 起改为「仅手动」的 legacy 流水线：日常出包走 android.yml（快、无签名），
+# 模拟器 smoke 属真机/AVD 类闸门，默认留在本地（见 docs/ci-workflows.md），
+# 需要云端复现时再手动触发本 workflow。
 
 permissions:
   contents: read
 
 on:
-  push:
-    branches: [main, 'zhiqiu/**', 'model/**', 'integration/**', 'fix/**']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
