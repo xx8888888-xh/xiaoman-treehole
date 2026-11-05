@@ -279,6 +279,35 @@ def check_bridge(url_filter, label, port):
                  f"({r.get('returnType')}) err={r.get('error') or '-'}")
 
 
+def open_panel_js(port=9227):
+    """通过桌宠页面的 AndroidPet.openPanel() 直接展开迷你窗。
+    比连续两次 `input tap` 可靠：adb 每次 input 都要重启一次 input 进程，
+    两次间隔常超过系统双击阈值（实测 frame=None，面板根本没开）。"""
+    from android_cdp import Cdp
+    cdp = Cdp(port)
+    try:
+        cdp.attach(url_filter="pet.html", timeout=30)
+        return cdp.eval("(() => { try { window.AndroidPet.openPanel(); return 'ok'; }"
+                        " catch (e) { return 'err:' + e; } })()")
+    except Exception as e:
+        return "cdp-err:" + str(e)[:80]
+    finally:
+        try:
+            cdp.close()
+        except Exception:
+            pass
+
+
+def wait_panel(seconds=15):
+    """等 dumpsys 里出现迷你窗 frame（结构判定，不依赖像素）。"""
+    for _ in range(seconds // 3):
+        time.sleep(3)
+        big = big_frame(dumpsys_windows())
+        if big:
+            return big
+    return None
+
+
 def open_panel(pframe, base):
     """双击桌宠 frame 中心展开迷你窗；返回 (big_frame, diff)。结构判定走 dumpsys，
     不依赖像素（软件 GL 截图差分在本机恒为 0，会把整条交互链误跳过）。"""
@@ -529,9 +558,13 @@ def main():
         # 但窗口 frame / dumpsys 结构是权威的：交互链照常跑，只跳过像素型断言。
         print("[FLOAT-DEGRADE] 像素差分不足，浮窗桥断言改用 dumpsys 结构判定", flush=True)
         bx, by = box_center(pframe)
-        panel_box, _ = open_panel(pframe, base)
-        check("双击展开迷你窗（结构判定，不依赖像素）", panel_box is not None,
-              f"frame={panel_box}")
+        opened = open_panel_js()
+        panel_box = wait_panel()
+        if panel_box is None and opened == "ok":
+            # JS 展开失败时再退回双击（某些构建里 openPanel 走 Activity 跳转）
+            panel_box, _ = open_panel(pframe, base)
+        check("展开迷你窗（结构判定，不依赖像素）", panel_box is not None,
+              f"frame={panel_box} openPanel()={opened}")
         if panel_box:
             check("迷你窗 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/index.html?float=1）",
                   probe_has("[probe] AndroidTTS injected=1 /www/index.html?float=1"))
