@@ -73,6 +73,40 @@ RECALL_MARKERS = ("你上次", "你之前", "你说过", "你提过", "上次说
 MUTE_RE = re.compile(
     "别问|不想说|不想聊|不想提|别追问|换个话题|不想讲|算了|不说了|别打听|别提")
 
+# ---------------- 免费额度白名单（只准免费，付费一律拒绝） ----------------
+# 规则（用户硬约束）：只准用免费额度，任何付费模型都不许调。
+# 免费范围：
+#   1) 名字带 :free 的免费池模型（OpenRouter 等）；
+#   2) 显式列在白名单里的免费模型/匿名端点名；
+#   3) 不指定具体模型的匿名端点（model 为空 → 服务端默认免费池）。
+# 不在白名单的模型在**发请求之前**直接拒绝，不做“先试一下”。
+FREE_MODEL_WHITELIST = (
+    "openai",  # pollinations 匿名端点：不指定具体模型，走官方免费池
+)
+FREE_MODEL_PATTERNS = (
+    re.compile(r"^(?:[^\s/]+/)?[^\s/:]+:free$"),  # vendor/model:free 或 model:free
+)
+# 可能产生费用的请求选项：付费档路由（:nitro / provider pay）、联网检索等
+PAID_OPTION_RE = re.compile(r":nitro|:online|:pay|provider:pay|web_search|:paid", re.I)
+# 余额不足/要求充值的提示：命中即停用该家，绝不升级重试
+BILLING_HINT_RE = re.compile(
+    r"insufficient|balance|payment|credits|billing|充值|余额|欠费", re.I)
+# max_tokens 上限：超过免费档的量级视为“可能被升级到付费档”，一律压回
+MAX_TOKENS_CAP = 1500
+DEFAULT_MAX_REQUESTS = 60
+
+
+def is_free_model(model: str) -> bool:
+    """模型是否在免费白名单内；名字里带付费路由直接判否。"""
+    name = (model or "").strip()
+    if not name:
+        return True  # 匿名端点：不指定具体模型 = 官方免费池
+    if PAID_OPTION_RE.search(name):
+        return False
+    if name.lower() in FREE_MODEL_WHITELIST:
+        return True
+    return any(p.match(name) for p in FREE_MODEL_PATTERNS)
+
 
 def visible(text: str) -> str:
     return PUNCT_RE.sub("", (text or "").replace("||", ""))
@@ -120,6 +154,8 @@ class CaseResult:
         self.case = case
         self.turns: list = []
         self.failures: list = []
+        # 单次请求上限导致没跑完：不计入质量分，也不算失败
+        self.limit_skipped = False
 
     @property
     def passed(self) -> bool:
@@ -265,6 +301,15 @@ class AllProvidersExhausted(Exception):
         super().__init__("全部后端不可用（%d 家）" % len(stats))
 
 
+class RequestLimitReached(Exception):
+    """单个后端的请求数达到单次运行上限：本条用例不计质量分，换下一条/下一家。"""
+
+    def __init__(self, provider: str, limit: int):
+        self.provider = provider
+        self.limit = limit
+        super().__init__("%s 已达单次请求上限 %d" % (provider, limit))
+
+
 DEFAULT_BACKENDS_FILE = ROOT / "scripts" / "backends.local.json"
 EXAMPLE_BACKENDS_FILE = ROOT / "scripts" / "backends.example.json"
 
@@ -294,6 +339,11 @@ def load_providers(path=None) -> tuple:
     providers, skipped = [], []
     for entry in entries:
         name = str(entry.get("name") or entry.get("model") or "provider")
+        model = str(entry.get("model") or "")
+        # 免费白名单：不在名单里的模型在发请求之前就拒绝，绝不“先试一下”
+        if not is_free_model(model):
+            skipped.append({"name": name, "reason": "非免费白名单模型（拒绝调用）：%s" % model})
+            continue
         key = ""
         if entry.get("key_env"):
             key = os.environ.get(entry["key_env"], "")
@@ -312,11 +362,16 @@ def load_providers(path=None) -> tuple:
         providers.append({
             "name": name,
             "base": str(entry.get("base") or "").rstrip("/"),
-            "model": str(entry.get("model") or ""),
+            "model": model,
             "key": key,
             "temperature": entry.get("temperature"),
-            "max_tokens": entry.get("max_tokens"),
+            # 超过免费档量级的 max_tokens 一律压回上限，防止被计费到付费档
+            "max_tokens": min(int(entry.get("max_tokens") or MAX_TOKENS_CAP),
+                              MAX_TOKENS_CAP),
             "retries": entry.get("retries"),
+            # 免费端点常按 IP 限速（如 pollinations 45 秒一次），
+            # 配 delay 主动放慢，避免撞 402 后整家被判死
+            "delay": entry.get("delay"),
         })
     return providers, skipped
 
@@ -360,27 +415,33 @@ class ApiBackend:
                  timeout: float = 60.0, temperature: float = 0.85,
                  now: str = "周五 22:10", max_tokens: int = 1500,
                  retries: int = 3, dry_run: bool = False,
-                 provider_name: str = "", raise_on_quota: bool = False):
+                 provider_name: str = "", raise_on_quota: bool = False,
+                 max_requests: int = DEFAULT_MAX_REQUESTS):
         import prompt_core
         import memory_slots
         self.prompt_core = prompt_core
         self.memory_slots = memory_slots
         self.base = (base or "").rstrip("/")
         self.model = model
+        if not is_free_model(model):
+            # 最后一道闸：就算配置漏改，也不允许对非白名单模型发请求
+            raise ValueError("非免费白名单模型，拒绝调用：%s" % model)
         self.key = key
         self.delay = delay
         self.timeout = timeout
         self.temperature = temperature
         self.now = now
-        self.max_tokens = max_tokens
+        self.max_tokens = min(int(max_tokens or MAX_TOKENS_CAP), MAX_TOKENS_CAP)
         self.retries = retries
         self.dry_run = dry_run
         self.provider_name = provider_name or model or "api"
         self.raise_on_quota = raise_on_quota
+        self.max_requests = max_requests or 0
         self.calls = 0
         self.errors = 0
         self.throttled = 0
         self.last_status = 0
+        self.billing_stop = False
         self.slots = None
         self.sid = ""
 
@@ -405,18 +466,23 @@ class ApiBackend:
             return json.loads(resp.read().decode("utf-8"))
 
     def chat(self, history: list, user: str, case: dict) -> dict:
+        if self.max_requests and self.calls >= self.max_requests:
+            raise RequestLimitReached(self.provider_name, self.max_requests)
         mem = self.slots.render(self.sid, user) if self.slots else ""
         system = self.prompt_core.system_prompt(memory_section=mem, now=self.now,
                                                strict_json=True)
         messages = [{"role": "system", "content": system}]
         messages.extend(history)
         messages.append({"role": "user", "content": user})
+        # 请求体只包含这四项：不带 provider 路由/联网检索等可能计费的选项
         body = {"model": self.model, "temperature": self.temperature,
-                "max_tokens": self.max_tokens, "messages": messages}
+                "max_tokens": min(self.max_tokens, MAX_TOKENS_CAP), "messages": messages}
         raw = ""
         last_err = ""
         reasoning_only = False
         for attempt in range(self.retries):
+            if self.max_requests and self.calls >= self.max_requests:
+                raise RequestLimitReached(self.provider_name, self.max_requests)
             try:
                 self.calls += 1
                 obj = self._request(body)
@@ -433,6 +499,12 @@ class ApiBackend:
                     pass
                 last_err = "HTTP %s %s" % (e.code, detail)
                 self.last_status = e.code
+                # 402 / 余额不足 / 要求充值：立刻停用该家，不重试、不升级模型
+                if e.code == 402 or BILLING_HINT_RE.search(detail):
+                    self.billing_stop = True
+                    break
+                if e.code in (401, 403):
+                    break
                 if e.code in (429, 503, 502):
                     self.throttled += 1
                     time.sleep(min(30, 4 * (attempt + 1)))
@@ -443,7 +515,7 @@ class ApiBackend:
                 time.sleep(min(10, 2 * (attempt + 1)))
         if not raw:
             self.errors += 1
-            if self.raise_on_quota and self.last_status in (401, 402, 403, 429):
+            if self.raise_on_quota and (self.billing_stop or self.last_status in (401, 402, 403, 429)):
                 raise QuotaExhausted(self.provider_name, last_err)
             if reasoning_only:
                 return {"reply": "", "hook": None,
@@ -481,12 +553,19 @@ class RotatingBackend:
     def __init__(self, providers: list, delay: float = 1.0, timeout: float = 60.0,
                  temperature: float = 0.85, now: str = "周五 22:10",
                  max_tokens: int = 1500, retries: int = 3,
-                 factory=None):
+                 max_requests: int = DEFAULT_MAX_REQUESTS, factory=None):
         if not providers:
             raise ValueError("轮换后端至少需要一家可用 provider")
+        paid = [p["name"] for p in providers if not is_free_model(p.get("model", ""))]
+        if paid:
+            # 白名单外的模型连构造都不允许，避免误调付费模型
+            raise ValueError("轮换配置含非免费白名单模型：%s" % "、".join(paid))
         self.providers = providers
         self.opts = {"delay": delay, "timeout": timeout, "temperature": temperature,
-                     "now": now, "max_tokens": max_tokens, "retries": retries}
+                     "now": now, "max_tokens": min(int(max_tokens or MAX_TOKENS_CAP),
+                                                   MAX_TOKENS_CAP),
+                     "retries": retries}
+        self.max_requests = max_requests or 0
         self.factory = factory or self._make_api
         self.idx = 0
         self.rotations = 0
@@ -497,11 +576,14 @@ class RotatingBackend:
                        "base": p.get("base", ""), "calls": 0, "errors": 0,
                        "429": 0, "first_429_at": "", "status": "待用",
                        "reason": ""} for p in providers]
-        self._activate(0)
+        self._activate(0, reset=False)
 
     def _make_api(self, provider):
         return ApiBackend(provider["base"], provider["model"], provider["key"],
-                          delay=self.opts["delay"], timeout=self.opts["timeout"],
+                          delay=(provider.get("delay")
+                                 if provider.get("delay") is not None
+                                 else self.opts["delay"]),
+                          timeout=self.opts["timeout"],
                           temperature=(provider.get("temperature")
                                        if provider.get("temperature") is not None
                                        else self.opts["temperature"]),
@@ -510,14 +592,15 @@ class RotatingBackend:
                                       or self.opts["max_tokens"]),
                           retries=(provider.get("retries")
                                    or self.opts["retries"]),
-                          provider_name=provider["name"], raise_on_quota=True)
+                          provider_name=provider["name"], raise_on_quota=True,
+                          max_requests=self.max_requests)
 
-    def _activate(self, idx):
+    def _activate(self, idx, reset=True):
         self.idx = idx
         self.consecutive_fail = 0
         self.current = self.factory(self.providers[idx])
         self.stats[idx]["status"] = "在用"
-        if self.case is not None:
+        if reset and self.case is not None:
             self.current.reset_case(self.case)
 
     def _refresh(self):
@@ -528,34 +611,69 @@ class RotatingBackend:
         st["errors"] = getattr(self.current, "errors", 0)
         st["429"] = getattr(self.current, "throttled", 0)
 
-    def _switch(self):
+    def _exhausted(self) -> bool:
+        """当前这家是否达到单次请求上限。"""
+        return bool(self.max_requests and
+                    getattr(self.current, "calls", 0) >= self.max_requests)
+
+    def _switch(self, reset=True):
         self._refresh()
         if self.idx + 1 >= len(self.providers):
             return False
         self.rotations += 1
-        self._activate(self.idx + 1)
+        self._activate(self.idx + 1, reset=reset)
         return True
+
+    def _ensure_capacity(self):
+        """用例开始时若当前后端已到上限，先切到还有额度的下一家。"""
+        while self._exhausted():
+            st = self.stats[self.idx]
+            st["status"] = "达到单次上限"
+            st["reason"] = "本家已发 %d 次请求（上限 %d），余下交下一家" % (
+                getattr(self.current, "calls", 0), self.max_requests)
+            if not self._switch(reset=False):
+                raise AllProvidersExhausted(self.stats)
 
     def reset_case(self, case):
         self.case = case
+        self._ensure_capacity()
         if self.current:
             self.current.reset_case(case)
 
     def chat(self, history, user, case):
         while True:
             self._refresh()
+            if self._exhausted():
+                st = self.stats[self.idx]
+                st["status"] = "达到单次上限"
+                st["reason"] = "本家已发 %d 次请求（上限 %d）" % (
+                    getattr(self.current, "calls", 0), self.max_requests)
+                if not self._switch():
+                    # 本用例不再继续，交给 evaluate 记“未完成”；不是质量分
+                    raise RequestLimitReached(self.providers[self.idx]["name"],
+                                              self.max_requests)
+                continue
             try:
                 out = self.current.chat(history, user, case)
             except QuotaExhausted as e:
                 st = self.stats[self.idx]
-                st["status"] = "配额/鉴权失效"
+                st["status"] = ("配额或计费受限，已停用"
+                                if getattr(self.current, "billing_stop", False)
+                                else "配额/鉴权失效")
                 st["reason"] = str(e.detail)[:160]
                 if not st["first_429_at"]:
                     st["first_429_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 self._refresh()
-                st["status"] = "配额/鉴权失效"
                 if not self._switch():
                     raise AllProvidersExhausted(self.stats)
+                continue
+            except RequestLimitReached:
+                st = self.stats[self.idx]
+                st["status"] = "达到单次上限"
+                st["reason"] = "本家已发 %d 次请求（上限 %d）" % (
+                    getattr(self.current, "calls", 0), self.max_requests)
+                if not self._switch():
+                    raise
                 continue
             if out.get("_backend_error"):
                 self.consecutive_fail += 1
@@ -609,7 +727,7 @@ def load_cases(path: Path = CASES_FILE) -> dict:
 
 
 def run_case(case: dict, backend, universal: dict) -> tuple:
-    """返回 (CaseResult, 建议轮次数)。"""
+    """返回 (CaseResult, 建议轮次数)；后端请求上限触发时 result.limit_skipped 置位。"""
     backend.reset_case(case)
     result = CaseResult(case)
     cfg = _case_cfg(case, universal)
@@ -617,7 +735,12 @@ def run_case(case: dict, backend, universal: dict) -> tuple:
     prev: list = []
     advice_turns = 0
     for idx, user in enumerate(case["turns"]):
-        payload = backend.chat(history, user, case)
+        try:
+            payload = backend.chat(history, user, case)
+        except RequestLimitReached:
+            # 单次请求上限：本用例没跑完，不判质量分
+            result.limit_skipped = True
+            return result, advice_turns
         if payload.get("_backend_error"):
             result.fail(idx + 1, "后端不可用：%s" % payload["_backend_error"])
             break
@@ -657,6 +780,7 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
     advice_turns = 0
     total_cases = len(cases)
     aborted = None
+    limit_skips = 0
     for i, case in enumerate(cases, 1):
         try:
             res, adv = run_case(case, backend, universal)
@@ -665,6 +789,12 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
             print("%s 中止：%s；已完成 %d/%d 条（后端失败不计入质量分）"
                   % (LOG, exc, len(results), total_cases), flush=True)
             break
+        if getattr(res, "limit_skipped", False):
+            # 单次请求上限：用例不计分，继续下一条（reset_case 时已切下一家）
+            limit_skips += 1
+            print("%s [%d/%d] %-4s %s（单次请求上限，未计入质量分）"
+                  % (LOG, i, total_cases, case["id"], "SKIP"), flush=True)
+            continue
         advice_turns += adv
         results.append(res)
         if not on_case:
@@ -675,6 +805,8 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
             on_case(res)
     metrics = compute_metrics(results, advice_turns)
     data = {"results": results, "metrics": metrics, "universal": universal}
+    if limit_skips:
+        data["limit_skips"] = limit_skips
     if aborted:
         data["aborted"] = aborted
     return data
@@ -757,6 +889,7 @@ def summarize(data: dict) -> dict:
                      for r in results if not r.passed],
         "metrics": data["metrics"],
         "aborted": data.get("aborted"),
+        "limit_skips": data.get("limit_skips", 0),
     }
 
 
@@ -785,6 +918,9 @@ def render_markdown(summary: dict, backend_name: str, model: str = "",
                      % (rot["rotations"],
                         sum(1 for p in rot["providers"] if p["calls"] > 0) - 1
                         if rot["rotations"] else 0))
+    if summary.get("limit_skips"):
+        lines += ["", "**单次请求上限**：%d 条用例未跑完，不计入质量分（分母只含已跑完的用例）。"
+                  % summary["limit_skips"]]
     if summary.get("aborted"):
         lines += ["", "**评测中止**：完成 %d 条后所有后端被判死（%s），剩余用例未跑，"
                   "中止原因不折算成质量分。"
@@ -844,12 +980,22 @@ def main(argv=None) -> int:
                     help="按配置在多家免费后端间自动轮换（429/402/401/403 切下一家）")
     ap.add_argument("--backends-file", default="",
                     help="多后端配置文件（默认 scripts/backends.local.json 或 HUMAN_FEEL_BACKENDS）")
+    ap.add_argument("--max-requests", type=int, default=DEFAULT_MAX_REQUESTS,
+                    help="单次运行里每个后端的最大请求数（默认 %d，到上限切下一家）"
+                    % DEFAULT_MAX_REQUESTS)
     args = ap.parse_args(argv)
 
     skipped = []
     if args.all:
         args.limit = 0
         args.categories = ""
+    # max_tokens 一律压回免费档上限，避免被计费到付费档
+    if args.max_tokens > MAX_TOKENS_CAP:
+        print("%s max_tokens %d 超过免费档上限，已压到 %d"
+              % (LOG, args.max_tokens, MAX_TOKENS_CAP), flush=True)
+        args.max_tokens = MAX_TOKENS_CAP
+    if args.max_requests <= 0:
+        args.max_requests = DEFAULT_MAX_REQUESTS
 
     if args.auto_rotate:
         args.backend = "api"
@@ -865,12 +1011,18 @@ def main(argv=None) -> int:
                  "、".join(s["name"] for s in skipped) or "无"), flush=True)
         backend = RotatingBackend(providers, delay=args.delay, timeout=args.timeout,
                                   now=args.now, max_tokens=args.max_tokens,
-                                  retries=args.retries)
+                                  retries=args.retries,
+                                  max_requests=args.max_requests)
     elif args.backend in ("mock", "local"):
         backend = MockBackend(Path(args.cases))
         if args.backend == "local":
             print("%s local = 本地模板引擎，不是真实模型；分数不计入真实分" % LOG)
     else:
+        # 白名单之外（含任何付费模型）在发请求前直接拒绝，不许“先试一下”
+        if not is_free_model(args.model):
+            print("%s 模型 %s 不在免费白名单内，拒绝调用（只准用免费额度）"
+                  % (LOG, args.model), file=sys.stderr)
+            return 2
         import credentials
         key = os.environ.get("AI_API_KEY") or credentials.api_key()
         if not key:
@@ -878,7 +1030,8 @@ def main(argv=None) -> int:
             return 2
         backend = ApiBackend(args.base, args.model, key, delay=args.delay,
                              timeout=args.timeout, now=args.now,
-                             max_tokens=args.max_tokens, retries=args.retries)
+                             max_tokens=args.max_tokens, retries=args.retries,
+                             max_requests=args.max_requests)
 
     cats = [c for c in args.categories.split(",") if c]
 
@@ -925,6 +1078,10 @@ def main(argv=None) -> int:
     else:
         summary["notes"] = ("仅 mock 本地模板引擎，不代表真实模型表现"
                             if args.backend in ("mock", "local") else "")
+    if summary.get("limit_skips"):
+        summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
+            ("%d 条因单次请求上限（每家 %d 次）未跑完，不计入质量分"
+             % (summary["limit_skips"], args.max_requests))
     if skipped:
         summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
             "未配置 key 跳过：%s" % "、".join(s["name"] for s in skipped)

@@ -1,10 +1,10 @@
 {
-  "_说明": "多后端轮换示例。复制为 scripts/backends.local.json（已被 .gitignore 的 *.local 忽略）后填自己的 key。仓库里永远不要提交真实 key。",
+  "_说明": "多后端轮换示例。只允许免费模型：名字以 :free 结尾，或是不指定模型名的匿名免费端点；付费模型会在发请求前被直接拒绝。复制为 scripts/backends.local.json（已被 .gitignore 忽略）后填自己的 key。仓库里永远不要提交真实 key。",
   "backends": [
     {
-      "name": "openrouter",
+      "name": "openrouter-free",
       "base": "https://openrouter.ai/api/v1",
-      "model": "qwen/qwen-2.5-72b-instruct",
+      "model": "google/gemma-4-31b-it:free",
       "key_env": "OPENROUTER_API_KEY",
       "use_default_credential": true,
       "retries": 1,
@@ -15,6 +15,7 @@
       "base": "https://text.pollinations.ai/openai",
       "model": "openai",
       "requires_key": false,
+      "delay": 46,
       "max_tokens": 1200
     }
   ]

@@ -62,9 +62,9 @@ def make_factory(providers_behaviour):
 
 
 PROVIDERS = [
-    {"name": "a", "base": "https://a.example", "model": "m1", "key": "k",
+    {"name": "a", "base": "https://a.example", "model": "vendor/m1:free", "key": "k",
      "temperature": None, "max_tokens": None, "retries": None},
-    {"name": "b", "base": "https://b.example", "model": "m2", "key": "",
+    {"name": "b", "base": "https://b.example", "model": "vendor/m2:free", "key": "",
      "temperature": None, "max_tokens": None, "retries": None},
 ]
 
@@ -125,13 +125,163 @@ class RotationTest(unittest.TestCase):
         self.assertEqual(data["metrics"]["turns"], 0)
 
 
+class FreeWhitelistTest(unittest.TestCase):
+    """只准免费额度：白名单外的模型（尤其付费）必须在发请求前被拒绝。"""
+
+    def test_is_free_model(self):
+        for model in ("meta-llama/llama-3.1-8b-instruct:free", "gpt:free",
+                      "openai", ""):
+            self.assertTrue(ev.is_free_model(model), model)
+        for model in ("qwen/qwen-2.5-72b-instruct", "openai/gpt-4o",
+                      "openai/gpt-4o:nitro", "x:online", "x:pay"):
+            self.assertFalse(ev.is_free_model(model), model)
+
+    def test_load_providers_rejects_paid_model(self):
+        cfg = json.dumps([
+            {"name": "paid", "base": "https://x.example",
+             "model": "qwen/qwen-2.5-72b-instruct", "requires_key": False},
+            {"name": "free", "base": "https://y.example",
+             "model": "vendor/model:free", "requires_key": False},
+            {"name": "anon", "base": "https://z.example", "model": "",
+             "requires_key": False},
+        ])
+        with mock.patch.dict(os.environ, {"HUMAN_FEEL_BACKENDS": cfg}):
+            providers, skipped = ev.load_providers()
+        self.assertEqual([p["name"] for p in providers], ["free", "anon"])
+        self.assertEqual(skipped[0]["name"], "paid")
+        self.assertIn("白名单", skipped[0]["reason"])
+
+    def test_rotating_backend_refuses_paid_provider(self):
+        with self.assertRaises(ValueError):
+            ev.RotatingBackend([dict(PROVIDERS[0],
+                                     model="qwen/qwen-2.5-72b-instruct")],
+                               factory=lambda p: FakeBackend([{"reply": "嗯。"}]))
+
+    def test_request_body_has_no_paid_options(self):
+        backend = ev.ApiBackend("https://x.example", "vendor/m:free", "k",
+                                retries=1, max_requests=5, delay=0)
+        backend.reset_case({"id": "body"})
+        seen = {}
+
+        def fake(self, payload):
+            seen.update(payload)
+            return {"choices": [{"message": {"content": '{"reply":"嗯。"}'}}]}
+
+        with mock.patch.object(ev.ApiBackend, "_request", fake):
+            backend.chat([], "在吗", {"id": "body"})
+        self.assertEqual(set(seen), {"model", "temperature", "max_tokens", "messages"})
+        self.assertLessEqual(seen["max_tokens"], ev.MAX_TOKENS_CAP)
+
+    def test_billing_402_stops_without_retry_upgrade(self):
+        import io
+        import urllib.error
+        backend = ev.ApiBackend("https://x.example", "vendor/m:free", "k",
+                                retries=3, raise_on_quota=True, delay=0, max_requests=5)
+        backend.reset_case({"id": "bill"})
+
+        def fail(self, payload):
+            err = urllib.error.HTTPError(self._url(), 402, "Payment Required", {},
+                                         io.BytesIO(b'insufficient balance'))
+            raise err
+
+        with mock.patch.object(ev.ApiBackend, "_request", fail):
+            with self.assertRaises(ev.QuotaExhausted):
+                backend.chat([], "在吗", {"id": "bill"})
+        self.assertTrue(backend.billing_stop)
+        self.assertEqual(backend.calls, 1, "402/余额不足必须立刻停，不许重试")
+        self.assertEqual(backend.model, "vendor/m:free", "不许升级到别的模型")
+
+    def test_billing_stop_marks_provider_disabled(self):
+        first = FakeBackend([ev.QuotaExhausted("a", "HTTP 402 insufficient balance")])
+        first.billing_stop = True
+        rb = ev.RotatingBackend(
+            PROVIDERS, factory=lambda p: first if p["name"] == "a"
+            else FakeBackend([{"reply": "嗯，我在。"}]))
+        out = rb.chat([], "嗯", {"id": "billing"})
+        self.assertEqual(out["reply"], "嗯，我在。")
+        self.assertEqual(rb.stats[0]["status"], "配额或计费受限，已停用")
+        self.assertEqual(rb.rotations, 1)
+
+
+class MaxRequestsTest(unittest.TestCase):
+    def test_max_requests_switches_to_next_provider(self):
+        rb = ev.RotatingBackend(PROVIDERS, max_requests=2,
+                                factory=make_factory({"a": [{"reply": "嗯。"}],
+                                                      "b": [{"reply": "在。"}]}))
+        for _ in range(2):
+            rb.chat([], "嗯", {"id": "limit"})
+        out = rb.chat([], "嗯", {"id": "limit"})
+        self.assertEqual(out["reply"], "在。")
+        report = rb.report()
+        self.assertEqual(report["providers"][0]["calls"], 2)
+        self.assertEqual(report["providers"][0]["status"], "达到单次上限")
+        self.assertEqual(report["rotations"], 1)
+
+    def test_max_requests_all_used_raises_limit(self):
+        rb = ev.RotatingBackend(PROVIDERS, max_requests=1,
+                                factory=make_factory({"a": [{"reply": "嗯。"}],
+                                                      "b": [{"reply": "在。"}]}))
+        rb.chat([], "嗯", {"id": "limit2"})
+        rb.chat([], "嗯", {"id": "limit2"})
+        with self.assertRaises(ev.RequestLimitReached):
+            rb.chat([], "嗯", {"id": "limit2"})
+
+    def test_limit_skipped_case_not_counted_in_rate(self):
+        class OneTurn:
+            name = "rotate"
+
+            def __init__(self):
+                self.calls = 0
+
+            def reset_case(self, case):
+                pass
+
+            def chat(self, history, user, case):
+                self.calls += 1
+                raise ev.RequestLimitReached("x", 1)
+
+            def snapshot(self):
+                return {}
+
+        data = ev.evaluate(ev.CASES_FILE, OneTurn(), limit=3,
+                           on_case=lambda res: None)
+        self.assertEqual(data["results"], [])
+        self.assertEqual(data["limit_skips"], 3)
+        self.assertEqual(data["metrics"]["turns"], 0)
+
+
 class ConfigTest(unittest.TestCase):
+    def test_example_config_only_free_models(self):
+        data = json.loads(ev.EXAMPLE_BACKENDS_FILE.read_text(encoding="utf-8"))
+        for entry in data["backends"]:
+            self.assertTrue(ev.is_free_model(entry.get("model", "")),
+                            "示例配置只允许免费模型：%s" % entry.get("name"))
+            self.assertLessEqual(int(entry.get("max_tokens") or 0), ev.MAX_TOKENS_CAP)
+
+    def test_local_config_only_free_models(self):
+        path = ev.DEFAULT_BACKENDS_FILE
+        if not path.exists():
+            self.skipTest("本地轮换配置不存在（按需创建）")
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        for entry in data["backends"]:
+            self.assertTrue(ev.is_free_model(entry.get("model", "")),
+                            "本地配置只允许免费模型：%s" % entry.get("name"))
+
+    def test_provider_delay_is_parsed(self):
+        """免费端点按 IP 限速时，配置里可以给每家单独的 delay。"""
+        cfg = json.dumps([{"name": "slow", "base": "https://x.example", "model": "",
+                           "requires_key": False, "delay": 46}])
+        with mock.patch.dict(os.environ, {"HUMAN_FEEL_BACKENDS": cfg}):
+            providers, skipped = ev.load_providers()
+        self.assertEqual(providers[0]["delay"], 46)
+        self.assertEqual(skipped, [])
+
     def test_env_json_resolves_key_and_skips_missing(self):
         cfg = json.dumps([
-            {"name": "with-env", "base": "https://x.example", "model": "m",
+            {"name": "with-env", "base": "https://x.example", "model": "vendor/m:free",
              "key_env": "W20_TEST_KEY"},
-            {"name": "no-key", "base": "https://y.example", "model": "m2"},
-            {"name": "keyless", "base": "https://z.example", "model": "m3",
+            {"name": "no-key", "base": "https://y.example", "model": "vendor/m2:free"},
+            {"name": "keyless", "base": "https://z.example", "model": "",
              "requires_key": False},
         ])
         with mock.patch.dict(os.environ, {"HUMAN_FEEL_BACKENDS": cfg,
@@ -161,7 +311,7 @@ class ConfigTest(unittest.TestCase):
         """Windows PowerShell 写出的 UTF-8 BOM 不能让轮换启动失败。"""
         import tempfile
         body = json.dumps([{"name": "bom", "base": "https://x.example",
-                            "model": "m", "requires_key": False}])
+                            "model": "vendor/m:free", "requires_key": False}])
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8-sig",
                                          delete=False) as f:
             f.write(body)
