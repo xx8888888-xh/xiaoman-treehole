@@ -6,7 +6,7 @@
  *   - 汇总 count / avg / p95 / max，供"对话路径有没有 O(n) 全量重排"取证
  * 幂等：重复注入只生效一次；未加载页面时不做任何事。
  * ============================================================ */
-const PerfProbe = (() => {
+var PerfProbe = (() => {
   const buckets = Object.create(null);
   const targets = [
     ["push", "push"], ["older", "older"], ["patch", "patch"], ["markVoice", "markVoice"],

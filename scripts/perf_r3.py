@@ -106,6 +106,15 @@ async def attach(ctx, page):
     return session
 
 
+async def wait_greet_done(page, timeout=15000):
+    """开场白/心跳等自动消息结束（typing 收起 + 条数稳定），此时才真的能发送"""
+    await page.wait_for_function(
+        """() => { const p = window.ChatPager && window.ChatPager.stats();
+            const t = document.getElementById('typingRow');
+            return p && p.total >= 1 && t && t.classList.contains('hidden'); }""",
+        timeout=timeout, polling=50)
+
+
 async def js_state(page, session):
     await session.send("HeapProfiler.collectGarbage")
     raw = await session.send("Performance.getMetrics")
@@ -171,11 +180,14 @@ async def measure_load_once(browser):
     t_nav = time.perf_counter()
     await page.goto(BASE + "?perfdraw=1", wait_until="domcontentloaded")
     dcl = round((time.perf_counter() - t_nav) * 1000)
-    # 「首条消息可发送」：输入框 + 发送键存在且未被禁用；随即真发一条，等自己的气泡落地
+    # 「首条消息可发送」：bind 完成（发送键已挂 onclick）→ 等开场白说完 →
+    # 真发一条并等自己的气泡落地，取全程时刻。
     await page.wait_for_function(
         "() => { const b = document.getElementById('sendBtn'), t = document.getElementById('textInput');"
-        " return !!(b && t) && !b.disabled; }", timeout=15000, polling=25)
+        " return !!(b && t && b.onclick); }", timeout=15000, polling=25)
     input_ready = round(await page.evaluate("performance.now()"))
+    await wait_greet_done(page)
+    ready_to_send = round(await page.evaluate("performance.now()"))
     await page.evaluate(
         """() => { const t = document.getElementById('textInput');
             t.value = '在吗'; t.dispatchEvent(new Event('input', { bubbles: true }));
@@ -209,7 +221,8 @@ async def measure_load_once(browser):
     res = {
         "fcp": perf.get("fcp"), "lcp": perf.get("lcp"),
         "dclMs": dcl, "bindMs": bind, "mountMs": mount,
-        "inputReadyMs": input_ready, "firstSendMs": first_send,
+        "inputReadyMs": input_ready, "readyToSendMs": ready_to_send,
+        "firstSendMs": first_send,
         "long": lt_summary(perf["longTasks"]),
         "heapPeakMB": round(heap_peak["v"] / 1048576, 2),
         "heapAfterGcMB": round((after["JSHeapUsedSize"] or 0) / 1048576, 2),
@@ -238,7 +251,8 @@ async def measure_load(browser, repeats=3):
         "median": {
             "fcp": med("fcp"), "lcp": med("lcp"), "dclMs": med("dclMs"),
             "bindMs": med("bindMs"), "mountMs": med("mountMs"),
-            "inputReadyMs": med("inputReadyMs"), "firstSendMs": med("firstSendMs"),
+            "inputReadyMs": med("inputReadyMs"), "readyToSendMs": med("readyToSendMs"),
+            "firstSendMs": med("firstSendMs"),
             "longMax": round(statistics.median([r["long"]["max"] for r in runs])),
             "longOver50": round(statistics.median([r["long"]["over50"] for r in runs])),
             "longOver50Max": round(statistics.median([r["long"]["over50max"] for r in runs])),
@@ -249,6 +263,7 @@ async def measure_load(browser, repeats=3):
 
 # ---------------------------------------------------------------- 2) stream
 async def send_and_reply(page, text, timeout=15000):
+    await wait_greet_done(page, timeout=8000)
     before = await page.evaluate("window.ChatPager.stats().total")
     await page.evaluate(
         """(t) => { const ta = document.getElementById('textInput');
@@ -296,8 +311,7 @@ async def measure_stream(browser, fill=200):
     ctx, page = await new_page(browser, CFG_MOCK)
     session = await attach(ctx, page)
     await page.goto(BASE, wait_until="domcontentloaded")
-    await page.wait_for_function("() => window.ChatPager && window.ChatPager.stats().total > 0",
-                                 timeout=15000)
+    await wait_greet_done(page)
     await attach_probe(page)
     small = await stream_probe(page, session, "session_small")
     # 直接把会话拉到 200 条（只进 pager 记录，不写库；DOM 窗口恒 14 行）
@@ -318,10 +332,9 @@ async def measure_stream(browser, fill=200):
 # ---------------------------------------------------------------- 3) micro
 async def measure_micro(browser):
     ctx, page = await new_page(browser, CFG_OFFLINE)
-    await attach_probe(page)
     await page.goto(BASE, wait_until="domcontentloaded")
-    await page.wait_for_function("() => window.ChatPager && window.ChatPager.stats().total > 0",
-                                 timeout=15000)
+    await wait_greet_done(page)
+    await attach_probe(page)
     runs = []
     for _ in range(3):
         runs.append(await page.evaluate(
@@ -351,18 +364,17 @@ async def measure_micro(browser):
             }
         }""", [sid, 300])
     await page.reload(wait_until="domcontentloaded")
-    await page.wait_for_function("() => window.ChatPager && window.ChatPager.stats().total > 0",
-                                 timeout=15000)
+    await wait_greet_done(page)
     await attach_probe(page)
     pages = []
-    for _ in range(24):
+    for _ in range(18):
         dt = await page.evaluate(
             """async () => { const t0 = performance.now(); await window.ChatPager.older(); return performance.now() - t0; }""")
         pages.append(round(dt, 2))
     await page.evaluate("window.ChatPager.jumpLatest()")
     pager = await page.evaluate("window.ChatPager.stats()")
     await ctx.close()
-    return {"push": push, "older24": pages,
+    return {"push": push, "older18": pages,
             "olderAvgMs": round(statistics.mean(pages), 2),
             "olderMaxMs": round(max(pages), 2),
             "olderP95Ms": round(sorted(pages)[int(len(pages) * 0.95) - 1], 2),
@@ -374,8 +386,7 @@ async def measure_memory(browser, rounds=200):
     ctx, page = await new_page(browser, CFG_OFFLINE)
     session = await attach(ctx, page)
     await page.goto(BASE, wait_until="domcontentloaded")
-    await page.wait_for_function("() => window.ChatPager && window.ChatPager.stats().total > 0",
-                                 timeout=15000)
+    await wait_greet_done(page)
     await asyncio.sleep(1.5)
     s0 = await js_state(page, session)
     tex0 = await page.evaluate(
