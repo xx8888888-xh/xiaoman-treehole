@@ -1,0 +1,2 @@
+# Git 钩子在 Windows 上也必须保持 LF，否则 sh.exe 会报 "$'\r': command not found"
+* text eol=lf

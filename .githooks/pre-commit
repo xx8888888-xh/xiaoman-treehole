@@ -1,0 +1,68 @@
+#!/bin/sh
+# .githooks/pre-commit · 提交前轻检查（不跑测试）
+# 只做两件事：biome 白名单 lint + 发布物一致性（web ↔ assets/www）。
+# 刻意不跑 node --test / pytest：提交体验优先，重闸门交给 ci.yml 与 scripts/gate.ps1。
+#
+# 启用（每个克隆/worktree 各执行一次）：
+#   git config core.hooksPath .githooks
+# 临时跳过：
+#   git commit --no-verify
+#
+# 依赖缺失时降级为警告而不是硬拦，避免新克隆首次提交被环境卡住；
+# 云端 ci.yml 仍是硬闸门，不会因此漏网。
+
+set -u
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+
+fail=0
+
+# ---------- biome ----------
+biome="web/node_modules/.bin/biome"
+if [ -x "$biome" ] || [ -x "$biome.cmd" ]; then
+  # Git for Windows 的 sh 里 npm 是 shell 脚本，只有 npm.cmd 能直接执行
+  if command -v npm.cmd >/dev/null 2>&1; then npm_bin=npm.cmd
+  elif command -v npm >/dev/null 2>&1; then npm_bin=npm
+  else npm_bin=""; fi
+  if [ -n "$npm_bin" ]; then
+    echo "[pre-commit] biome check（白名单）"
+    biome_log="${TMPDIR:-/tmp}/treehole-precommit-biome.log"
+    # 白名单本身有 200+ 条 warning，正常时静默；只有失败才打印末尾
+    if ( cd web && "$npm_bin" run -s lint > "$biome_log" 2>&1 ); then
+      :
+    else
+      echo "[pre-commit] biome 未通过，日志末尾："
+      tail -n 20 "$biome_log"
+      fail=1
+    fi
+  else
+    echo "[pre-commit] 警告：未找到 npm，跳过 biome（云端 ci.yml 仍会拦）"
+  fi
+else
+  echo "[pre-commit] 警告：web/node_modules 未安装，跳过 biome（cd web && npm ci 后启用）"
+fi
+
+# ---------- 发布物一致性 ----------
+py=""
+for cand in ".venv/Scripts/python.exe" ".venv-win/Scripts/python.exe"; do
+  if [ -f "$cand" ]; then py="$cand"; break; fi
+done
+if [ -z "$py" ] && command -v python >/dev/null 2>&1; then py=python; fi
+if [ -z "$py" ] && command -v python3 >/dev/null 2>&1; then py=python3; fi
+
+if [ -n "$py" ]; then
+  echo "[pre-commit] verify_assets（web ↔ assets/www）"
+  "$py" scripts/verify_assets.py || fail=1
+else
+  echo "[pre-commit] 警告：未找到 python，跳过 verify_assets（云端 ci.yml 仍会拦）"
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "[pre-commit] 轻检查未通过：修好后再提交，或 git commit --no-verify 临时跳过（云端会重跑）。"
+  echo ""
+  exit 1
+fi
+
+exit 0

@@ -28,6 +28,15 @@
 - 测试：`node --test "web/tests/*.test.js"`、`pytest server/tests`、`biome`、`scripts/verify_assets.py`、`scripts/test_appearance.py` 全绿；浏览器 headless + `--mute-audio`，TTS provider=off。
 - 与 w5 潜在冲突：`web/index.html` 悬浮输入行区块、`web/js/app.js` 悬浮窗 UI 区块；合并时以 w5 的功能逻辑为准，只保留本分支的 class/结构改造。
 
+## w22 · feat/quality-r3（质量基础设施 R3）
+
+- worktree：`treehole-w22`；分支 `feat/quality-r3`；基线 `a283342`（主干 r5-20261105）。
+- 目标：补齐闸门覆盖（python 脚本进 ci）、biome 覆盖面分档扩张、本地一键闸门、pre-commit 轻检查、e2e 产物留档。
+- 可改：`.github/workflows/ci.yml`、`.github/workflows/e2e.yml`、`web/package.json`、`scripts/gate.ps1`、`.githooks/**`、`docs/QUALITY_R3.md`、本文件。
+- 禁止：`web/js/**`、`web/css/**`、`server/**`、`android/**`、`assets/**`；`android.yml` / `android-release.yml` / `ui-shots.yml` / `perf.yml`（其他并行任务在改）。
+- 约束：本地只跑轻量命令且串行（CPU ≤40%），禁止 headless 浏览器 / AVD / Gradle；云端跑不绿不许 skip。
+- 交付：小步提交，推送 `feat/quality-r3`。
+
 ## 提交规范（四路通用）
 - 小步提交，前缀 `w1:` / `w2:` / `w3:` / `w4:`
 - 每个小块独立可测（`node --test` / `pytest` 通过即提交）

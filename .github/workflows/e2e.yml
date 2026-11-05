@@ -73,8 +73,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Short sha
-        id: meta
+      - name: Resolve short SHA
+        id: sha
+        # 产物留档按提交短 sha 区分，避免多次 run 同名覆盖/难以追溯
         run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
@@ -169,6 +170,8 @@ jobs:
             grep -h "=== .* 通过 ===" artifacts/raf.log 2>/dev/null | sed 's/^/| raf | /; s/$/ |/' || echo "| raf | (未运行/无汇总) |"
             echo ""
             echo "rAF 采样秒数：\`${RAF_SECONDS}\`；TTS provider：\`${XIAOMAN_TTS_PROVIDER}\`（静音）"
+            echo ""
+            echo "产物：\`e2e-artifacts-${{ steps.sha.outputs.short }}\`（截图/日志/关键 JSON，保留 7 天）"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dump container logs on failure
@@ -176,10 +179,11 @@ jobs:
         run: docker compose logs --tail=120 || true
 
       - name: Upload artifacts
+        # 截图（shots/live2d/raf）+ 各套件日志 + 关键 JSON 全部留档；名字带提交短 sha，保留 7 天
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-core-${{ steps.meta.outputs.short }}
+          name: e2e-artifacts-${{ steps.sha.outputs.short }}
           path: artifacts/
           if-no-files-found: ignore
           retention-days: 7
