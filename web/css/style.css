@@ -740,7 +740,7 @@ html[data-preset="minimal"] { --bubble-me: var(--surface-2); }
 .drawer-panel::before, .modal-panel::before {
   content: "";
   position: absolute;
-  top: 8px;
+  top: var(--space-2);
   left: 50%;
   width: 36px;
   height: 4px;
@@ -1154,33 +1154,33 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
 .pending-close:hover { background: var(--surface); }
 
 /* ---------- 首次使用：空状态 ----------
-   一个焦点：一句话标题；其余（记号、说明、三个入口）都是次级，尺寸/颜色主动退让 */
+   首页的焦点是人，不是这块提示：所以不铺底色、不描边框，
+   只留一句邀请 + 三个入口；字号压在 body/caption 档，不与开场白抢注意力 */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-1);
-  margin: var(--space-3) 0 var(--space-2);
-  padding: var(--space-6) var(--space-4) var(--space-5);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
+  margin: var(--space-2) 0 0;
+  padding: var(--space-4) 0 var(--space-2);
+  border: 0;
+  background: transparent;
   text-align: left;
 }
 .empty-art {
-  width: var(--tap-sm);
-  height: var(--tap-sm);
-  margin-bottom: var(--space-2);
-  color: var(--line-strong);
+  width: var(--icon);
+  height: var(--icon);
+  margin-bottom: var(--space-1);
+  color: var(--text-3);
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5;
   stroke-linecap: round;
 }
 .empty-title {
-  font-size: var(--text-title);
+  font-size: var(--text-body);
   font-weight: var(--w-semibold);
-  line-height: var(--lh-tight);
+  line-height: var(--lh-snug);
   letter-spacing: .01em;
   color: var(--text);
 }
@@ -1188,7 +1188,7 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   margin-top: var(--space-1);
   font-size: var(--text-caption);
   line-height: var(--lh-snug);
-  color: var(--text-2);
+  color: var(--text-3);
 }
 .quick-starts { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
 .quick-chip {
@@ -1467,8 +1467,8 @@ body.widget-mode #app { background: transparent; }
 
 body.widget-mode #stage {
   position: fixed;
-  right: 12px;
-  bottom: 18px;
+  right: var(--space-3);
+  bottom: var(--space-4);
   width: 88px;
   height: 88px;
   min-height: 88px;
@@ -1485,8 +1485,8 @@ body.widget-mode #stage::after { display: none; }
 
 #widgetBubble {
   position: fixed;
-  right: 14px;
-  bottom: 120px;
+  right: var(--space-4);
+  bottom: calc(var(--space-6) * 4);   /* 128px：落在悬浮小满头顶上方一格 */
   z-index: 901;
   display: none;
   max-width: 240px;
@@ -1533,7 +1533,7 @@ body.float-mode .float-hidden { display: none !important; }
 #reminderList .solid-btn {
   background: var(--surface-2);
   color: var(--text);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   box-shadow: none;
 }
 #memoryClear {
