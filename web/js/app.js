@@ -352,6 +352,7 @@ const App = (() => {
   const SID = API.sessionId();   // 浏览器侧与服务端落盘共用同一个 session id
   let busy = false;
   let sending = false;       // 发送互斥锁：防止 greet/心跳/poke/hook 与用户发送并发
+  let userInitiated = false; // 用户是否已先开口：开场白因此让位（不插队、不挡首条消息）
   let sendQueue = [];        // 等待发送的消息队列
   let lockDepth = 0;         // 发送锁重入深度（同一调用链嵌套获取时直接放行，避免自锁）
   let idleTimers = [];
@@ -1410,6 +1411,9 @@ const App = (() => {
   async function send(text, opts = {}) {
     text = (text || "").trim();
     if (!text || busy) return;
+    // 用户先开口：开场白（若还没播）在定时器里看到这个标记就跳过本次，
+    // 首条消息不会被开场白的发送锁排在后面（下次冷启动仍照常开场）。
+    if (!opts.resend) userInitiated = true;
     busy = true; $("sendBtn").disabled = true;
     resetIdle();
 
@@ -1751,6 +1755,9 @@ const App = (() => {
   const GREET_KEY = "xiaoman_greet_at";       // 上次开场时间
   const GREET_TAIL_KEY = "xiaoman_greet_tail"; // 上次开场的末条文案（用于内容去重）
   function greet() {
+    // 用户已经先开口：这一次不再插"刚见到你"的开场，省掉开场白占用的发送锁，
+    // 首条消息立刻落地。幂等标记也不写，下次冷启动用户没先说话时仍会照常开场。
+    if (userInitiated) { console.log("[probe] greet skipped user-first"); return; }
     let lastGreet = 0, tail = "";
     try {
       lastGreet = Number(localStorage.getItem(GREET_KEY) || 0) || 0;
@@ -1782,17 +1789,19 @@ const App = (() => {
     // P0-3 升级告知：人格层变更后首次再访主动说（插时段问候与开场引用之间）。
     // 只对有记忆的老用户说——新用户没有"以前"可对比；说完/跳过即登记版本，幂等
     const told = parseInt(localStorage.getItem(TOLD_KEY) || "0", 10) || 0;
+    let toldNew = false;
     if (told < XIAOMAN_VERSION) {
       if (Object.values(mem).some(v => v)) reply += `||${UPDATE_TELL}`;
-      localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
+      toldNew = true;   // 标记只在开场真的播出去时才落盘（被跳过就留给下次）
     }
     // P1-1 月度回放：新月首次开场回放上月话题（数据=真实记忆索引；幂等键=month_done，
     // 离线引擎 greet 分支同键写入双端不双播；话题<2 不硬凑——没聊够就不播）
+    let monthNew = null;
     try {
       const pm = prevMonthStr(Date.now());
       const md = localStorage.getItem(MONTH_DONE_KEY) || "";
       if (md !== pm) {
-        localStorage.setItem(MONTH_DONE_KEY, pm);
+        monthNew = pm;
         const topics = monthTopics(pm);
         if (topics.length >= 2) {
           reply += `||翻了翻小本本||上个月你跟我聊过${topics.join("、")}，我都记着呢。这个月接着来`;
@@ -1814,11 +1823,19 @@ const App = (() => {
         reply += `||对了，你之前跟我说的那几句话我都记着||刚才信号不太好没接上——你随便说句什么，我缓过来就回你`;
       }
     } catch (e) { /* 数据层异常不挡开场 */ }
-    try {
-      localStorage.setItem(GREET_KEY, String(Date.now()));
-      localStorage.setItem(GREET_TAIL_KEY, reply.split("||").pop());
-    } catch (e) {}
     setTimeout(() => {
+      // 900ms 开场窗口内用户先发了消息：同样跳过这一次（幂等标记留到下次真正开场时写）
+      if (userInitiated) {
+        console.log("[probe] greet skipped user-first");
+        return;
+      }
+      try {
+        if (toldNew) localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
+        if (monthNew) localStorage.setItem(MONTH_DONE_KEY, monthNew);
+        localStorage.setItem(GREET_KEY, String(Date.now()));
+        localStorage.setItem(GREET_TAIL_KEY, reply.split("||").pop());
+      } catch (e) {}
+      console.log("[probe] greet played ms=" + Math.round(performance.now()));
       sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
     }, 900);
   }
