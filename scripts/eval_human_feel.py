@@ -1017,11 +1017,13 @@ def render_markdown(summary: dict, backend_name: str, model: str = "",
              "", "| 类别 | 通过/总数 |", "|---|---|"]
     cov = summary.get("coverage")
     if cov:
-        lines.insert(4, "覆盖率：完成 %d/%d 条（%.1f%%）＝续跑带入 %d + 本次新跑 %d，"
-                        "剩余 %d 条未跑。" % (cov["completed"], cov["expected"],
-                                           cov["rate"] * 100, cov["resumed"], cov["new"],
-                                           cov["expected"] - cov["completed"]))
-        lines.insert(5, "")
+        text = ("覆盖率：完成 %d/%d 条（%.1f%%）＝续跑带入 %d + 本次新跑 %d%s，剩余 %d 条未跑。"
+                % (cov["completed"], cov["expected"], cov["rate"] * 100,
+                   cov["resumed"], cov["new"],
+                   ("（其中重试历史失败 %d 条）" % cov["retried"]) if cov.get("retried") else "",
+                   cov["expected"] - cov["completed"]))
+        lines.insert(2, text)  # 紧跟标题，别插进表格里
+        lines.insert(3, "")
     for cat, st in summary["by_category"].items():
         lines.append("| %s | %d/%d |" % (cat, st["passed"], st["total"]))
     rot = summary.get("rotation")
@@ -1186,14 +1188,16 @@ def main(argv=None) -> int:
             merged[s["id"]] = s  # 重跑的失败用例以新结果为准
         stats = sorted(merged.values(), key=lambda s: order.get(s["id"], 999))
         summary = summarize_stats(stats, metrics_from_stats(stats), aborted, limit_skips)
-        if prior_stats:
-            summary["coverage"] = {
-                "expected": expected,
-                "completed": len(stats),
-                "resumed": len(stats) - len(results),
-                "new": len(results),
-                "rate": round(len(stats) / (expected or 1), 4),
-            }
+        prior_failed = {s["id"] for s in prior_stats if not s["passed"]}
+        summary["coverage"] = {
+            "expected": expected,
+            "completed": len(stats),
+            "resumed": len(stats) - len(results),
+            "new": len(results),
+            # 本次跑的是历史失败用例（重试），报告要能看出来
+            "retried": sum(1 for r in results if r.case["id"] in prior_failed),
+            "rate": round(len(stats) / (expected or 1), 4),
+        }
         summary["case_stats"] = stats
         summary["passed_ids"] = [s["id"] for s in stats if s["passed"]]
         summary["failed_ids"] = [s["id"] for s in stats if not s["passed"]]
@@ -1233,10 +1237,17 @@ def main(argv=None) -> int:
                 "未配置 key 跳过：%s" % "、".join(s["name"] for s in skipped)
         cov = summary.get("coverage")
         if cov:
-            summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
-                ("断点续跑：历史带入 %d 条、本次新跑 %d 条，完成 %d/%d（%.1f%%），剩余 %d 条"
-                 % (cov["resumed"], cov["new"], cov["completed"], cov["expected"],
-                    cov["rate"] * 100, cov["expected"] - cov["completed"]))
+            if cov["resumed"]:
+                note = ("断点续跑：历史带入 %d 条、本次新跑 %d 条（其中重试历史失败 %d 条），"
+                        "完成 %d/%d（%.1f%%），剩余 %d 条"
+                        % (cov["resumed"], cov["new"], cov["retried"], cov["completed"],
+                           cov["expected"], cov["rate"] * 100,
+                           cov["expected"] - cov["completed"]))
+            else:
+                note = ("覆盖率：本次新跑 %d 条，完成 %d/%d（%.1f%%），剩余 %d 条"
+                        % (cov["new"], cov["completed"], cov["expected"],
+                           cov["rate"] * 100, cov["expected"] - cov["completed"]))
+            summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + note
         md = render_markdown(summary, summary["backend"], summary["model"], summary["notes"])
         if final:
             print(md)

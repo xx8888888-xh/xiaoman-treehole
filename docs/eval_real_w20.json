@@ -2506,5 +2506,13 @@
  "model": "openrouter-free、pollinations",
  "backend": "rotate",
  "seconds": 12308.7,
- "notes": "后端调用失败 1 次（限流 0 次）；失败用例不计入质量分"
+ "notes": "后端调用失败 1 次（限流 0 次）；失败用例不计入质量分；覆盖率：本次新跑 112 条，完成 112/112（100.0%），剩余 0 条",
+ "coverage": {
+  "expected": 112,
+  "completed": 112,
+  "resumed": 0,
+  "new": 112,
+  "retried": 0,
+  "rate": 1.0
+ }
 }
