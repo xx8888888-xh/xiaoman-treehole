@@ -108,9 +108,11 @@ const Reminders = (() => {
     const when = time instanceof Date ? time : parseTime(time);
     if (!when || !when.getTime || !text) return null;
     const list = load();
+    // 字段一次写全（doneAt/updatedAt 显式给 0 或当前值），导出→导入不会因缺字段而漂移
+    const now = Date.now();
     const item = {
       id: newId(), text: String(text).slice(0, 80),
-      at: when.getTime(), done: false, createdAt: Date.now()
+      at: when.getTime(), done: false, doneAt: 0, createdAt: now, updatedAt: now
     };
     list.push(item); save(list);
     return item;
