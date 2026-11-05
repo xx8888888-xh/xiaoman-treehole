@@ -18,6 +18,10 @@ import json
 import os
 import sys
 
+from browser_guard import require_browser_allowed
+
+require_browser_allowed(__file__)
+
 from playwright.sync_api import sync_playwright
 
 MOBILE = {"width": 390, "height": 844}
