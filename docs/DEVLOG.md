@@ -21,6 +21,17 @@
 - 关键函数复核全部在位：`startWander`/`stopWander`/`pickTier`/`modelUrl`/`activeTier`/`freezeTimer`/`pauseForEnv`/`resetSession`/`sessionId()`/`focusHead`/`XMTimeDivider`；`mock_engine.js` 契约为 `reply(history, sid)`。
 - 本地限制：断电后 WSL docker 守护未启动且 `sudo` 需密码，本轮**不跑本地 e2e/live2d/rAF/feature-loop**（改由云端 `e2e.yml` 执行），全程未起 headless 浏览器、未开 AVD、未跑本地 Gradle。
 
+### 云端复核（真实数据）
+| workflow | run | 结果 | 关键数字 |
+|---|---|---|---|
+| `e2e.yml` | [42013142895](https://github.com/xx8888888-xh/xiaoman-treehole/actions/runs/42013142895) | **success**（browser-e2e，5m57s） | e2e **60/60**、feature_loop **43/43**、live2d **24/24**、rAF **8/8**（静止 60s 全局 rAF **0 次**；对话 60.01/s；恢复可见 61 次/s） |
+| `android.yml` | [42013149098](https://github.com/xx8888888-xh/xiaoman-treehole/actions/runs/42013149098) | **success**（build-debug-apk） | APK **1,025,320 B / 0.98 MiB**（`xiaoman-treehole-debug.apk`）；云端资产 68 files / 1,290,804 B |
+| `ci.yml`（r5 推送自动触发） | [42012998093](https://github.com/xx8888888-xh/xiaoman-treehole/actions/runs/42012998093) | **success** | python-tests / python-scripts(test_mock_api) / python-scripts(test_memory_recall) / node-tests-and-lint 四 job 全绿 |
+
+> 体积对比：r4 时 APK 约 4.8 MB、`assets/www` 86 files / 6.5 MB；r5 合并 w17 后 **0.98 MiB**，`docs/android-battery/R2_SLIM_POWER_REPORT.md` 记录的 256 色 + 剔除未用层在云端产物上得到验证。本地与云端资产字节差 ~12 KB 来自 Windows 工作区 CRLF，非内容差异。
+
+**收尾**：`treehole-w15/w16/w17` worktree 已 `git worktree remove`（工作区干净；w16 末尾的 `5af8e8c` 与主干 `scripts/test_e2e.py` blob 完全一致，内容已全部落地），分支保留；tag `r5-20261105` → `caf2c6e`。
+
 **触及**：`web/js/{app,chat_pager,api,backup,mock_engine,pet,reminders,stats,store,time_divider}.js`、`web/css/style.css`、`web/index.html`、`server/mock_api.py`、`server/tests/test_session_io.py`、`web/tests/**`、`scripts/{test_roundtrip,test_msg_edit,optimize_art,asset_excludes}.py|sh`、`web/assets/live2d/original/art/**`、`docs/**`；本条 + `docs/PROJECT_STATE.md`。
 
 ---
