@@ -51,6 +51,60 @@
   let watchdogTimer = 0;
   let envPaused = false;   // 页面不可见/窗口失焦期间暂停（收起桌宠时也走这里）
 
+  /* ---------- 静止分档（耗电 P0） ----------
+   * 实测：后台桌宠可见时主进程 5 分钟吃掉 194.2s CPU（单核 64.7%），
+   * 根因是 60fps 全画布重绘一直在跑，而桌面宠物绝大多数时间是"没人看"的。
+   * 分三档，全部以「最后一次交互」为基准：
+   *   0–6s   全帧（呼吸/眨眼/视线漫游）
+   *   6–10s  15fps（保呼吸与眨眼，砍掉 3/4 的帧）
+   *   >10s   完全停 rAF 与 draw，只在触摸/可见性变化/10s 呼吸节拍补一帧
+   * 任何触摸、表情动作、原生补帧都会把计时器清零并重新开循环。 */
+  const IDLE_THROTTLE_MS = 6000;
+  const IDLE_STOP_MS = 10000;
+  const IDLE_FPS = 15;
+  const FRAME_CAP_MS = 1000 / IDLE_FPS;
+  const BREATH_WAKE_MS = 10000;
+  let lastActionAt = Date.now();
+  let idleStopped = false;
+  let breathTimer = 0;
+  let appliedMotion = null;
+  let loopTimer = 0;      // 降帧期用 setTimeout 排下一帧，彻底不占 rAF
+
+  /** 记录一次"有人在看"：重置静止计时；若已停机则重新开循环 */
+  function noteActivity() {
+    lastActionAt = Date.now();
+    if (!idleStopped) return;
+    idleStopped = false;
+    clearTimeout(breathTimer);
+    breathTimer = 0;
+    startLoop();
+  }
+
+  /** 连续静止到点：停 rAF、定格最后一帧，改为低频呼吸节拍 */
+  function enterIdleStop() {
+    stopLoop();
+    idleStopped = true;
+    lastPaintAt = Date.now();
+    log("pet-idle-stop");
+    clearTimeout(breathTimer);
+    breathTimer = setTimeout(breathTick, BREATH_WAKE_MS);
+  }
+
+  /** 停机后的呼吸节拍：只补一帧（update+render 一次），绝不重开循环 */
+  function breathTick() {
+    breathTimer = 0;
+    if (!mounted || !motion || !puppet || envBlocked() || !idleStopped) return;
+    try {
+      puppet.update(0.4);      // 约 10s 的呼吸相位推进
+      renderFrame();
+    } catch (e) {
+      log("pet-breath-error " + (e && e.message));
+    }
+    if (idleStopped && Date.now() - lastActionAt >= IDLE_STOP_MS) {
+      breathTimer = setTimeout(breathTick, BREATH_WAKE_MS);
+    }
+  }
+
   function log(msg) {
     try { console.log("[probe] " + msg); } catch (e) { /* 忽略 */ }
   }
@@ -130,12 +184,51 @@
     greeting: "nod", nod: "nod", shake: "shake", happyjump: "nod", talk: "talk",
   };
 
+  /* 只画窗口真正看得见的那一段：画布 CSS 高 300% 窗口、宽屏时还会左右溢出，
+   * 剩下约 2/3 高度和两侧都被 #petStage 的 overflow:hidden 裁掉。
+   * Canvas2D 在软件光栅下会为整块后备缓冲逐帧上色，这里加一个取景 clip，
+   * Skia 只处理可见矩形（约为整块面积的 20%），帧量不变而像素量按面积下降。 */
+  const CLIP_MARGIN_PX = 6;
+
+  function visibleRect() {
+    const full = { x: 0, y: 0, w: puppet ? puppet.W : 0, h: puppet ? puppet.H : 0 };
+    if (!puppet || !canvas) return full;
+    const cw = canvas.clientWidth;
+    const chh = canvas.clientHeight;
+    const sw = stageEl.clientWidth;
+    const sh = stageEl.clientHeight;
+    if (!cw || !chh || !sw || !sh) return full;
+    const k = puppet.H / chh;                 // 后备像素 / CSS 像素
+    const vw = Math.min(cw, sw);
+    const vh = Math.min(chh, sh - 8);         // CSS: canvas top = 8px
+    const x = Math.max(0, Math.round(((cw - vw) / 2) * k) - CLIP_MARGIN_PX);
+    const y = 0;                              // 顶边从 0 起，margin 已把 8px 偏移算进去
+    const w = Math.min(puppet.W - x, Math.round(vw * k) + CLIP_MARGIN_PX * 2);
+    const h = Math.min(puppet.H - y, Math.round(vh * k) + CLIP_MARGIN_PX * 2);
+    return { x, y, w, h };
+  }
+
+  function renderFrame() {
+    if (!puppet) return;
+    const ctx = puppet.ctx;
+    const r = visibleRect();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.clip();
+    try {
+      puppet.render();
+    } finally {
+      ctx.restore();
+    }
+    lastPaintAt = Date.now();
+  }
+
   function renderOnce() {
     if (!puppet) return;
     try {
       puppet.fit();
-      puppet.render();
-      lastPaintAt = Date.now();
+      renderFrame();
     } catch (e) {
       log("pet-render-error " + (e && e.message));
     }
@@ -144,6 +237,8 @@
   function stopLoop() {
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
+    if (loopTimer) clearTimeout(loopTimer);
+    loopTimer = 0;
     lastTs = 0;
   }
 
@@ -158,6 +253,9 @@
     if (envPaused) return;
     envPaused = true;
     stopLoop();
+    idleStopped = false;
+    clearTimeout(breathTimer);
+    breathTimer = 0;
     clearTimeout(repaintTimer);
     repaintTimer = 0;
     log("pet-pause:" + why);
@@ -167,31 +265,60 @@
     envPaused = false;
     if (document.hidden) return;
     if (!mounted || !puppet) return;
+    lastActionAt = Date.now();   // 重新可见 = 新的交互窗口，先跑满帧
     if (motion) startLoop();
     else renderOnce();
     log("pet-resume:" + why);
   }
 
+  /** 排下一帧：满帧走 rAF；降帧期（≥6s 静止）改走 setTimeout，不再占 rAF 配额 */
+  function scheduleFrame(delayMs) {
+    if (delayMs > 0) {
+      loopTimer = setTimeout(() => {
+        loopTimer = 0;
+        frame(performance.now());
+      }, delayMs);
+    } else {
+      rafId = requestAnimationFrame(frame);
+    }
+  }
+
+  function frame(ts) {
+    rafId = null;
+    if (!puppet || !motion || envBlocked()) return;
+    const idleFor = Date.now() - lastActionAt;
+    if (idleFor >= IDLE_STOP_MS) {
+      enterIdleStop();             // 连续静止：彻底停渲，等触摸/节拍唤醒
+      return;
+    }
+    const throttled = idleFor >= IDLE_THROTTLE_MS;
+    // 只按"真正画出来的帧"推进时间；降帧期单帧跨度更大，上限放宽到 90ms
+    const dt = lastTs ? Math.min(throttled ? 0.09 : 0.05, (ts - lastTs) / 1000) : 1 / 60;
+    lastTs = ts;
+    try {
+      puppet.update(dt);           // 呼吸/眨眼/视线漫游由引擎的自动待机统一驱动
+      renderFrame();
+    } catch (e) {
+      log("pet-frame-error " + (e && e.message));
+    }
+    scheduleFrame(throttled ? FRAME_CAP_MS : 0);
+  }
+
   function startLoop() {
-    if (rafId || !puppet || !motion || envBlocked()) return;
+    if (rafId || loopTimer || !puppet || !motion || envBlocked()) return;
+    idleStopped = false;
+    clearTimeout(breathTimer);
+    breathTimer = 0;
     lastTs = 0;
-    const tick = (ts) => {
-      rafId = null;
-      if (!puppet || !motion) return;
-      const dt = lastTs ? Math.min(0.05, (ts - lastTs) / 1000) : 1 / 60;
-      lastTs = ts;
-      // 呼吸/眨眼(216ms)/视线漫游由引擎的自动待机统一驱动
-      puppet.update(dt);
-      puppet.render();
-      lastPaintAt = Date.now();
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
+    scheduleFrame(0);
   }
 
   /** 零动画：停 rAF 并定格同一帧；纹理解码后补一帧，随后不再重绘 */
   function freezeFrame() {
     stopLoop();
+    idleStopped = false;
+    clearTimeout(breathTimer);
+    breathTimer = 0;
     if (!puppet) return;
     puppet.setAutoIdle(false);
     renderOnce();
@@ -213,11 +340,13 @@
     if (!motion || !puppet) return;
     const id = MOTION_MAP[String(group || "").toLowerCase()];
     if (!id) return;
+    noteActivity();
     try { puppet.playMotion(id); } catch (e) { /* 忽略 */ }
     startLoop();
   }
 
   function interact(yRatio) {
+    noteActivity();
     const r = core.interactionFor(yRatio, Math.random());
     setEmotion(r.emotion);
     playMotion(r.motion);
@@ -228,10 +357,14 @@
   function setMotionEnabled(on) {
     motion = !!on;
     if (!puppet) return;
+    // syncAppearance 每 15s 会重放同一份外观：值没变就不能把静止停机的循环重新拉起
+    if (appliedMotion === motion) return;
+    appliedMotion = motion;
     puppet.setAutoIdle(motion);
     if (motion) {
       clearTimeout(freezeTimer);
       freezeTimer = 0;
+      noteActivity();
       startLoop();
     } else {
       freezeFrame();
@@ -257,6 +390,7 @@
   function repaint(why) {
     if (!mounted || envBlocked()) return;   // 不可见时不排 rAF；恢复可见由 visibilitychange 补帧
     clearTimeout(repaintTimer);
+    lastActionAt = Date.now();              // 原生补帧 = 窗口刚被动过，重新给 10s 满帧窗口
     log("pet-repaint:" + (why || "manual"));
     repaintTimer = setTimeout(() => {
       renderOnce();
@@ -264,11 +398,13 @@
     }, 120);
   }
 
-  /** 看门狗：rAF 被系统暂停时（窗口不可见/被移动）重新拉起并补一帧 */
+  /** 看门狗：rAF 被系统暂停时（窗口不可见/被移动）重新拉起并补一帧。
+   *  静止停机是刻意行为：看门狗不得把已经停掉的循环重新拉起。 */
   function startWatchdog() {
     clearInterval(watchdogTimer);
     watchdogTimer = setInterval(() => {
       if (!mounted || !puppet || !motion || envBlocked()) return;
+      if (idleStopped || Date.now() - lastActionAt >= IDLE_STOP_MS) return;
       if (Date.now() - lastPaintAt > 2500) {
         log("pet-watchdog");
         startLoop();
@@ -318,6 +454,7 @@
       fit();
       puppet.setEmotion("neutral");
       puppet.setAutoIdle(motion);
+      appliedMotion = motion;        // 挂载即记录已应用值，15s 外观同步不会误重启静帧
       if (motion) startLoop();
       else freezeFrame();
       log("pet-mode=" + puppet.mode);
@@ -347,6 +484,7 @@
 
   function onDown(e) {
     if (e.target && e.target.closest && e.target.closest("button")) return;
+    noteActivity();               // 触摸即恢复满帧，静止停机立即解除
     downPoint = { x: e.screenX, y: e.screenY, t: Date.now() };
     moved = false;
     longFired = false;
@@ -399,6 +537,9 @@
   function destroy() {
     mounted = false;
     stopLoop();
+    idleStopped = false;
+    appliedMotion = null;
+    clearTimeout(breathTimer); breathTimer = 0;
     clearTimeout(repaintTimer); repaintTimer = 0;
     clearTimeout(freezeTimer); freezeTimer = 0;
     clearTimeout(pressTimer); pressTimer = 0;
@@ -493,7 +634,10 @@
     tickReminders,
     repaint,
     state() {
-      return { mounted, motion, largeFont, grayIcons, ready: !!(puppet && puppet.mode !== "hidden") };
+      const idleMs = Date.now() - lastActionAt;
+      const mode = idleStopped ? "stopped" : (idleMs >= IDLE_THROTTLE_MS ? "preview" : "full");
+      return { mounted, motion, largeFont, grayIcons, ready: !!(puppet && puppet.mode !== "hidden"),
+        idle: idleStopped, idleMs, mode, loop: !!(rafId || loopTimer) };
     },
   };
 
