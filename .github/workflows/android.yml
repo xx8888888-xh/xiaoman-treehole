@@ -77,6 +77,12 @@ jobs:
           fi
           ./android/gradlew -p android "$task" --no-daemon --stacktrace
 
+      - name: Unit tests (JVM, no emulator)
+        # 纯 JVM 单测（junit4，无 Robolectric）：音频焦点/拔耳机停读等规则在这里兜住。
+        # 本地 Windows 路径含中文时 Gradle 测试 worker 会 ClassNotFoundException（与代码无关），
+        # 所以以 Linux runner 的结果为准。
+        run: ./android/gradlew -p android :app:testDebugUnitTest --no-daemon --stacktrace
+
       - name: Normalize APK + job summary
         run: |
           set -euo pipefail

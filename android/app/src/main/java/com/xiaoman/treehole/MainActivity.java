@@ -5,15 +5,11 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.speech.tts.TextToSpeech;
-import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -28,7 +24,6 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Locale;
 
 /**
@@ -56,16 +51,9 @@ public class MainActivity extends Activity {
     private static volatile boolean activityVisible = false;
 
     private WebView webView;
-    private TextToSpeech tts;
-    private volatile boolean ttsReady = false;
-    private boolean ttsInitStarted = false;
     /** <input type="file"> 的系统选择器回调（备份导入） */
     private static final int REQ_FILE_CHOOSER = 41;
     private ValueCallback<Uri[]> filePathCallback;
-
-    /** 引擎存在但初始化尚未完成时登记的一次待播（只保留最后一次，避免连点堆队列） */
-    private String pendingSpeakText;
-    private float pendingSpeakRate = 1.02f;
 
     /** 有界面可见时不弹系统通知（避免与页面内投递重复）；锁屏/杀进程时为 false */
     static boolean isAnyUiVisible() {
@@ -101,9 +89,10 @@ public class MainActivity extends Activity {
         WebShell.configureSettings(wv, this);
         wv.setWebViewClient(new AssetClient());
         wv.setWebChromeClient(newConsoleClient());
-        wv.addJavascriptInterface(new Bridge(), "AndroidTTS");
         wv.addJavascriptInterface(new AndroidHostBridge(this, this), AndroidHostBridge.NAME);
         wv.addJavascriptInterface(new NetBridge(wv), "AndroidNet");
+        // 语音桥：与两条浮窗 WebView 共用同一个注入入口与同一个引擎（见 TtsController）
+        WebShell.attachAndroidTts(wv, new Bridge());
         try { wv.setBackgroundColor(getColor(R.color.window_bg)); } catch (Exception ignored) { }
         boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         if (isDebuggable) {
@@ -362,114 +351,14 @@ public class MainActivity extends Activity {
                 || s.endsWith(".json")) ? "utf-8" : null;
     }
 
-    // ---------------- 系统 TTS（懒初始化：不朗读就不启动引擎） ----------------
+    // ---------------- 系统 TTS ----------------
+    // 引擎、音频焦点、拔耳机停读都收在 TtsController（进程级单例），
+    // 主界面与两条浮窗 WebView 共用；这里只保留宿主侧专属的桥方法。
 
-    /**
-     * TTS 引擎按需创建。为什么懒初始化：
-     * 默认"点击才朗读"意味着多数启动周期根本不需要发声，提前 new TextToSpeech
-     * 会拉起系统语音服务（多一个常驻进程/耗电），也与"全程静音"验收冲突。
-     */
-    private synchronized void ensureTts() {
-        if (tts != null || ttsInitStarted) return;
-        ttsInitStarted = true;
-        try {
-            tts = new TextToSpeech(getApplicationContext(), status -> {
-                if (status == TextToSpeech.SUCCESS) {
-                    int result = tts.setLanguage(Locale.SIMPLIFIED_CHINESE);
-                    ttsReady = (result == TextToSpeech.LANG_COUNTRY_AVAILABLE
-                            || result == TextToSpeech.LANG_AVAILABLE);
-                    if (!ttsReady) {
-                        Log.w("MainActivity", "TTS: SIMPLIFIED_CHINESE not supported, result=" + result);
-                    } else {
-                        flushPendingSpeak();   // 补播"点了但引擎还在初始化"的那一次
-                    }
-                } else {
-                    ttsReady = false;
-                    Log.e("MainActivity", "TTS init failed: status=" + status);
-                }
-            });
-            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                @Override
-                public void onStart(String utteranceId) {}
-
-                @Override
-                public void onDone(String utteranceId) { notifyTtsEnded(); }
-
-                @Override
-                public void onError(String utteranceId) { notifyTtsEnded(); }
-            });
-        } catch (Exception e) {
-            Log.w("MainActivity", "TTS unavailable: " + e.getMessage());
-            tts = null;
-            ttsReady = false;
-        }
-    }
-
-    /** 真正发声；调用方需保证 tts != null && ttsReady */
-    private boolean speakNow(String text, float rate) {
-        if (tts == null || !ttsReady || text == null || text.isEmpty()) return false;
-        float r = rate < 0.5f ? 0.5f : Math.min(rate, 2.0f);
-        try {
-            tts.setPitch(1.15f);
-            tts.setSpeechRate(r);
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, new Bundle(), "xiaoman_" + System.currentTimeMillis());
-            return true;
-        } catch (Exception e) {
-            Log.w("MainActivity", "speak failed: " + e.getMessage());
-            return false;
-        }
-    }
-
-    /** 初始化完成后的补播（由 TTS 回调线程触发，不触碰 UI） */
-    private synchronized void flushPendingSpeak() {
-        String text = pendingSpeakText;
-        float rate = pendingSpeakRate;
-        pendingSpeakText = null;
-        if (text != null) speakNow(text, rate);
-    }
-
-    /**
-     * 系统里是否存在 TTS 引擎：只查询 Provider（不 new TextToSpeech，不 bind 服务）。
-     * 这保证了「查询能力」本身不拉起语音进程（省电，也不破坏"不主动出声"的约定）。
-     * 需要 manifest 里的 <queries> 声明，否则 Android 11+ 的包可见性会把结果过滤成空。
-     */
-    private boolean hasTtsEngine() {
-        try {
-            List<ResolveInfo> engines = getPackageManager().queryIntentServices(
-                    new Intent("android.intent.action.TTS_SERVICE"), PackageManager.MATCH_DEFAULT_ONLY);
-            return engines != null && !engines.isEmpty();
-        } catch (Exception e) {
-            Log.w("MainActivity", "TTS engine query failed: " + e.getMessage());
-            return false;
-        }
-    }
-
-    private void notifyTtsEnded() {
-        if (webView != null) {
-            webView.post(() -> webView.evaluateJavascript(
-                    "window.__ttsEnded && window.__ttsEnded()", null));
-        }
-    }
-
-    /** JS 桥：系统 TTS + 本地备份保存 */
-    class Bridge {
-        @JavascriptInterface
-        public boolean speak(String text) {
-            return speakRate(text, 1.02f);
-        }
-
-        /** 带语速的朗读（慢/正常/快三档由 web 端映射成 0.86/1.02/1.18） */
-        @JavascriptInterface
-        public boolean speakRate(String text, float rate) {
-            if (text == null || text.isEmpty()) return false;
-            if (tts != null && ttsReady) return speakNow(text, rate);
-            if (!hasTtsEngine()) return false;   // 设备没有引擎：如实返回 false，交给下一级 provider
-            ensureTts();                         // 首次真正要发声时才启动引擎（不提前拉服务）
-            if (ttsReady) return speakNow(text, rate);
-            // 引擎还在初始化：登记这一次，初始化成功后补播（避免"第一下点了没声音"）
-            pendingSpeakText = text;
-            pendingSpeakRate = rate;
-            return true;
+    /** JS 桥：系统 TTS（继承自共享桥）+ 本地备份保存 + 悬浮窗控制 */
+    class Bridge extends AndroidTtsBridge {
+        Bridge() {
+            super(MainActivity.this);
         }
 
         /** 备份写进 App 专属外部目录（无需存储权限）；成功返回绝对路径，失败返回空串 */
@@ -489,22 +378,6 @@ public class MainActivity extends Activity {
                 Log.w("MainActivity", "saveBackup failed: " + e.getMessage());
                 return "";
             }
-        }
-
-        @JavascriptInterface
-        public void stop() {
-            if (tts != null) tts.stop();
-        }
-
-        /**
-         * 语音能力是否可用：只查"系统里有没有 TTS 引擎"，不 bind 服务、不预热。
-         * 为什么不再返回 ttsReady：那是"异步初始化完成没"，启动瞬间必然 false，
-         * 会让设置页把 native 误报成不可用（provider 掉到 none），文案与实际能力不一致。
-         * 真正的初始化延迟由 speakRate 的待播队列兜住。
-         */
-        @JavascriptInterface
-        public boolean available() {
-            return hasTtsEngine();
         }
 
         // ---- 悬浮窗（FloatWindowService）----
@@ -592,10 +465,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (tts != null) {
-            try { tts.stop(); } catch (Exception ignored) { }
-            try { tts.shutdown(); } catch (Exception ignored) { }
-        }
+        // TTS 引擎是进程级共享单例（浮窗可能还活着），不随 Activity 销毁 shutdown；
+        // 页面退后台时 xm_host_bootstrap 已调 TTS.stop()，朗读不会残留。
         if (webView != null) webView.destroy();
         super.onDestroy();
     }

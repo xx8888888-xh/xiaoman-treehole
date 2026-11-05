@@ -66,6 +66,53 @@ final class WebShell {
         try { web.getSettings().setTextZoom(zoom); } catch (Exception ignored) { }
     }
 
+    /**
+     * window.AndroidTTS 的**唯一**注入入口：主界面 + 桌宠 + 迷你窗三条 WebView 共用。
+     * 以前浮窗那两条各写各的、都漏了 TTS 桥，浮窗里永远没声音；集中到这里后
+     * 任何新加的 WebView 只要调本方法就同时拿到桥与完成回调的登记。
+     * 注入后做一次自检（页面未就绪会重试），结果打到 logcat：
+     *   [probe] AndroidTTS injected=1 /www/pet.html
+     * CI 用它断言"浮窗里也能拿到 window.AndroidTTS"。
+     */
+    static void attachAndroidTts(WebView web, AndroidTtsBridge bridge) {
+        if (web == null || bridge == null) return;
+        web.addJavascriptInterface(bridge, AndroidTtsBridge.NAME);
+        try {
+            TtsController.shared(web.getContext()).bindWebView(web);
+        } catch (Exception e) {
+            Log.w(TAG, "bind tts webview failed: " + e.getMessage());
+        }
+        probeTtsBridge(web, 0);
+    }
+
+    /** 页面脚本就绪前 evaluateJavascript 可能拿不到结果：短间隔重试，直到桥可见 */
+    private static void probeTtsBridge(WebView web, int attempt) {
+        if (web == null || attempt > 12) {
+            if (attempt > 12) Log.d("XiaoManWeb", "[probe] AndroidTTS injected=0 timeout");
+            return;
+        }
+        web.postDelayed(() -> {
+            try {
+                web.evaluateJavascript(TTS_PROBE_JS, value -> {
+                    String s = value == null ? "" : value.replace("\"", "");
+                    if (s.startsWith("1 ")) {
+                        Log.d("XiaoManWeb", "[probe] AndroidTTS injected=1 " + s.substring(2));
+                    } else {
+                        probeTtsBridge(web, attempt + 1);
+                    }
+                });
+            } catch (Exception e) {
+                probeTtsBridge(web, attempt + 1);
+            }
+        }, attempt == 0 ? 1200L : 800L);
+    }
+
+    /** 返回 "1 <path>" 或 "0 <path>"：桥上的四个方法都可见才算注入成功 */
+    private static final String TTS_PROBE_JS = "(function(){var b=window.AndroidTTS;"
+            + "var ok=!!(b&&typeof b.speak==='function'&&typeof b.speakRate==='function'"
+            + "&&typeof b.stop==='function'&&typeof b.available==='function');"
+            + "return (ok?'1 ':'0 ')+(location.pathname||'')+(location.search||'');})()";
+
     /** 把注入脚本挂进 index.html（只改内存中的响应，不落盘、不动 web/ 源文件） */
     static WebResourceResponse injectIntoHtml(Context ctx, InputStream in) {
         try {

@@ -442,6 +442,10 @@ def main():
     check("桌宠窗口已注册（140x180dp frame）", pframe is not None, f"frame={pframe}")
     check("桌宠可见（frame 内 Live2D 差分≥6000px）", pet_ok, f"diff={pdiff}px frame={pframe}")
     check("桌宠 Live2D 已就绪（[probe] pet-ready）", probe_has("[probe] pet-ready"))
+    # 浮窗以前漏挂 AndroidTTS（回复只有字没有声）。注入入口统一到 WebShell.attachAndroidTts
+    # 后由页面侧自检回报；这里断言桌宠 WebView 也拿得到 window.AndroidTTS。
+    check("桌宠 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/pet.html）",
+          probe_has("[probe] AndroidTTS injected=1 /www/pet.html"))
     bframe = ball_frame(wins)
     check("未降级为圆形悬浮球（主形态=Live2D 桌宠）", bframe is None,
           f"ball_frame={bframe}" if bframe else "")
@@ -513,6 +517,9 @@ def main():
               f"frame={big} diff={cnt6}px")
         check("双击触发探针（[probe] pet-double / pet-panel）",
               probe_has("[probe] pet-double") and probe_has("[probe] pet-panel"))
+        # 迷你窗是 index.html?float=1，同样必须拿到 window.AndroidTTS（否则浮窗朗读永远无声）
+        check("迷你窗 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/index.html）",
+              probe_has("[probe] AndroidTTS injected=1 /www/index.html"))
         check("迷你窗展开（大面积像素差分>30万px）", cnt6 > PANEL_MIN, f"diff={cnt6}px")
         pf6 = pet_frame(wins6)
         hidden_diff = region_diff(base, gray("emulator_06_float_panel.png"), pf6) if pf6 else 0
