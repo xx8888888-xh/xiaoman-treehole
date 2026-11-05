@@ -134,19 +134,24 @@ gh run watch <run-id>
 
 **分钟账（私有仓库 2000 分钟/月）**
 
-计费口径 = 每个 job 的墙钟分钟相加（并行 job 分别计费），实测值来自 2026-11-05 的 run：
+计费口径 = 每个 job 的墙钟分钟相加（并行 job 分别计费）。实测列以 2026-11-06 run #34（`ff10cfc` 全量：核心四套 + 8 套 ui）为准（此前 2026-11-05 的估算已被这一轮替代）：
 
 | 计费单元 | 实测/估算 | 月频次 | 月消耗 |
 |---|---|---|---|
 | `ci.yml`（4 job 合计） | 0.8 min | 每日 26 次（周一–周六的 nightly）+ 约 10 次 trunk push | ≈ 29 min |
-| `e2e.yml` 核心四套（`browser-e2e`） | 5.6–6.3 min（取 6.0） | 每周 4–5 次（周日全套 + trunk push） | ≈ 27 min |
-| `e2e.yml` ui 矩阵（8 套，单 job 1–3.4 min） | 合计 ≈ 14.6 min | 每周 1 次（仅周日全套） | ≈ 63 min |
+| `e2e.yml` 核心四套（`browser-e2e`） | 6.1 min | 每周 4–5 次（周日全套 + trunk push） | ≈ 27 min |
+| `e2e.yml` ui 矩阵（8 套，单 job 0.9–3.3 min） | 合计 12.6 min（另 `prepare-ui-scripts` ≈ 0） | 每周 1 次（仅周日全套） | ≈ 54 min |
 | `android.yml`（debug APK） | 0.8 min | 每周 1 次 | ≈ 3.5 min |
 | `android-release.yml`（签名包） | 1.6 min | 打 tag 时（按每月 4 次估） | ≈ 6.5 min |
 | `quick.yml`（push 轻量：compileall + 2 个纯 stdlib 单测） | ≈ 0.5 min | 与 push 次数同（按 30 次估） | ≈ 15 min |
 | `android-ci.yml`（AVD） | 8–12 min | 仅手动，按 0–2 次估 | 0–24 min |
 | `gates.yml`（手动全套） | ≈ 22 min | 按 1 次估 | ≈ 22 min |
-| **合计** | | | **≈ 167–191 min/月（约 8–10% 预算）** |
+| **合计** | | | **≈ 157–181 min/月（约 8–9% 预算）** |
+
+重算说明（2026-11-06）：一次全量 e2e 的 10 个 job 实测合计 **18.7 min**（核心四套 6.1 + ui 矩阵 12.6）。
+Playwright 统一到复合动作后，每个 GUI job 共享 `${{ runner.os }}-playwright-<version>` 缓存，
+安装段从 1.5–2 min 降到 20–30s（命中时），10 个 job 合计每次全量省约 **4–8 min**；
+版本号只在 `action.yml` 的 `default` 一处（当前 1.63.0），不会再出现 1.47/1.63 混装。
 
 结论：
 
