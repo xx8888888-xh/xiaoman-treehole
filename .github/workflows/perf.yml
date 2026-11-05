@@ -153,6 +153,12 @@ jobs:
                        me.get("idbRows")))
               if me.get("allocTop"):
                   print("memory allocTop:", json.dumps(me["allocTop"], ensure_ascii=False))
+              ns = me.get("noStore") or {}
+              if ns:
+                  print("memory noStore heap %s→%sMB growth=%s marks=%s"
+                        % (ns.get("heapStartMB"), ns.get("heapEndMB"),
+                           ns.get("heapGrowthMB"), ns.get("heapPer40MB")))
+                  print("memory noStore allocTop:", json.dumps(ns.get("allocTop"), ensure_ascii=False))
               pg = me.get("paging") or {}
               if pg:
                   print("paging moves=%s calls=%s stepOk=%s overlapOk=%s fetchKeepsWindow=%s dupInPage=%s firstRepeat=%s idsPresent=%s totalStable=%s before=%s after=%s"

@@ -555,25 +555,32 @@ async def _ls_diag(page):
         }""")
 
 
-def _top_alloc(profile, limit=12):
+async def _top_alloc(profile, limit=15):
     """把 V8 分配采样（stop 时仍存活的对象）按 selfSize 聚合到顶层调用点。"""
     aggr = {}
+    total = [0]
 
     def walk(node):
         cf = node.get("callFrame") or {}
         fn = cf.get("functionName") or "(anonymous)"
         url = (cf.get("url") or "").split("/")[-1]
         key = "%s @ %s:%s" % (fn, url or "?", (cf.get("lineNumber", -1) + 1))
-        aggr[key] = aggr.get(key, 0) + (node.get("selfSize") or 0)
+        size = node.get("selfSize") or 0
+        aggr[key] = aggr.get(key, 0) + size
+        total[0] += size
         for c in node.get("children") or []:
             walk(c)
 
     walk((profile.get("profile") or {}).get("head") or {})
+    if total[0] == 0:
+        # 采样没启动：profile 里还有 samples，用样本 size 兜底聚合
+        return [["<empty profile>", 0.0]]
     top = sorted(aggr.items(), key=lambda kv: -kv[1])[:limit]
     return [[k, round(v / 1048576, 3)] for k, v in top]
 
 
-async def _memory_run(browser, rounds, warmup, silence_console, sample_alloc=False):
+async def _memory_run(browser, rounds, warmup, silence_console,
+                      sample_alloc=False, disable_store=False):
     """warmup 轮先吸收启动一次性分配，再做 rounds 轮长会话采样。
     silence_console=True：把 [probe] 埋点日志静音——Chromium 控制台缓冲是给安卓
     logcat 用的诊断通道，不属于应用状态（且有容量上限），不能混进"消息数据是否泄漏"。"""
@@ -591,11 +598,21 @@ async def _memory_run(browser, rounds, warmup, silence_console, sample_alloc=Fal
                 console.log = function () {}; console.warn = function () {}; }""")
     await page.evaluate("() => { try { console.clear(); } catch (e) {} }")
     await asyncio.sleep(0.4)
+    if disable_store:
+        # 对照：把持久化写入摘掉，若堆立刻变平即说明残差来自 IDB 写入链（而非消息数据）
+        await page.evaluate(
+            """() => { if (window.ChatStore) {
+                window.__origAppend = ChatStore.append;
+                window.__origPrune = ChatStore.prune;
+                ChatStore.append = () => Promise.resolve();
+                ChatStore.prune = () => Promise.resolve();
+            } }""")
     s0 = await js_state(page, session)
     ls0 = await _ls_diag(page)
     if sample_alloc:
         # V8 分配采样：只统计"采样窗口内分配且 stop 时仍存活"的对象，用来抓残留持有者
         try:
+            await session.send("HeapProfiler.enable")
             await session.send("HeapProfiler.startSampling", {"samplingInterval": 32768})
         except Exception as exc:
             print("[memory] alloc sampling off：%s" % exc, flush=True)
@@ -668,8 +685,13 @@ async def measure_memory(browser, rounds=200, warmup=40):
     - consoleOn = 保留 [probe] 日志的对照，用来证明日志缓冲贡献"""
     quiet = await _memory_run(browser, rounds, warmup, silence_console=True, sample_alloc=True)
     loud = await _memory_run(browser, rounds, warmup, silence_console=False)
+    nodisk = await _memory_run(browser, rounds, warmup, silence_console=True,
+                               sample_alloc=True, disable_store=True)
     out = dict(quiet)
     out["warmup"] = warmup
+    out["noStore"] = {k: nodisk.get(k) for k in
+                      ("heapStartMB", "heapEndMB", "heapGrowthMB", "heapPer40MB",
+                       "allocTop", "pager", "lsDeltaChars")}
     out["consoleOn"] = {k: loud.get(k) for k in
                         ("heapStartMB", "heapEndMB", "heapGrowthMB", "heapPer40MB",
                          "marks", "consoleClearFreesMB", "longMax", "pager")}
