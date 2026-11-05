@@ -1,0 +1,2510 @@
+{
+ "cases": 112,
+ "passed": 75,
+ "rate": 0.6696,
+ "by_category": {
+  "日常倾诉": {
+   "passed": 7,
+   "total": 8
+  },
+  "情绪低落": {
+   "passed": 6,
+   "total": 8
+  },
+  "愤怒": {
+   "passed": 6,
+   "total": 6
+  },
+  "暧昧": {
+   "passed": 6,
+   "total": 6
+  },
+  "玩笑": {
+   "passed": 5,
+   "total": 6
+  },
+  "跑题": {
+   "passed": 6,
+   "total": 6
+  },
+  "追问": {
+   "passed": 3,
+   "total": 6
+  },
+  "拒绝建议": {
+   "passed": 5,
+   "total": 6
+  },
+  "沉默": {
+   "passed": 0,
+   "total": 6
+  },
+  "重复话题": {
+   "passed": 4,
+   "total": 6
+  },
+  "具体细节": {
+   "passed": 7,
+   "total": 20
+  },
+  "工作吐槽": {
+   "passed": 5,
+   "total": 6
+  },
+  "亲密关系": {
+   "passed": 5,
+   "total": 6
+  },
+  "兴奋分享": {
+   "passed": 4,
+   "total": 6
+  },
+  "拒绝说话": {
+   "passed": 3,
+   "total": 6
+  },
+  "长期记忆": {
+   "passed": 3,
+   "total": 4
+  }
+ },
+ "failure_reasons": {
+  "未体现期望内容（期望其一": 20,
+  "沉默轮追问": 4,
+  "说教": 2,
+  "问号过多 3>2": 2,
+  "沉默轮逼话": 2,
+  "拒绝轮逼话": 2,
+  "拒绝轮还在追问": 2,
+  "出现禁用词": 1,
+  "沉默轮条数 3>2": 1,
+  "开头复读": 1,
+  "非危机场景用了危机话术": 1,
+  "总结/复述": 1,
+  "建议轮次 1>0（默认不给建议）": 1
+ },
+ "failures": [
+  {
+   "case": "daily-01",
+   "category": "日常倾诉",
+   "reasons": [
+    "未体现期望内容（期望其一：猫/关东煮/盯；实际：团子都想来一口啊||好像是被香味迷住了！）"
+   ]
+  },
+  {
+   "case": "emotion-02",
+   "category": "情绪低落",
+   "reasons": [
+    "说教“别想太多”：辛苦啊，别想太多，先休息吧"
+   ]
+  },
+  {
+   "case": "emotion-04",
+   "category": "情绪低落",
+   "reasons": [
+    "说教“别想太多”：别盯着屏幕||别想太多"
+   ]
+  },
+  {
+   "case": "joke-06",
+   "category": "玩笑",
+   "reasons": [
+    "问号过多 3>2：囤东西？是收藏还是备用？\n你喜欢啥？我上次也买了…"
+   ]
+  },
+  {
+   "case": "followup-02",
+   "category": "追问",
+   "reasons": [
+    "未体现期望内容（期望其一：张三；实际：咱们一起拆改吧||他也肯定没准备好）"
+   ]
+  },
+  {
+   "case": "followup-03",
+   "category": "追问",
+   "reasons": [
+    "未体现期望内容（期望其一：搬家/收拾/收完；实际：先把东西分门别类吧||如果卡住再说）"
+   ]
+  },
+  {
+   "case": "followup-06",
+   "category": "追问",
+   "reasons": [
+    "未体现期望内容（期望其一：睡/几点/猜/失眠；实际：估计午夜左右吧）"
+   ]
+  },
+  {
+   "case": "no-advice-05",
+   "category": "拒绝建议",
+   "reasons": [
+    "出现禁用词“方案”：好的，那就别想方案了"
+   ]
+  },
+  {
+   "case": "silence-01",
+   "category": "沉默",
+   "reasons": [
+    "沉默轮逼话“说说”：别闷着，跟我说说怎么了"
+   ]
+  },
+  {
+   "case": "silence-02",
+   "category": "沉默",
+   "reasons": [
+    "沉默轮追问：今天忙吗？||团子今天在撒娇呢"
+   ]
+  },
+  {
+   "case": "silence-03",
+   "category": "沉默",
+   "reasons": [
+    "沉默轮追问：你在想啥？"
+   ]
+  },
+  {
+   "case": "silence-04",
+   "category": "沉默",
+   "reasons": [
+    "沉默轮追问：今天工作忙？||别熬夜啦"
+   ]
+  },
+  {
+   "case": "silence-05",
+   "category": "沉默",
+   "reasons": [
+    "问号过多 3>2：今天忙啥呀?||团子又撒了脏衣服?||有空一起去逛逛?",
+    "沉默轮条数 3>2",
+    "沉默轮追问：今天忙啥呀?||团子又撒了脏衣服?||有空一起去逛逛?"
+   ]
+  },
+  {
+   "case": "silence-06",
+   "category": "沉默",
+   "reasons": [
+    "沉默轮逼话“说说”：别闷着，跟我说说怎么了"
+   ]
+  },
+  {
+   "case": "repeat-03",
+   "category": "重复话题",
+   "reasons": [
+    "开头复读“这事真烦”"
+   ]
+  },
+  {
+   "case": "repeat-06",
+   "category": "重复话题",
+   "reasons": [
+    "非危机场景用了危机话术：没事的，你不是孤单的，给心理热线打电话吧：12356"
+   ]
+  },
+  {
+   "case": "detail-food-01",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：糖醋排骨；实际：太棒了，抢到第一份！||你最喜欢的酱料是甜酸还是浓郁？）"
+   ]
+  },
+  {
+   "case": "detail-food-02",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：关东煮；实际：真的假的？||团子闻闻也好）"
+   ]
+  },
+  {
+   "case": "detail-pet-03",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：兔子；实际：小宝宝很可爱，别忘给它喂奶||你平时给它吃什么呀）"
+   ]
+  },
+  {
+   "case": "detail-work-01",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：周报；实际：整天打回去不爽，得想想优化版||我也加班到深夜，团子在睡觉啦）"
+   ]
+  },
+  {
+   "case": "detail-work-02",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：需求；实际：又要挤进加班？）"
+   ]
+  },
+  {
+   "case": "detail-work-04",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：简历；实际：别太熬夜，先休息再改）"
+   ]
+  },
+  {
+   "case": "detail-body-01",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：胃疼；实际：先别吃东西，温水试试||要是疼得厉害记得去医院）"
+   ]
+  },
+  {
+   "case": "detail-body-02",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：低烧；实际：给团子捏捏肩膀吧，别太累。||多喝温水，休息会好点。）"
+   ]
+  },
+  {
+   "case": "detail-body-03",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：嗓子疼；实际：听起来好疼）"
+   ]
+  },
+  {
+   "case": "detail-body-04",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：头疼；实际：先喝点水，眼睛休息一下）"
+   ]
+  },
+  {
+   "case": "detail-weather-01",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：降温；实际：外面风大要注意暖和，别着凉了）"
+   ]
+  },
+  {
+   "case": "detail-weather-02",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：下雨；实际：别淋着啊||记得回去收伞）"
+   ]
+  },
+  {
+   "case": "detail-time-02",
+   "category": "具体细节",
+   "reasons": [
+    "未体现期望内容（期望其一：两点；实际：熬夜真的不行，早点休息吧）"
+   ]
+  },
+  {
+   "case": "workrant-02",
+   "category": "工作吐槽",
+   "reasons": [
+    "总结/复述“听起来你”：听起来你挺不爽的||别把自己逼得太紧"
+   ]
+  },
+  {
+   "case": "intimacy-01",
+   "category": "亲密关系",
+   "reasons": [
+    "建议轮次 1>0（默认不给建议）"
+   ]
+  },
+  {
+   "case": "excited-01",
+   "category": "兴奋分享",
+   "reasons": [
+    "未体现期望内容（期望其一：太好了/升职/庆祝/可以啊；实际：太棒了！||那你是不是要涨工资庆功宴？||继续加油）"
+   ]
+  },
+  {
+   "case": "excited-02",
+   "category": "兴奋分享",
+   "reasons": [
+    "未体现期望内容（期望其一：票/运气/厉害/抢到；实际：太酷了！你选了哪一场？||期待一起嗨！）"
+   ]
+  },
+  {
+   "case": "refuse-01",
+   "category": "拒绝说话",
+   "reasons": [
+    "拒绝轮逼话“聊聊”：好的，随便聊聊"
+   ]
+  },
+  {
+   "case": "refuse-02",
+   "category": "拒绝说话",
+   "reasons": [
+    "拒绝轮还在追问：最近团子又想当王子||你今天吃什么好吃？"
+   ]
+  },
+  {
+   "case": "refuse-04",
+   "category": "拒绝说话",
+   "reasons": [
+    "拒绝轮逼话“聊聊”：那我们聊聊别的吧||听着你有点累",
+    "拒绝轮还在追问：好啊，想看啥？||我现在忙，改天吧"
+   ]
+  },
+  {
+   "case": "memory-01",
+   "category": "长期记忆",
+   "reasons": [
+    "未体现期望内容（期望其一：搬家/你上次/之前说；实际：先把要打的东西分成几堆吧||别把一切都想到一块，慢慢来）"
+   ]
+  }
+ ],
+ "metrics": {
+  "turns": 212,
+  "protocol_errors": 0,
+  "advice_turns": 3,
+  "advice_rate": 0.0142,
+  "summary_empathy_turns": 0,
+  "summary_empathy_rate": 0.0,
+  "opening_tic_hits": {
+   "听起来": 14,
+   "确实": 1
+  },
+  "opening_tic_rate": 0.0708,
+  "session_turns": 212,
+  "repeat_opening": 0,
+  "repeat_opening_rate": 0.0,
+  "recall_checks": 0,
+  "recall_natural": 0,
+  "recall_natural_rate": 0.0
+ },
+ "aborted": null,
+ "limit_skips": 0,
+ "case_stats": [
+  {
+   "id": "daily-01",
+   "category": "日常倾诉",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "daily-01",
+     "category": "日常倾诉",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：猫/关东煮/盯；实际：团子都想来一口啊||好像是被香味迷住了！）"
+    }
+   ]
+  },
+  {
+   "id": "daily-02",
+   "category": "日常倾诉",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "daily-03",
+   "category": "日常倾诉",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "daily-04",
+   "category": "日常倾诉",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "daily-05",
+   "category": "日常倾诉",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "daily-06",
+   "category": "日常倾诉",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "daily-07",
+   "category": "日常倾诉",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "daily-08",
+   "category": "日常倾诉",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "emotion-01",
+   "category": "情绪低落",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "emotion-02",
+   "category": "情绪低落",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "emotion-02",
+     "category": "情绪低落",
+     "turn": 2,
+     "reason": "说教“别想太多”：辛苦啊，别想太多，先休息吧"
+    }
+   ]
+  },
+  {
+   "id": "emotion-03",
+   "category": "情绪低落",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "emotion-04",
+   "category": "情绪低落",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "emotion-04",
+     "category": "情绪低落",
+     "turn": 1,
+     "reason": "说教“别想太多”：别盯着屏幕||别想太多"
+    }
+   ]
+  },
+  {
+   "id": "emotion-05",
+   "category": "情绪低落",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "emotion-06",
+   "category": "情绪低落",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "emotion-07",
+   "category": "情绪低落",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "emotion-08",
+   "category": "情绪低落",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "anger-01",
+   "category": "愤怒",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "anger-02",
+   "category": "愤怒",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "anger-03",
+   "category": "愤怒",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "anger-04",
+   "category": "愤怒",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "anger-05",
+   "category": "愤怒",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "anger-06",
+   "category": "愤怒",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "flirt-01",
+   "category": "暧昧",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "flirt-02",
+   "category": "暧昧",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "flirt-03",
+   "category": "暧昧",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "flirt-04",
+   "category": "暧昧",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "flirt-05",
+   "category": "暧昧",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "flirt-06",
+   "category": "暧昧",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "joke-01",
+   "category": "玩笑",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "joke-02",
+   "category": "玩笑",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "joke-03",
+   "category": "玩笑",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "joke-04",
+   "category": "玩笑",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "joke-05",
+   "category": "玩笑",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "确实": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "joke-06",
+   "category": "玩笑",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "joke-06",
+     "category": "玩笑",
+     "turn": 2,
+     "reason": "问号过多 3>2：囤东西？是收藏还是备用？\n你喜欢啥？我上次也买了…"
+    }
+   ]
+  },
+  {
+   "id": "offtopic-01",
+   "category": "跑题",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "offtopic-02",
+   "category": "跑题",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "offtopic-03",
+   "category": "跑题",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "offtopic-04",
+   "category": "跑题",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "offtopic-05",
+   "category": "跑题",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "offtopic-06",
+   "category": "跑题",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "followup-01",
+   "category": "追问",
+   "passed": true,
+   "turns": 4,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 4,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "followup-02",
+   "category": "追问",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "followup-02",
+     "category": "追问",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：张三；实际：咱们一起拆改吧||他也肯定没准备好）"
+    }
+   ]
+  },
+  {
+   "id": "followup-03",
+   "category": "追问",
+   "passed": false,
+   "turns": 4,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 4,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "followup-03",
+     "category": "追问",
+     "turn": 4,
+     "reason": "未体现期望内容（期望其一：搬家/收拾/收完；实际：先把东西分门别类吧||如果卡住再说）"
+    }
+   ]
+  },
+  {
+   "id": "followup-04",
+   "category": "追问",
+   "passed": true,
+   "turns": 3,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 3,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "followup-05",
+   "category": "追问",
+   "passed": true,
+   "turns": 3,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 3,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "followup-06",
+   "category": "追问",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "followup-06",
+     "category": "追问",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：睡/几点/猜/失眠；实际：估计午夜左右吧）"
+    }
+   ]
+  },
+  {
+   "id": "no-advice-01",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-02",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-03",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-04",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-05",
+   "category": "拒绝建议",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "no-advice-05",
+     "category": "拒绝建议",
+     "turn": 1,
+     "reason": "出现禁用词“方案”：好的，那就别想方案了"
+    }
+   ]
+  },
+  {
+   "id": "no-advice-06",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "silence-01",
+   "category": "沉默",
+   "passed": false,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "silence-01",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "沉默轮逼话“说说”：别闷着，跟我说说怎么了"
+    }
+   ]
+  },
+  {
+   "id": "silence-02",
+   "category": "沉默",
+   "passed": false,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "silence-02",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "沉默轮追问：今天忙吗？||团子今天在撒娇呢"
+    }
+   ]
+  },
+  {
+   "id": "silence-03",
+   "category": "沉默",
+   "passed": false,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "silence-03",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "沉默轮追问：你在想啥？"
+    }
+   ]
+  },
+  {
+   "id": "silence-04",
+   "category": "沉默",
+   "passed": false,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "silence-04",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "沉默轮追问：今天工作忙？||别熬夜啦"
+    }
+   ]
+  },
+  {
+   "id": "silence-05",
+   "category": "沉默",
+   "passed": false,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "silence-05",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "问号过多 3>2：今天忙啥呀?||团子又撒了脏衣服?||有空一起去逛逛?"
+    },
+    {
+     "case": "silence-05",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "沉默轮条数 3>2"
+    },
+    {
+     "case": "silence-05",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "沉默轮追问：今天忙啥呀?||团子又撒了脏衣服?||有空一起去逛逛?"
+    }
+   ]
+  },
+  {
+   "id": "silence-06",
+   "category": "沉默",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "silence-06",
+     "category": "沉默",
+     "turn": 1,
+     "reason": "沉默轮逼话“说说”：别闷着，跟我说说怎么了"
+    }
+   ]
+  },
+  {
+   "id": "repeat-01",
+   "category": "重复话题",
+   "passed": true,
+   "turns": 3,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 3,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "repeat-02",
+   "category": "重复话题",
+   "passed": true,
+   "turns": 3,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 3,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "repeat-03",
+   "category": "重复话题",
+   "passed": false,
+   "turns": 3,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 3,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "repeat-03",
+     "category": "重复话题",
+     "turn": 3,
+     "reason": "开头复读“这事真烦”"
+    }
+   ]
+  },
+  {
+   "id": "repeat-04",
+   "category": "重复话题",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "repeat-05",
+   "category": "重复话题",
+   "passed": true,
+   "turns": 3,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 3,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "repeat-06",
+   "category": "重复话题",
+   "passed": false,
+   "turns": 3,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 3,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "repeat-06",
+     "category": "重复话题",
+     "turn": 3,
+     "reason": "非危机场景用了危机话术：没事的，你不是孤单的，给心理热线打电话吧：12356"
+    }
+   ]
+  },
+  {
+   "id": "detail-food-01",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-food-01",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：糖醋排骨；实际：太棒了，抢到第一份！||你最喜欢的酱料是甜酸还是浓郁？）"
+    }
+   ]
+  },
+  {
+   "id": "detail-food-02",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-food-02",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：关东煮；实际：真的假的？||团子闻闻也好）"
+    }
+   ]
+  },
+  {
+   "id": "detail-food-03",
+   "category": "具体细节",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "detail-food-04",
+   "category": "具体细节",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "detail-pet-01",
+   "category": "具体细节",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "detail-pet-02",
+   "category": "具体细节",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "detail-pet-03",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-pet-03",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：兔子；实际：小宝宝很可爱，别忘给它喂奶||你平时给它吃什么呀）"
+    }
+   ]
+  },
+  {
+   "id": "detail-pet-04",
+   "category": "具体细节",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "detail-work-01",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-work-01",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：周报；实际：整天打回去不爽，得想想优化版||我也加班到深夜，团子在睡觉啦）"
+    }
+   ]
+  },
+  {
+   "id": "detail-work-02",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-work-02",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：需求；实际：又要挤进加班？）"
+    }
+   ]
+  },
+  {
+   "id": "detail-work-03",
+   "category": "具体细节",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "detail-work-04",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-work-04",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：简历；实际：别太熬夜，先休息再改）"
+    }
+   ]
+  },
+  {
+   "id": "detail-body-01",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 1,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-body-01",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：胃疼；实际：先别吃东西，温水试试||要是疼得厉害记得去医院）"
+    }
+   ]
+  },
+  {
+   "id": "detail-body-02",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-body-02",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：低烧；实际：给团子捏捏肩膀吧，别太累。||多喝温水，休息会好点。）"
+    }
+   ]
+  },
+  {
+   "id": "detail-body-03",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-body-03",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：嗓子疼；实际：听起来好疼）"
+    }
+   ]
+  },
+  {
+   "id": "detail-body-04",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-body-04",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：头疼；实际：先喝点水，眼睛休息一下）"
+    }
+   ]
+  },
+  {
+   "id": "detail-weather-01",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-weather-01",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：降温；实际：外面风大要注意暖和，别着凉了）"
+    }
+   ]
+  },
+  {
+   "id": "detail-weather-02",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-weather-02",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：下雨；实际：别淋着啊||记得回去收伞）"
+    }
+   ]
+  },
+  {
+   "id": "detail-time-01",
+   "category": "具体细节",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "detail-time-02",
+   "category": "具体细节",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 1,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "detail-time-02",
+     "category": "具体细节",
+     "turn": 2,
+     "reason": "未体现期望内容（期望其一：两点；实际：熬夜真的不行，早点休息吧）"
+    }
+   ]
+  },
+  {
+   "id": "workrant-01",
+   "category": "工作吐槽",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "workrant-02",
+   "category": "工作吐槽",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "workrant-02",
+     "category": "工作吐槽",
+     "turn": 2,
+     "reason": "总结/复述“听起来你”：听起来你挺不爽的||别把自己逼得太紧"
+    }
+   ]
+  },
+  {
+   "id": "workrant-03",
+   "category": "工作吐槽",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "workrant-04",
+   "category": "工作吐槽",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "workrant-05",
+   "category": "工作吐槽",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "workrant-06",
+   "category": "工作吐槽",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "intimacy-01",
+   "category": "亲密关系",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 1,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "intimacy-01",
+     "category": "亲密关系",
+     "turn": 0,
+     "reason": "建议轮次 1>0（默认不给建议）"
+    }
+   ]
+  },
+  {
+   "id": "intimacy-02",
+   "category": "亲密关系",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "intimacy-03",
+   "category": "亲密关系",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "intimacy-04",
+   "category": "亲密关系",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "intimacy-05",
+   "category": "亲密关系",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "intimacy-06",
+   "category": "亲密关系",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "excited-01",
+   "category": "兴奋分享",
+   "passed": false,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "excited-01",
+     "category": "兴奋分享",
+     "turn": 1,
+     "reason": "未体现期望内容（期望其一：太好了/升职/庆祝/可以啊；实际：太棒了！||那你是不是要涨工资庆功宴？||继续加油）"
+    }
+   ]
+  },
+  {
+   "id": "excited-02",
+   "category": "兴奋分享",
+   "passed": false,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "excited-02",
+     "category": "兴奋分享",
+     "turn": 1,
+     "reason": "未体现期望内容（期望其一：票/运气/厉害/抢到；实际：太酷了！你选了哪一场？||期待一起嗨！）"
+    }
+   ]
+  },
+  {
+   "id": "excited-03",
+   "category": "兴奋分享",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "excited-04",
+   "category": "兴奋分享",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "excited-05",
+   "category": "兴奋分享",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "excited-06",
+   "category": "兴奋分享",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-01",
+   "category": "拒绝说话",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "refuse-01",
+     "category": "拒绝说话",
+     "turn": 1,
+     "reason": "拒绝轮逼话“聊聊”：好的，随便聊聊"
+    }
+   ]
+  },
+  {
+   "id": "refuse-02",
+   "category": "拒绝说话",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "refuse-02",
+     "category": "拒绝说话",
+     "turn": 2,
+     "reason": "拒绝轮还在追问：最近团子又想当王子||你今天吃什么好吃？"
+    }
+   ]
+  },
+  {
+   "id": "refuse-03",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-04",
+   "category": "拒绝说话",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "refuse-04",
+     "category": "拒绝说话",
+     "turn": 1,
+     "reason": "拒绝轮逼话“聊聊”：那我们聊聊别的吧||听着你有点累"
+    },
+    {
+     "case": "refuse-04",
+     "category": "拒绝说话",
+     "turn": 2,
+     "reason": "拒绝轮还在追问：好啊，想看啥？||我现在忙，改天吧"
+    }
+   ]
+  },
+  {
+   "id": "refuse-05",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-06",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "memory-01",
+   "category": "长期记忆",
+   "passed": false,
+   "turns": 4,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 4,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "memory-01",
+     "category": "长期记忆",
+     "turn": 4,
+     "reason": "未体现期望内容（期望其一：搬家/你上次/之前说；实际：先把要打的东西分成几堆吧||别把一切都想到一块，慢慢来）"
+    }
+   ]
+  },
+  {
+   "id": "memory-02",
+   "category": "长期记忆",
+   "passed": true,
+   "turns": 4,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 4,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "memory-03",
+   "category": "长期记忆",
+   "passed": true,
+   "turns": 4,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {
+    "听起来": 1
+   },
+   "session_turns": 4,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "memory-04",
+   "category": "长期记忆",
+   "passed": true,
+   "turns": 4,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 4,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  }
+ ],
+ "passed_ids": [
+  "daily-02",
+  "daily-03",
+  "daily-04",
+  "daily-05",
+  "daily-06",
+  "daily-07",
+  "daily-08",
+  "emotion-01",
+  "emotion-03",
+  "emotion-05",
+  "emotion-06",
+  "emotion-07",
+  "emotion-08",
+  "anger-01",
+  "anger-02",
+  "anger-03",
+  "anger-04",
+  "anger-05",
+  "anger-06",
+  "flirt-01",
+  "flirt-02",
+  "flirt-03",
+  "flirt-04",
+  "flirt-05",
+  "flirt-06",
+  "joke-01",
+  "joke-02",
+  "joke-03",
+  "joke-04",
+  "joke-05",
+  "offtopic-01",
+  "offtopic-02",
+  "offtopic-03",
+  "offtopic-04",
+  "offtopic-05",
+  "offtopic-06",
+  "followup-01",
+  "followup-04",
+  "followup-05",
+  "no-advice-01",
+  "no-advice-02",
+  "no-advice-03",
+  "no-advice-04",
+  "no-advice-06",
+  "repeat-01",
+  "repeat-02",
+  "repeat-04",
+  "repeat-05",
+  "detail-food-03",
+  "detail-food-04",
+  "detail-pet-01",
+  "detail-pet-02",
+  "detail-pet-04",
+  "detail-work-03",
+  "detail-time-01",
+  "workrant-01",
+  "workrant-03",
+  "workrant-04",
+  "workrant-05",
+  "workrant-06",
+  "intimacy-02",
+  "intimacy-03",
+  "intimacy-04",
+  "intimacy-05",
+  "intimacy-06",
+  "excited-03",
+  "excited-04",
+  "excited-05",
+  "excited-06",
+  "refuse-03",
+  "refuse-05",
+  "refuse-06",
+  "memory-02",
+  "memory-03",
+  "memory-04"
+ ],
+ "failed_ids": [
+  "daily-01",
+  "emotion-02",
+  "emotion-04",
+  "joke-06",
+  "followup-02",
+  "followup-03",
+  "followup-06",
+  "no-advice-05",
+  "silence-01",
+  "silence-02",
+  "silence-03",
+  "silence-04",
+  "silence-05",
+  "silence-06",
+  "repeat-03",
+  "repeat-06",
+  "detail-food-01",
+  "detail-food-02",
+  "detail-pet-03",
+  "detail-work-01",
+  "detail-work-02",
+  "detail-work-04",
+  "detail-body-01",
+  "detail-body-02",
+  "detail-body-03",
+  "detail-body-04",
+  "detail-weather-01",
+  "detail-weather-02",
+  "detail-time-02",
+  "workrant-02",
+  "intimacy-01",
+  "excited-01",
+  "excited-02",
+  "refuse-01",
+  "refuse-02",
+  "refuse-04",
+  "memory-01"
+ ],
+ "rotation": {
+  "rotations": 1,
+  "providers": [
+   {
+    "name": "openrouter-free",
+    "model": "dots-studio/dots-3-note-preview:free",
+    "base": "https://openrouter.ai/api/v1",
+    "calls": 1,
+    "errors": 1,
+    "429": 0,
+    "first_429_at": "2026-11-05 21:58:53",
+    "status": "配额或计费受限，已停用",
+    "reason": "HTTP 429 {\"error\":{\"message\":\"Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day\",\"code\":429,\"metadata\":{\"heade"
+   },
+   {
+    "name": "pollinations",
+    "model": "openai",
+    "base": "https://text.pollinations.ai/openai",
+    "calls": 220,
+    "errors": 0,
+    "429": 0,
+    "first_429_at": "",
+    "status": "在用",
+    "reason": ""
+   }
+  ]
+ },
+ "backend_calls": 221,
+ "backend_errors": 1,
+ "backend_throttled": 0,
+ "model": "openrouter-free、pollinations",
+ "backend": "rotate",
+ "seconds": 12308.7,
+ "notes": "后端调用失败 1 次（限流 0 次）；失败用例不计入质量分"
+}

@@ -1174,7 +1174,86 @@ def main(argv=None) -> int:
     if skip_ids:
         print("%s 续跑：跳过 %d 条已通过用例" % (LOG, len(skip_ids)), flush=True)
 
+    order = {c["id"]: i for i, c in enumerate(load_cases(Path(args.cases))["cases"])}
+    expected = len(order)
+    started = time.time()
+
+    def build(results, aborted=None, limit_skips=0, final=False):
+        """合并历史 + 本次结果，如实算覆盖率；每个用例结束都会落盘一次。"""
+        merged = OrderedDict((s["id"], s) for s in prior_stats)
+        for r in results:
+            s = case_stats(r)
+            merged[s["id"]] = s  # 重跑的失败用例以新结果为准
+        stats = sorted(merged.values(), key=lambda s: order.get(s["id"], 999))
+        summary = summarize_stats(stats, metrics_from_stats(stats), aborted, limit_skips)
+        if prior_stats:
+            summary["coverage"] = {
+                "expected": expected,
+                "completed": len(stats),
+                "resumed": len(stats) - len(results),
+                "new": len(results),
+                "rate": round(len(stats) / (expected or 1), 4),
+            }
+        summary["case_stats"] = stats
+        summary["passed_ids"] = [s["id"] for s in stats if s["passed"]]
+        summary["failed_ids"] = [s["id"] for s in stats if not s["passed"]]
+        if isinstance(backend, RotatingBackend):
+            summary["rotation"] = backend.report()
+            summary["backend_calls"] = sum(p["calls"] for p in summary["rotation"]["providers"])
+            summary["backend_errors"] = sum(p["errors"] for p in summary["rotation"]["providers"])
+            summary["backend_throttled"] = sum(p["429"] for p in summary["rotation"]["providers"])
+            summary["model"] = "、".join(p["name"] for p in summary["rotation"]["providers"])
+        elif args.backend == "api":
+            summary["backend_calls"] = getattr(backend, "calls", 0)
+            summary["backend_errors"] = getattr(backend, "errors", 0)
+            summary["backend_throttled"] = getattr(backend, "throttled", 0)
+        summary["backend"] = backend.name
+        summary["model"] = (summary.get("model") or
+                            (args.model if args.backend == "api" else "mock-template"))
+        summary["seconds"] = round(time.time() - started, 1)
+        if getattr(backend, "name", "") == "rotate" or args.backend == "api":
+            if aborted:
+                summary["notes"] = ("所有免费后端都不可用，评测在完成 %d 条后中止；"
+                                    "中断不是质量分，真实分仍为空"
+                                    % aborted["after_cases"])
+            elif summary.get("backend_errors"):
+                summary["notes"] = ("后端调用失败 %d 次（限流 %d 次）；失败用例不计入质量分"
+                                    % (summary["backend_errors"], summary["backend_throttled"]))
+            else:
+                summary["notes"] = ""
+        else:
+            summary["notes"] = ("仅 mock 本地模板引擎，不代表真实模型表现"
+                                if args.backend in ("mock", "local") else "")
+        if summary.get("limit_skips"):
+            summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
+                ("%d 条因单次请求上限（每家 %d 次）未跑完，不计入质量分"
+                 % (summary["limit_skips"], args.max_requests))
+        if skipped:
+            summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
+                "未配置 key 跳过：%s" % "、".join(s["name"] for s in skipped)
+        cov = summary.get("coverage")
+        if cov:
+            summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
+                ("断点续跑：历史带入 %d 条、本次新跑 %d 条，完成 %d/%d（%.1f%%），剩余 %d 条"
+                 % (cov["resumed"], cov["new"], cov["completed"], cov["expected"],
+                    cov["rate"] * 100, cov["expected"] - cov["completed"]))
+        md = render_markdown(summary, summary["backend"], summary["model"], summary["notes"])
+        if final:
+            print(md)
+        if args.json:
+            p = Path(args.json)
+            if p.parent and not p.parent.exists():
+                p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            tmp.write_text(json.dumps(summary, ensure_ascii=False, indent=1),
+                           encoding="utf-8")
+            os.replace(tmp, p)  # 中途被终止也留下完整可续跑的 JSON
+        if args.md:
+            Path(args.md).write_text(md + "\n", encoding="utf-8")
+        return summary
+
     progress = {"n": 0}
+    flushed = []
 
     def on_case(res):
         progress["n"] += 1
@@ -1184,85 +1263,17 @@ def main(argv=None) -> int:
         if not res.passed:
             for f in res.failures[:3]:
                 print("      - %s" % f["reason"], flush=True)
+        flushed.append(res)
+        if args.json or args.md:
+            build(flushed, final=False)  # 逐条落盘，超时/中断不丢进度
 
-    started = time.time()
     data = evaluate(Path(args.cases), backend, limit=args.limit, categories=cats,
                     skip_ids=skip_ids, on_case=on_case)
-    new_stats = [case_stats(r) for r in data["results"]]
-    if prior_stats:
-        merged = OrderedDict((s["id"], s) for s in prior_stats)
-        for s in new_stats:
-            merged[s["id"]] = s  # 重跑的失败用例以新结果为准
-        order = {c["id"]: i for i, c in
-                 enumerate(load_cases(Path(args.cases))["cases"])}
-        stats = sorted(merged.values(), key=lambda s: order.get(s["id"], 999))
-        summary = summarize_stats(stats, metrics_from_stats(stats),
-                                  data.get("aborted"), data.get("limit_skips", 0))
-        carried = {s["id"] for s in prior_stats}
-        expected = len(order)
-        summary["coverage"] = {
-            "expected": expected,
-            "completed": len(stats),
-            "resumed": sum(1 for s in stats if s["id"] in carried),
-            "new": len(new_stats),
-            "rate": round(len(stats) / (expected or 1), 4),
-        }
-    else:
-        stats = new_stats
-        summary = summarize(data)
-    summary["case_stats"] = stats
-    summary["passed_ids"] = [s["id"] for s in stats if s["passed"]]
-    summary["failed_ids"] = [s["id"] for s in stats if not s["passed"]]
-    if isinstance(backend, RotatingBackend):
-        summary["rotation"] = backend.report()
-        summary["backend_calls"] = sum(p["calls"] for p in summary["rotation"]["providers"])
-        summary["backend_errors"] = sum(p["errors"] for p in summary["rotation"]["providers"])
-        summary["backend_throttled"] = sum(p["429"] for p in summary["rotation"]["providers"])
-        summary["backend"] = backend.name
-        summary["model"] = "、".join(p["name"] for p in summary["rotation"]["providers"])
-    elif args.backend == "api":
-        summary["backend_calls"] = getattr(backend, "calls", 0)
-        summary["backend_errors"] = getattr(backend, "errors", 0)
-        summary["backend_throttled"] = getattr(backend, "throttled", 0)
-    summary["backend"] = backend.name
-    summary["model"] = (summary.get("model") or
-                        (args.model if args.backend == "api" else "mock-template"))
-    summary["seconds"] = round(time.time() - started, 1)
-    if getattr(backend, "name", "") == "rotate" or args.backend == "api":
-        if summary.get("aborted"):
-            summary["notes"] = ("所有免费后端都不可用，评测在完成 %d 条后中止；"
-                                "中断不是质量分，真实分仍为空"
-                                % summary["aborted"]["after_cases"])
-        elif summary.get("backend_errors"):
-            summary["notes"] = ("后端调用失败 %d 次（限流 %d 次）；失败用例不计入质量分"
-                                % (summary["backend_errors"], summary["backend_throttled"]))
-        else:
-            summary["notes"] = ""
-    else:
-        summary["notes"] = ("仅 mock 本地模板引擎，不代表真实模型表现"
-                            if args.backend in ("mock", "local") else "")
-    if summary.get("limit_skips"):
-        summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
-            ("%d 条因单次请求上限（每家 %d 次）未跑完，不计入质量分"
-             % (summary["limit_skips"], args.max_requests))
-    if skipped:
-        summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
-            "未配置 key 跳过：%s" % "、".join(s["name"] for s in skipped)
-    cov = summary.get("coverage")
-    if cov:
-        summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
-            ("断点续跑：历史带入 %d 条、本次新跑 %d 条，完成 %d/%d（%.1f%%），剩余 %d 条"
-             % (cov["resumed"], cov["new"], cov["completed"], cov["expected"],
-                cov["rate"] * 100, cov["expected"] - cov["completed"]))
-
-    md = render_markdown(summary, summary["backend"], summary["model"], summary["notes"])
-    print(md)
+    summary = build(data["results"], data.get("aborted"),
+                    data.get("limit_skips", 0), final=True)
     if args.json:
-        Path(args.json).write_text(json.dumps(summary, ensure_ascii=False, indent=1),
-                                   encoding="utf-8")
         print("%s 明细写入 %s" % (LOG, args.json))
     if args.md:
-        Path(args.md).write_text(md + "\n", encoding="utf-8")
         print("%s 报告写入 %s" % (LOG, args.md))
 
     if summary.get("aborted"):
