@@ -297,6 +297,16 @@ test("间距 6 档、字阶 5 档；间距/字号/行高不再出现零散 px", 
   for (const [prop, value] of decls.filter(([p]) => p === "font-size")) {
     assert.match(value, /var\(--text-|inherit/, `字号未令牌化：${value}`);
   }
+  // 令牌名不许重复：--icon 曾同时是颜色和尺寸，暗色块一旦覆盖成颜色，
+  // 宽度就会退化成 auto（空态记号被撑满整屏），测试必须拦住这类重名
+  for (const block of [root, CSS.match(/body\.theme-dark\s*\{([\s\S]*?)\}/)[1]]) {
+    const names = [...block.matchAll(/--([a-z0-9-]+)\s*:/g)].map((x) => x[1]);
+    assert.equal(new Set(names).size, names.length,
+      "同名令牌重复定义：" + names.filter((n, k) => names.indexOf(n) !== k).join(","));
+  }
+  // 尺寸与颜色分开命名，语义写死
+  assert.match(root, /--icon-size:\s*20px/);
+  assert.doesNotMatch(root, /--icon:\s*\d+px/, "--icon 是颜色，尺寸必须叫 --icon-size");
 });
 
 /* ---------- 11. 第三轮：图标统一 ---------- */

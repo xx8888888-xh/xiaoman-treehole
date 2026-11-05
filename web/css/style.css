@@ -74,7 +74,7 @@
   --tap: 44px;
   --tap-sm: 36px;
   --tap-xs: 32px;
-  --icon: 20px;
+  --icon-size: 20px;   /* 尺寸；颜色是 --icon，两者不能同名 */
   --avatar: 30px;
   --switch-w: 48px;
   --switch-h: 28px;
@@ -144,6 +144,8 @@ body.theme-dark {
   --shadow-1: 0 1px 2px rgba(0, 0, 0, .5), 0 2px 10px rgba(0, 0, 0, .32);
   --shadow-2: 0 14px 36px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .4);
   --shadow-3: 0 24px 60px rgba(0, 0, 0, .6), 0 4px 12px rgba(0, 0, 0, .4);
+  /* 原生控件（下拉/日期/滚动条）跟着主题走，避免暗色下露出白底或浅灰字 */
+  color-scheme: dark;
 }
 
 /* 大字号：真实 +12.5%（16 → 18px） */
@@ -254,7 +256,7 @@ body {
               color var(--dur-state) var(--ease-standard),
               transform var(--dur-press) var(--ease-out);
 }
-.icon-btn svg { width: var(--icon); height: var(--icon); stroke-width: 1.5; }
+.icon-btn svg { width: var(--icon-size); height: var(--icon-size); stroke-width: 1.5; }
 .icon-btn:hover { background: var(--surface); }
 .icon-btn:active { background: var(--surface-2); transform: scale(var(--press-scale)); }
 .icon-btn[disabled] { color: var(--text-3); cursor: default; background: transparent; }
@@ -671,7 +673,7 @@ html[data-preset="minimal"] { --bubble-me: var(--surface-2); }
               opacity var(--dur-state) var(--ease-standard),
               transform var(--dur-press) var(--ease-out);
 }
-.send-btn svg { width: var(--icon); height: var(--icon); stroke-width: 1.5; }
+.send-btn svg { width: var(--icon-size); height: var(--icon-size); stroke-width: 1.5; }
 .send-btn:hover { background: var(--accent-strong); }
 .send-btn:active { transform: scale(var(--press-scale)); }
 .send-btn[disabled] {
@@ -1168,8 +1170,8 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   text-align: left;
 }
 .empty-art {
-  width: var(--icon);
-  height: var(--icon);
+  width: var(--icon-size);
+  height: var(--icon-size);
   margin-bottom: var(--space-1);
   color: var(--text-3);
   stroke: currentColor;
