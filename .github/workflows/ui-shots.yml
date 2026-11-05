@@ -1,0 +1,183 @@
+name: ui-shots
+
+# 第三轮视觉验收专用：云端渲染截图并回传 artifact。
+# 本地一律不起 headless 浏览器（见 AGENT_SCOPE.md / w18）。
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/ui-r3]
+    paths:
+      - "web/**"
+      - ".github/workflows/ui-shots.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-shots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      XIAOMAN_ALLOW_LOCAL_BROWSER: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright (chromium only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "playwright==1.47.0"
+          python -m playwright install --with-deps chromium
+
+      - name: Serve web/ statically
+        run: |
+          python -m http.server 8911 --bind 127.0.0.1 --directory web >/tmp/http.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:8911/index.html >/dev/null && break
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8911/index.html >/dev/null && echo "server ok"
+
+      - name: Render shots
+        run: |
+          mkdir -p shots
+          python - <<'PY'
+          import json, os
+          from playwright.sync_api import sync_playwright
+
+          BASE = "http://127.0.0.1:8911/index.html"
+          OUT = "shots"
+          PHONE = {"width": 390, "height": 844}
+          DESK = {"width": 1280, "height": 900}
+
+          CFG = {"mode": "offline", "heartbeatOn": False, "tts": "off", "allowFreePersonal": False}
+          MEM = {"称呼": "阿禾", "在意的人": "妈妈", "在意的事": "周三复诊", "最近": "在准备换工作"}
+
+          def seed(page, theme="light", font="normal"):
+              page.goto(BASE, wait_until="domcontentloaded")
+              appearance = {"preset": "default"}
+              if font == "large":
+                  appearance = {"preset": "custom", "font": "large", "motion": True, "iconsGray": True, "flat": False}
+              page.evaluate(
+                  """([cfg, mem, theme, appearance]) => {
+                      localStorage.clear();
+                      localStorage.setItem("xiaoman_cfg", JSON.stringify(cfg));
+                      localStorage.setItem("xiaoman_memory", JSON.stringify(mem));
+                      localStorage.setItem("xiaoman_theme", theme);
+                      localStorage.setItem("xiaoman_appearance_v1", JSON.stringify(appearance));
+                      localStorage.setItem("xiaoman_told_v", "999");
+                      // 截图里不要环境旁白（真实用户首启也会关掉一次）
+                      sessionStorage.setItem("xiaoman_degrade_off", "1");
+                      sessionStorage.setItem("xiaoman_voice_tip_off", "1");
+                  }""",
+                  [CFG, MEM, theme, appearance],
+              )
+              page.reload(wait_until="domcontentloaded")
+
+          def settle(page):
+              page.wait_for_timeout(2600)   # 等 Live2D 首帧或降级卡出现
+              page.wait_for_timeout(400)
+
+          def shot(page, name):
+              page.screenshot(path=os.path.join(OUT, name + ".png"), full_page=False)
+              print("shot", name)
+
+          def open_drawer(page, btn):
+              page.click("#" + btn)
+              page.wait_for_timeout(600)
+
+          def shot_bottom(page, panel, name):
+              """把面板滚到最底再截，验证长页面（关于区 / 清空记忆）的真实排布"""
+              page.evaluate(
+                  """(sel) => {
+                      const el = document.querySelector(sel);
+                      if (el) el.scrollTop = el.scrollHeight;
+                  }""",
+                  panel,
+              )
+              page.wait_for_timeout(260)
+              shot(page, name)
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(args=["--mute-audio"])
+
+              for theme in ("light", "dark"):
+                  ctx = browser.new_context(viewport=PHONE, device_scale_factor=2, locale="zh-CN")
+                  page = ctx.new_page()
+                  seed(page, theme)
+                  settle(page)
+                  shot(page, f"01-home-empty-{theme}")
+
+                  open_drawer(page, "settingsBtn")
+                  shot(page, f"02-settings-{theme}")
+                  shot_bottom(page, "#settingsModal .modal-panel", f"07-settings-bottom-{theme}")
+                  page.click("#settingsClose")
+                  page.wait_for_timeout(300)
+
+                  open_drawer(page, "memoryBtn")
+                  shot(page, f"03-memory-{theme}")
+                  shot_bottom(page, "#memoryDrawer .drawer-panel", f"08-memory-bottom-{theme}")
+                  page.click("#memoryClose")
+                  page.wait_for_timeout(300)
+
+                  # 聊一句：离线兜底回复，只为了让页面出现真实气泡层级
+                  page.fill("#textInput", "今天有点累，但还撑得住。")
+                  page.click("#sendBtn")
+                  page.wait_for_function(
+                      "() => document.querySelectorAll('.bubble').length >= 2",
+                      timeout=15000,
+                  )
+                  page.wait_for_timeout(1200)
+                  shot(page, f"04-chat-{theme}")
+                  ctx.close()
+
+              # 桌面宽屏
+              ctx = browser.new_context(viewport=DESK, device_scale_factor=1, locale="zh-CN")
+              page = ctx.new_page()
+              seed(page, "light")
+              settle(page)
+              page.fill("#textInput", "今天有点累，但还撑得住。")
+              page.click("#sendBtn")
+              page.wait_for_function("() => document.querySelectorAll('.bubble').length >= 2", timeout=15000)
+              page.wait_for_timeout(1200)
+              shot(page, "05-desktop-chat-light")
+              ctx.close()
+
+              # 大字号
+              ctx = browser.new_context(viewport=PHONE, device_scale_factor=2, locale="zh-CN")
+              page = ctx.new_page()
+              seed(page, "light", font="large")
+              settle(page)
+              shot(page, "06-large-font-empty-light")
+              ctx.close()
+
+              browser.close()
+
+          with open(os.path.join(OUT, "manifest.json"), "w", encoding="utf-8") as f:
+              json.dump(
+                  sorted(
+                      ({"file": n, "bytes": os.path.getsize(os.path.join(OUT, n))}
+                       for n in os.listdir(OUT) if n.endswith(".png")),
+                      key=lambda item: item["file"],
+                  ),
+                  f,
+                  ensure_ascii=False,
+                  indent=2,
+              )
+          PY
+
+      - name: Upload shots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-shots
+          path: shots/
+          retention-days: 14
