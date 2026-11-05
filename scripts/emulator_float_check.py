@@ -545,6 +545,9 @@ def main():
     # 后由页面侧自检回报；这里断言桌宠 WebView 也拿得到 window.AndroidTTS。
     check("桌宠 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/pet.html）",
           probe_has("[probe] AndroidTTS injected=1 /www/pet.html"))
+    # 探针只证明四个入口是 function；这里直接在桌宠 WebView 里调 speak()/available()
+    # 看返回值类型，证明 JS 桥真的可调用（不是只有个空对象）。
+    check_bridge("pet.html", "桌宠 WebView JS 桥可调用 AndroidTTS.speak（返回 boolean）", 9225)
     bframe = ball_frame(wins)
     check("未降级为圆形悬浮球（主形态=Live2D 桌宠）", bframe is None,
           f"ball_frame={bframe}" if bframe else "")
