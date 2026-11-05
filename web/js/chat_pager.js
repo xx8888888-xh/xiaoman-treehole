@@ -152,6 +152,16 @@ const ChatPager = (() => {
     else if (anchor === "keep") scroll.scrollTop = y0 + (scroll.scrollHeight - h0);
   }
 
+  /** 只在值真的变化时才写 DOM：push 每条都会走 syncBars，重复写同一串
+   *  仍会替换文本节点/触发样式失效，逐字流式下是纯浪费。 */
+  function setClass(node, cls) {
+    if (node && node.className !== cls) node.className = cls;
+  }
+
+  function setText(node, text) {
+    if (node && node.textContent !== text) node.textContent = text;
+  }
+
   function syncBars() {
     if (!topBar) return;
     const total = recs.length;
@@ -159,16 +169,19 @@ const ChatPager = (() => {
     // 有 loader 且窗口里已有内容时，顶栏始终可见：还能翻 / 已到底都给明确说法
     const canOlder = start > 0 || (!!loader && total > 0 && !exhausted);
     const showTop = total > 0 && (start > 0 || !!loader);
-    topBar.className = "msg-row window-tip" + (busy || showTop ? "" : " hidden");
-    if (busy) topBar.textContent = "正在翻出更早的消息…";
-    else if (start > 0) topBar.textContent = `↑ 更早的消息（还有 ${start} 条）`;
-    else if (exhausted) topBar.textContent = "没有更早了";
-    else topBar.textContent = "↑ 更早的消息";
+    setClass(topBar, "msg-row window-tip" + (busy || showTop ? "" : " hidden"));
+    if (busy) setText(topBar, "正在翻出更早的消息…");
+    else if (start > 0) setText(topBar, `↑ 更早的消息（还有 ${start} 条）`);
+    else if (exhausted) setText(topBar, "没有更早了");
+    else setText(topBar, "↑ 更早的消息");
     // 到这里没有更早记录时，顶栏保留提示但不再触发实际加载（visible 语义供 E2E 断言）
-    if (topBar.dataset) topBar.dataset.canOlder = canOlder ? "1" : "0";
+    if (topBar.dataset) {
+      const flag = canOlder ? "1" : "0";
+      if (topBar.dataset.canOlder !== flag) topBar.dataset.canOlder = flag;
+    }
     const fresh = total - end;
-    bottomBar.className = "msg-row window-tip" + (fresh > 0 ? "" : " hidden");
-    bottomBar.textContent = `↓ ${fresh} 条新消息`;
+    setClass(bottomBar, "msg-row window-tip" + (fresh > 0 ? "" : " hidden"));
+    setText(bottomBar, `↓ ${fresh} 条新消息`);
   }
 
   /** 追加一条消息；返回句柄（记录 + 已渲染节点，未渲染时 el=null） */
