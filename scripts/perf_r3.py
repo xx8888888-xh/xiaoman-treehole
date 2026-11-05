@@ -331,12 +331,22 @@ async def measure_load(browser, repeats=3, throttle=4):
 async def send_and_reply(page, text, timeout=15000):
     await wait_greet_done(page, timeout=8000)
     before = await page.evaluate("window.ChatPager.stats().total")
-    await page.evaluate(
-        """(t) => { const ta = document.getElementById('textInput');
-            ta.value = t; ta.dispatchEvent(new Event('input', { bubbles: true }));
-            document.getElementById('sendBtn').click(); }""", text)
-    await page.wait_for_function("(n) => window.ChatPager.stats().total >= n",
-                                 arg=before + 1, timeout=timeout)
+    # 上一轮收尾（withSendLock）偶尔还没放锁，此时 submitText 会 toast 并丢弃点击。
+    # 采样脚本必须保证"这条真的发出去"：填字 → 点 → 2s 没落地就重填再点。
+    deadline = time.monotonic() + timeout / 1000
+    while True:
+        await page.evaluate(
+            """(t) => { const ta = document.getElementById('textInput');
+                ta.value = t; ta.dispatchEvent(new Event('input', { bubbles: true }));
+                document.getElementById('sendBtn').click(); }""", text)
+        try:
+            await page.wait_for_function("(n) => window.ChatPager.stats().total >= n",
+                                         arg=before + 1, timeout=2000)
+            break
+        except Exception:
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(0.2)
     # 等回复彻底结束（typing 收起 + 总数稳定）
     last = -1
     for _ in range(150):
@@ -532,6 +542,8 @@ async def _memory_run(browser, rounds, warmup, silence_console):
                     decode: window.__stageDecode || null, mode: window.__stageMode })""")
     for i in range(warmup):
         await send_and_reply(page, f"预热第{i}轮，随便聊聊")
+        if (i + 1) % 10 == 0:
+            print(f"[memory] warmup {i + 1}/{warmup} silence={silence_console}", flush=True)
     if silence_console:
         await page.evaluate(
             """() => { window.__probeLog = console.log; window.__probeWarn = console.warn;
@@ -542,6 +554,8 @@ async def _memory_run(browser, rounds, warmup, silence_console):
     marks = []
     for i in range(rounds):
         await send_and_reply(page, f"今天有点累，随便聊聊第{i}轮")
+        if (i + 1) % 40 == 0:
+            print(f"[memory] round {i + 1}/{rounds} silence={silence_console}", flush=True)
         if i % 40 == 39:
             st = await js_state(page, session)
             pg = st["pager"] or {}
