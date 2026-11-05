@@ -127,26 +127,66 @@ def probes():
     return out
 
 
+def wait_probe(pattern, timeout=60):
+    """页面侧探针是异步（注入后 1.2s 起、页面未就绪会重试）：等到出现或超时。"""
+    end = time.time() + timeout
+    while time.time() < end:
+        line = next((ln.strip() for ln in probes().splitlines() if pattern in ln), "")
+        if line:
+            return line
+        time.sleep(2)
+    return ""
+
+
+def dump_webview_logs():
+    """页面起不来时留证据：chromium/WebView 的日志 + 当前前台 Activity（不过 shell 管道，Windows 也能跑）。"""
+    _, act = sh("adb shell dumpsys activity activities", timeout=60)
+    cur = next((ln.strip() for ln in act.splitlines() if "mResumedActivity" in ln), "")
+    print(f"[CHAT-DIAG] 前台 Activity: {cur[:160]}", flush=True)
+    _, lg = sh("adb logcat -d", timeout=90)
+    hits = [ln for ln in lg.splitlines()
+            if re.search(r"chromium|WebView|net::ERR|console", ln, re.I)]
+    for ln in hits[-25:]:
+        print("[CHAT-DIAG] " + ln[:220], flush=True)
+
+
 def main():
-    # 0) 注入探针：主界面这条 WebView 必须拿得到 window.AndroidTTS
-    logs0 = probes()
-    tts_line = next((ln.strip() for ln in logs0.splitlines()
-                     if "[probe] AndroidTTS injected=1 /www/index.html" in ln), "")
+    # 1) 附着 WebView（等 page 真正 commit；慢 runner 上冷启动可能要几十秒）
+    cdp = Cdp(port=PORT)
+    try:
+        url = cdp.attach("index.html", timeout=90)
+    except Exception as e:
+        check("附着主界面 WebView（DevTools）", False, str(e)[:200])
+        dump_webview_logs()
+        print(f"[CHAT-SUMMARY] {sum(RESULTS)}/{len(RESULTS)} 通过", flush=True)
+        sys.exit(1)
+    print(f"[CHAT] 已附着: {url}", flush=True)
+
+    # 2) 等页面把输入框渲染出来（DOM 就绪后再谈坐标与断言）
+    ready = False
+    for _ in range(30):
+        try:
+            if cdp.eval("!!document.querySelector('#textInput')"):
+                ready = True
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    check("主界面 DOM 就绪（#textInput 已渲染）", ready)
+    if not ready:
+        dump_webview_logs()
+
+    # 3) 注入探针：主界面这条 WebView 必须拿得到 window.AndroidTTS
+    tts_line = wait_probe("[probe] AndroidTTS injected=1 /www/index.html", 60)
     check("主界面 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1）",
           bool(tts_line), tts_line[:100] or "logcat 无注入探针")
 
-    # 1) 附着 WebView
-    cdp = Cdp(port=PORT)
-    try:
-        url = cdp.attach("index.html")
-    except Exception as e:
-        check("附着主界面 WebView（DevTools）", False, str(e)[:160])
-        print("[CHAT-SUMMARY] 0/%d 通过" % len(RESULTS), flush=True)
+    if not ready:
+        print(f"[CHAT-SUMMARY] {sum(RESULTS)}/{len(RESULTS)} 通过", flush=True)
         sys.exit(1)
-    print(f"[CHAT] 已附着: {url}", flush=True)
-    time.sleep(2)
+    time.sleep(1)
 
-    # 2) WebView 屏幕原点（ui-dump 里的容器 bounds；拿不到就如实报 FAIL 而不是猜）
+    # 4) WebView 屏幕原点（ui-dump 里的容器 bounds；拿不到就如实报 FAIL 而不是猜）
     box = webview_origin(ui_dump())
     if not box:
         check("uiautomator dump 能拿到 WebView 容器 bounds", False,

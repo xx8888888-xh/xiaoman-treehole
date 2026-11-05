@@ -40,7 +40,10 @@ class Cdp:
         self.n = 0
         self.url_filter = "index.html"
 
-    def attach(self, url_filter="index.html"):
+    def attach(self, url_filter="index.html", timeout=90):
+        """等到 page 真正 commit（/json/list 里 url 非空且匹配）再连。
+        WebView 冷启动 + assets 首次加载在慢 runner 上可能要十几秒，
+        之前只查一次会拿到 url="" 的空 target，直接把"页面还没起"误判成"注入失败"。"""
         self.url_filter = url_filter
         _, out = sh("adb shell cat /proc/net/unix")
         sockets = sorted(set(re.findall(r"webview_devtools_remote_(\d+)", out)))
@@ -50,22 +53,22 @@ class Cdp:
         if not sockets:
             raise RuntimeError("找不到 WebView devtools socket")
         sh(f"adb forward tcp:{self.port} localabstract:webview_devtools_remote_{sockets[0]}")
-        lst = None
-        for _ in range(20):
+        end = time.time() + timeout
+        last = []
+        while time.time() < end:
             try:
                 lst = requests.get(f"http://127.0.0.1:{self.port}/json/list", timeout=5).json()
-                break
             except Exception:
-                time.sleep(0.5)
-        if lst is None:
-            raise RuntimeError("devtools /json/list 不可达")
-        cand = [t for t in lst if url_filter in (t.get("url") or "")]
-        if not cand:
-            raise RuntimeError(f"没有匹配 {url_filter} 的 WebView target: "
-                               f"{[t.get('url') for t in lst]}")
-        target = cand[0]
-        self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024)
-        return target["url"]
+                lst = []
+            last = [t.get("url") for t in lst]
+            cand = [t for t in lst if url_filter in (t.get("url") or "")]
+            if cand:
+                target = cand[0]
+                self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024)
+                return target["url"]
+            time.sleep(1)
+        raise RuntimeError(f"{timeout}s 内没有匹配 {url_filter} 的 WebView target，"
+                           f"最近一次 url 列表={last}")
 
     def eval(self, js, timeout=20):
         """掉线自动重连（配置变更/键盘弹出可能让 devtools 连接断开）。"""
