@@ -211,8 +211,15 @@ async def measure_load_once(browser):
             except ValueError:
                 pass
     await asyncio.sleep(2.2)          # 舞台 idle 挂载 + 纹理预热窗口
+    # 观测器自检：主动忙等 80ms，确认 longtask 真的会被采集（避免"0 个长任务"被误读成探针失灵）
+    selfcheck_at = await page.evaluate("performance.now()")
+    await page.evaluate("() => { const t0 = performance.now(); while (performance.now() - t0 < 80) {} }")
+    await asyncio.sleep(0.35)
     task.cancel()
     perf = await page.evaluate("window.__perf")
+    real_tasks = [t for t in perf["longTasks"] if t["start"] < selfcheck_at - 1]
+    self_task = [t for t in perf["longTasks"] if t["start"] >= selfcheck_at - 1]
+    selfcheck = self_task[0]["dur"] if self_task else None
     after = await js_state(page, session)
     stage = await page.evaluate(
         """() => ({ mode: window.__stageMode, tier: window.__stageTier,
@@ -223,7 +230,8 @@ async def measure_load_once(browser):
         "dclMs": dcl, "bindMs": bind, "mountMs": mount,
         "inputReadyMs": input_ready, "readyToSendMs": ready_to_send,
         "firstSendMs": first_send,
-        "long": lt_summary(perf["longTasks"]),
+        "long": lt_summary(real_tasks),
+        "longTaskSelfCheckMs": selfcheck,
         "heapPeakMB": round(heap_peak["v"] / 1048576, 2),
         "heapAfterGcMB": round((after["JSHeapUsedSize"] or 0) / 1048576, 2),
         "domNodes": after["domNodes"],
@@ -256,6 +264,7 @@ async def measure_load(browser, repeats=3):
             "longMax": round(statistics.median([r["long"]["max"] for r in runs])),
             "longOver50": round(statistics.median([r["long"]["over50"] for r in runs])),
             "longOver50Max": round(statistics.median([r["long"]["over50max"] for r in runs])),
+            "longTaskSelfCheckMs": med("longTaskSelfCheckMs"),
             "heapPeakMB": round(statistics.median([r["heapPeakMB"] for r in runs]), 2),
         },
     }
