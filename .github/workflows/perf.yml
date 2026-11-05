@@ -22,6 +22,10 @@ on:
         description: "样本标签（before / after）"
         required: false
         default: ""
+      baseline:
+        description: "改前基线：临时还原旧 app.js（1=是）"
+        required: false
+        default: ""
 
 concurrency:
   group: perf-${{ github.ref }}
@@ -43,6 +47,15 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore baseline app.js
+        if: inputs.baseline == '1'
+        run: |
+          # ① 改前基线：同一份采样脚本，只把 app.js 换回开场白非惰性版本
+          git show f0f19f2:web/js/app.js > web/js/app.js
+          git diff --stat
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -109,6 +122,11 @@ jobs:
                   print("load@%sx median LCP=%sms longMax=%sms over50=%s over50Max=%sms drawSlowest=%sms"
                         % (thr.get("rate"), tm["lcp"], tm["longMax"], tm["longOver50"],
                            tm["longOver50Max"], tm["drawSlowestMs"]))
+              gr = (d.get("load") or {}).get("greet") or {}
+              if gr:
+                  print("greet@%sx landed=%sms done=%sms played=%s skipped=%s records=%s"
+                        % (gr.get("throttle"), gr.get("greetLandedMs"), gr.get("greetDoneMs"),
+                           gr.get("played"), gr.get("skipped"), gr.get("records")))
           st = d.get("stream") or {}
           if st:
               print("stream small:", json.dumps(st["small"]["long"], ensure_ascii=False))
@@ -124,6 +142,13 @@ jobs:
               print("memory heap %s→%sMB growth=%s marks=%s dom=%s→%s longMax=%s"
                     % (me["heapStartMB"], me["heapEndMB"], me["heapGrowthMB"],
                        me["heapPer40MB"], me["domNodesStart"], me["domNodesEnd"], me["longMax"]))
+              pg = me.get("paging") or {}
+              if pg:
+                  print("paging moves=%s calls=%s stepOk=%s overlapOk=%s fetchKeepsWindow=%s dupInPage=%s firstRepeat=%s idsPresent=%s totalStable=%s before=%s after=%s"
+                        % (pg["moves"], pg["calls"], pg["stepOk"], pg["overlapOk"],
+                           pg["fetchKeepsWindow"], pg["dupInPage"], pg["firstRepeat"],
+                           pg["idsPresent"], pg["totalStable"], pg["before"], pg["after"]))
+                  print("memory marks:", json.dumps(me.get("marks"), ensure_ascii=False))
           PY
 
       - name: Upload artifacts

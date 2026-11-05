@@ -192,14 +192,14 @@ async def measure_load_once(browser, throttle=1):
     t_nav = time.perf_counter()
     await page.goto(BASE + "?perfdraw=1", wait_until="domcontentloaded")
     dcl = round((time.perf_counter() - t_nav) * 1000)
-    # 「首条消息可发送」：bind 完成（发送键已挂 onclick）→ 等开场白说完 →
-    # 真发一条并等自己的气泡落地，取全程时刻。
+    # ① 首条消息落地：bind 完成（发送键已挂 onclick）→ 用户立刻输入并发送 →
+    # 自己的气泡真正进列表。不再等开场白：真实用户想说就说，开场白应当让位。
+    # 开场白本身的体验另用 measure_greet_once（空闲路径）单独验证。
     await page.wait_for_function(
         "() => { const b = document.getElementById('sendBtn'), t = document.getElementById('textInput');"
         " return !!(b && t && b.onclick); }", timeout=15000, polling=25)
     input_ready = round(await page.evaluate("performance.now()"))
-    await wait_greet_done(page)
-    ready_to_send = round(await page.evaluate("performance.now()"))
+    ready_to_send = input_ready          # 发送就绪时刻＝输入可用时刻（互斥锁不再挡发送）
     await page.evaluate(
         """() => { const t = document.getElementById('textInput');
             t.value = '在吗'; t.dispatchEvent(new Event('input', { bubbles: true }));
@@ -222,7 +222,7 @@ async def measure_load_once(browser, throttle=1):
                 mount = int(line.split("=")[-1].strip())
             except ValueError:
                 pass
-    await asyncio.sleep(2.2)          # 舞台 idle 挂载 + 纹理预热窗口
+    await asyncio.sleep(2.2)          # 舞台 idle 挂载 + 纹理预热窗口 + 首轮回复收尾
     task.cancel()
     perf = await page.evaluate("window.__perf")
     after = await js_state(page, session)
@@ -243,6 +243,8 @@ async def measure_load_once(browser, throttle=1):
         "dclMs": dcl, "bindMs": bind, "mountMs": mount,
         "inputReadyMs": input_ready, "readyToSendMs": ready_to_send,
         "firstSendMs": first_send,
+        "greetSkipped": any("greet skipped user-first" in c for c in console),
+        "greetPlayed": any("greet played" in c for c in console),
         "long": lt_summary(perf["longTasks"]),
         "longTaskSelfCheckMs": selfcheck,
         "selfcheckAtMs": round(selfcheck_at),
@@ -260,6 +262,37 @@ async def measure_load_once(browser, throttle=1):
     }
     await ctx.close()
     return res
+
+
+async def measure_greet_once(browser, throttle=4):
+    """空闲路径：用户先不说话时，开场白仍照常播（验证 ① 没把开场白砍掉）。
+    与 measure_load_once 的「用户先发」路径相对：同一份 app.js 的两条分支。"""
+    ctx, page = await new_page(browser, CFG_MOCK)
+    session = await attach(ctx, page)
+    if throttle > 1:
+        await session.send("Emulation.setCPUThrottlingRate", {"rate": throttle})
+    console = []
+    page.on("console", lambda m: console.append(m.text))
+    await page.goto(BASE, wait_until="domcontentloaded")
+    await page.wait_for_function(
+        "() => window.ChatPager && ChatPager.stats().total >= 1", timeout=15000, polling=25)
+    landed = round(await page.evaluate("performance.now()"))
+    last, done = -1, None
+    for _ in range(200):          # 等开场白所有分段播完（typing 收起 + 条数稳定）
+        st = await page.evaluate(
+            """() => ({t: window.ChatPager.stats().total,
+                        h: document.getElementById('typingRow').classList.contains('hidden')})""")
+        if st["h"] and st["t"] == last and st["t"] >= 1:
+            done = round(await page.evaluate("performance.now()"))
+            break
+        last = st["t"]
+        await asyncio.sleep(0.1)
+    stats = await page.evaluate("window.ChatPager.stats()")
+    await ctx.close()
+    return {"throttle": throttle, "greetLandedMs": landed, "greetDoneMs": done,
+            "records": stats.get("total"), "firstText": stats.get("first"),
+            "played": any("[probe] greet played" in c for c in console),
+            "skipped": any("greet skipped user-first" in c for c in console)}
 
 
 def load_median(runs):
@@ -285,10 +318,12 @@ def load_median(runs):
 async def measure_load(browser, repeats=3, throttle=4):
     runs = [await measure_load_once(browser, throttle=1) for _ in range(repeats)]
     thr = [await measure_load_once(browser, throttle=throttle) for _ in range(repeats)]
+    greet = await measure_greet_once(browser, throttle)
     return {
         "runs": runs,
         "median": load_median(runs),
         "throttled": {"rate": throttle, "runs": thr, "median": load_median(thr)},
+        "greet": greet,
     }
 
 
@@ -412,6 +447,61 @@ async def measure_micro(browser):
             "pager": pager}
 
 
+async def paging_audit(page, pages=20):
+    """② 淘汰后的翻页校验：连续上翻，直到窗口真正前移 20 页。
+    判据：total 恒定（淘汰不改变已知总数）；每次"视线前移"恰好 PAGE(10) 且与上一步
+    有 4 行重叠、重叠 id 完全一致（不重复、不漏行）；loader 取回淘汰段的那一步窗口不动
+    （内容不变，只补上方缓冲）；每页内 id 不重；窗口起点 id 不回头。"""
+    st0 = await page.evaluate("window.ChatPager.stats()")
+    out = {"before": {k: st0.get(k) for k in
+                      ("total", "start", "held", "evicted", "rendered")},
+           "calls": 0, "moves": 0, "movedAll": True, "totalStable": True,
+           "overlapOk": True, "stepOk": True, "dupInPage": False,
+           "firstRepeat": False, "fetchKeepsWindow": True, "idsPresent": True}
+    prev_ids = st0.get("windowIds") or []
+    prev_start = st0.get("start")
+    first_ids = {st0.get("windowFirstId")}
+    while out["moves"] < pages and out["calls"] < pages * 4:
+        out["calls"] += 1
+        moved = await page.evaluate("async () => await window.ChatPager.older()")
+        st = await page.evaluate("window.ChatPager.stats()")
+        ids = st.get("windowIds") or []
+        if not moved:
+            out["movedAll"] = False
+            break
+        if st.get("total") != st0.get("total"):
+            out["totalStable"] = False
+        if any(v is None for v in ids):
+            out["idsPresent"] = False
+        if st.get("start") != prev_start:
+            out["moves"] += 1
+            d = prev_start - st.get("start")
+            # 正常每页 10 行；只在"内存区起点（已淘汰边界）"允许 <10 的钳制步
+            if d != 10 and not (d > 0 and st.get("start") == st.get("evicted")):
+                out["stepOk"] = False
+            # 前移 d 行后，新旧窗口重叠部分应逐 id 相同（不重复、不漏行）
+            if prev_ids and ids and d > 0 and d < 14 and ids[d:14] != prev_ids[:14 - d]:
+                out["overlapOk"] = False
+            prev_start = st.get("start")
+        else:
+            # 仅从库里补一段更早缓冲：窗口内容不应变
+            if prev_ids and ids and ids != prev_ids:
+                out["fetchKeepsWindow"] = False
+        uniq = [v for v in ids if v is not None]
+        if len(uniq) != len(set(uniq)):
+            out["dupInPage"] = True
+        fid = st.get("windowFirstId")
+        if st.get("start") != prev_start and fid is not None:
+            if fid in first_ids:
+                out["firstRepeat"] = True
+            first_ids.add(fid)
+        prev_ids = ids
+    out["after"] = {k: (await page.evaluate("window.ChatPager.stats()")).get(k)
+                    for k in ("total", "start", "held", "evicted", "rendered")}
+    await page.evaluate("window.ChatPager.jumpLatest()")
+    return out
+
+
 # ---------------------------------------------------------------- 4) memory
 async def measure_memory(browser, rounds=200):
     ctx, page = await new_page(browser, CFG_OFFLINE)
@@ -428,10 +518,13 @@ async def measure_memory(browser, rounds=200):
         await send_and_reply(page, f"今天有点累，随便聊聊第{i}轮")
         if i % 40 == 39:
             st = await js_state(page, session)
+            pg = st["pager"] or {}
             marks.append({"round": i + 1,
                           "heapMB": round(st["JSHeapUsedSize"] / 1048576, 2),
                           "domNodes": st["domNodes"],
-                          "rendered": (st["pager"] or {}).get("rendered")})
+                          "rendered": pg.get("rendered"),
+                          "held": pg.get("held"), "evicted": pg.get("evicted"),
+                          "total": pg.get("total")})
     await asyncio.sleep(1.2)
     s1 = await js_state(page, session)
     tex1 = await page.evaluate(
@@ -439,6 +532,8 @@ async def measure_memory(browser, rounds=200):
                     decode: window.__stageDecode || null, mode: window.__stageMode,
                     imgDecode: window.__perf ? window.__perf.decode : null })""")
     perf = await page.evaluate("window.__perf")
+    # 翻页自检放在堆取样之后：取回淘汰段会让内存短暂变大，不能污染 heapEnd
+    paging = await paging_audit(page, pages=20)
     await ctx.close()
     return {
         "rounds": rounds,
@@ -449,6 +544,7 @@ async def measure_memory(browser, rounds=200):
         "marks": marks,
         "domNodesStart": s0["domNodes"], "domNodesEnd": s1["domNodes"],
         "pager": s1["pager"],
+        "paging": paging,
         "longMax": max([t["dur"] for t in perf["longTasks"]], default=0),
         "textureStart": tex0, "textureEnd": tex1,
         "nodesMetric": {"start": s0["Nodes"], "end": s1["Nodes"]},
