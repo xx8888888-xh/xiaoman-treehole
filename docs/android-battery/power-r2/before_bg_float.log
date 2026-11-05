@@ -1,0 +1,11 @@
+﻿
+=== SEGMENT B_bg_float (5min) ===
+[SEG] B_bg_float wall=300s uid=u0a148 ticksΔ=273 (13618:1244)
+[SEG] cpuinfo total: 1.7% TOTAL: 0% user + 1.6% kernel + 0% iowait + 0% softirq
+[SEG] cpuinfo app: 0.7% 13618/com.xiaoman.treehole: 0% user + 0.7% kernel / faults: 19 minor
+[SEG] probes: {'msg_me': 0, 'msg_them': 0, 'pet_ready': 0}
+[SEG] batterystats: total=3.71e-05mAh cpu=3.71e-05mAh cpu_sec=16.6s device_drain=0.0mAh
+[SEG] raw: UID u0a148: 0.0000371 fgs: 0.0000371 ( cpu=0.0000371 (16s 608ms) cpu:fgs=0.0000371 (1s 337ms) mobile_radio=0 (1m 41s 893ms) )
+
+=== SUMMARY ===
+B_bg_float: 3.71e-05mAh / cpu 3.71e-05mAh / cpuΔ 16.608s / ticksΔ=273 / probes={'msg_me': 0, 'msg_them': 0, 'pet_ready': 0} / device=0.0mAh
