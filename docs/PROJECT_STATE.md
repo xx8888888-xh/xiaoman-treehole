@@ -1,7 +1,7 @@
 # PROJECT_STATE · 小满树洞（Xiaoman Treehole）
 
 > 本文档是项目的**唯一权威状态源**，持续更新。任何人（或 AI）接手项目，先完整读完文件即可掌握全局。
-> 最后更新：2026-11-05（第四轮合并 r4）｜ 当前版本：v0.5.0 ｜ 状态：**w10–w14 已并入 `feat/containerize-and-config`，全套闸门全绿** ｜ 集成分支：`feat/containerize-and-config`（tag `r4-20261105`）；`main` 为稳定线。
+> 最后更新：2026-11-05（第五轮合并 r5）｜ 当前版本：v0.5.0 ｜ 状态：**w15/w16/w17 已并入 `feat/containerize-and-config`，本地闸门全绿，云端 e2e/android 已触发** ｜ 集成分支：`feat/containerize-and-config`（tag `r5-20261105`）；`main` 为稳定线。
 
 ## 0. 2026-11-04 当前事实（优先于下文历史快照）
 
@@ -23,6 +23,7 @@
 | 功能落实（2026-11-05） | 分支 `feat/feature-completeness`（基线 61384a0，**已并入 r3**）：43 项承诺功能盘点见 `docs/FEATURE_MATRIX.md`；已补齐设置开关真实生效（语音链跟随设置）、提醒 UI 闭环、小本本统计、首次空状态、错误边界提示 |
 | 第三轮合并 r3（2026-11-05） | `feat/containerize-and-config` ← w10 Live2D 接入 + w11 真人感（服务端记忆槽）+ w12 功能补齐 + w13 性能；四个合并提交无冲突（逐块能力全保留）；合并后闸门：node **181/181**、pytest **145 + 19 subtests**、biome **0 error**、`verify_assets` **PASS**（86 files / 6,480,501 B）、E2E **60/60**、live2d **24/24**、rAF **8/8**、feature-loop **43/43** |
 | 第四轮合并 r4（2026-11-05） | `feat/containerize-and-config` ← w14 `feat/android-battery`（`cfbbe71`）：新增 `docs/android-battery/**` 真机复测报告/日志/截图 + `scripts/emulator_adapt_sweep.py`、`scripts/emulator_power_probe.py`；**零冲突**（纯新增、未碰 `web/**`），产物体积不变（86 files / 6,480,501 B）；闸门 node 181 / pytest 145+19 / biome 0 error / E2E 60 / live2d 24 / rAF 8 / feature 43 全绿；`treehole-w14` worktree 已移除；w15/w16 未触碰 |
+| 第五轮合并 r5（2026-11-05） | `feat/containerize-and-config` ← w16 `feat/data-completeness`（`00af07b`，服务端记忆/备份 v3、消息删改、统计清空、离线引擎 `reply(history, sid)` 契约）→ w15 `feat/ui-polish-r2`（`78d491c`，UI 精修 R2、时间分隔、状态条收束贴底）→ w17 `feat/apk-slim-power`（`6d059f1`，桌宠降载、256 色纹理、APK 剔除未用资产、字体 clamp 150）。仅 w16 在 `docs/DEVLOG.md` 有 1 处文档冲突（两段都保留）；代码零冲突。本地闸门：node **222/222**、pytest **153 + 19**、biome **0 error**、`verify_assets` **PASS 68 files / 1,303,097 B**（256 色 + 剔除未用层后从 6.5 MB 降到 1.3 MB）。云端 e2e/android 见 Actions run 记录 |
 
 ---
 

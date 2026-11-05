@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-11-05 · 第五轮合并 r5（w16 → w15 → w17 → feat/containerize-and-config）
+
+> 背景：三个并行分支回报完毕，主干处于 r4（`86c2d11`，tag `r4-20261105`），其上另有 6 条 CI 提交（HEAD `d882d99`）。先建 `backup/pre-r5-20261105` 分支 + `backup-pre-r5-20261105` tag。**顺序敏感**：w15 依赖 w16 的 `sid` 契约，必须先合 w16。不合并 `feat/android-battery`（已并入 r4）。
+
+### 各步结果（本地实跑）
+| 步骤 | 合并提交 | 冲突 | node | pytest | biome | verify_assets |
+|---|---|---|---|---|---|---|
+| 基线 `d882d99` | — | — | 181/181 | 145 + 19 | 0 error（59 warning） | PASS 86 files / 6,480,501 B |
+| 1 w16 `00af07b` | `cbe5f23` | `docs/DEVLOG.md` 1 处（两段都留） | 205/205 | 153 + 19 | 0 error | PASS 86 files / 6,524,077 B |
+| 2 w15 `78d491c` | `2832e46` | 无 | 222/222 | 153 + 19 | 0 error | PASS 87 files / 6,543,394 B |
+| 3 w17 `6d059f1` | `f3fdd3d` | 无 | 222/222 | 153 + 19 | 0 error | PASS 68 files / 1,303,097 B |
+
+- w15 分支里已自带一次 w16 合并（`33cc376`），因此第二步是增量合并，`app.js` 只加了时间分隔/滚动 38 行，`sessionId()` 调用未被改回（`api.js` 15 处、全仓 17 处保持）。
+- w17 合并后统一重跑 `scripts/build_assets.sh`：256 色纹理 + `asset_excludes.sh` 剔除未请求的基准层/缩略图，产物 **68 files / 1,303,097 B**（较 r4 的 86 files / 6,480,501 B 下降 80%）。
+- 关键函数复核全部在位：`startWander`/`stopWander`/`pickTier`/`modelUrl`/`activeTier`/`freezeTimer`/`pauseForEnv`/`resetSession`/`sessionId()`/`focusHead`/`XMTimeDivider`；`mock_engine.js` 契约为 `reply(history, sid)`。
+- 本地限制：断电后 WSL docker 守护未启动且 `sudo` 需密码，本轮**不跑本地 e2e/live2d/rAF/feature-loop**（改由云端 `e2e.yml` 执行），全程未起 headless 浏览器、未开 AVD、未跑本地 Gradle。
+
+**触及**：`web/js/{app,chat_pager,api,backup,mock_engine,pet,reminders,stats,store,time_divider}.js`、`web/css/style.css`、`web/index.html`、`server/mock_api.py`、`server/tests/test_session_io.py`、`web/tests/**`、`scripts/{test_roundtrip,test_msg_edit,optimize_art,asset_excludes}.py|sh`、`web/assets/live2d/original/art/**`、`docs/**`；本条 + `docs/PROJECT_STATE.md`。
+
+---
+
 ## 2026-11-05 · 第四轮合并 r4（feat/android-battery → feat/containerize-and-config）
 
 > 背景：w14 真机复测回报完毕，主干处于 r3（`0a86007`，tag `r3-20261105`）。单分支合并，先建 `backup/pre-r4-20261105` 分支 + `backup-pre-r4-20261105` tag。
