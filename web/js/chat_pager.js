@@ -88,6 +88,39 @@ const ChatPager = (() => {
   }
 
   /**
+   * 分页窗口里第 i 条的上一条时间戳（供时间分隔用）。
+   * 向前找最近一条带 at 的记录：窗口首行也能拿到窗口外的前一条，
+   * 翻页后"同一天/跨天"的判定不会因为窗口边界而错位。
+   * 找不到（整段都没有时间戳）返回 null，交由调用方决定是否放弃分隔。
+   */
+  function prevStamp(i) {
+    for (let k = i - 1; k >= 0; k--) {
+      const raw = recs[k] && recs[k].at;
+      if (raw == null || raw === "") continue;   // 缺失时间戳不能当 0 用
+      const at = Number(raw);
+      if (Number.isFinite(at)) return at;
+    }
+    return null;
+  }
+
+  /**
+   * 状态区（错误卡/旁白行）出现或收起后重新贴底。
+   * 只在用户仍"跟随最新"（pinned）时生效：主动上滑看历史时绝不抢滚动位置。
+   * 用 behavior:"instant" 绕开 CSS 的 scroll-behavior:smooth，
+   * 否则高度变化的瞬间视口还在缓动，最后一条会被顶出半行。
+   */
+  function followBottom() {
+    if (!scroll || !pinned) return false;
+    const top = scroll.scrollHeight || 0;
+    if (typeof scroll.scrollTo === "function") {
+      scroll.scrollTo({ top, left: 0, behavior: "instant" });
+    } else {
+      scroll.scrollTop = top;
+    }
+    return true;
+  }
+
+  /**
    * 重建窗口。anchor：
    *  - "bottom"：新消息/回到底部，滚到最新
    *  - "keep"：翻页，保持当前内容在视口里的位置（按高度差回填）
@@ -107,7 +140,7 @@ const ChatPager = (() => {
     const frag = doc && typeof doc.createDocumentFragment === "function"
       ? doc.createDocumentFragment() : null;
     for (let i = start; i < end; i++) {
-      const node = build(recs[i], i, i > 0 ? recs[i - 1] : null);
+      const node = build(recs[i], i, i > 0 ? recs[i - 1] : null, prevStamp(i));
       if (frag) frag.appendChild(node); else host.insertBefore(node, typing);
       rendered.push(node);
     }
@@ -151,7 +184,7 @@ const ChatPager = (() => {
         if (first && first.parentElement === host) host.removeChild(first);
         rendered.shift();
         start = total - VIEW;
-        const node = build(recs[total - 1], total - 1, recs[total - 2]);
+        const node = build(recs[total - 1], total - 1, recs[total - 2], prevStamp(total - 1));
         host.insertBefore(node, typing);
         rendered.push(node);
         host.insertBefore(bottomBar, typing);
@@ -222,7 +255,7 @@ const ChatPager = (() => {
     if (!handle.el || handle.el.parentElement !== host) return true;
     const i = rendered.indexOf(handle.el);
     const abs = start + (i >= 0 ? i : 0);
-    const fresh = build(handle.rec, abs, abs > 0 ? recs[abs - 1] : null);
+    const fresh = build(handle.rec, abs, abs > 0 ? recs[abs - 1] : null, prevStamp(abs));
     host.replaceChild(fresh, handle.el);
     if (i >= 0) rendered[i] = fresh;
     handle.el = fresh;
@@ -248,7 +281,7 @@ const ChatPager = (() => {
     const old = rendered[i - start];
     if (!old || old.parentElement !== host) return true;
     const abs = i;
-    const fresh = build(rec, abs, abs > 0 ? recs[abs - 1] : null);
+    const fresh = build(rec, abs, abs > 0 ? recs[abs - 1] : null, prevStamp(abs));
     host.replaceChild(fresh, old);
     rendered[i - start] = fresh;
     return true;
@@ -274,7 +307,10 @@ const ChatPager = (() => {
     };
   }
 
-  const api = { mount, push, older, jumpLatest, markVoice, remove, patch, list, stats, PAGE, VIEW };
+  const api = {
+    mount, push, older, jumpLatest, followBottom, markVoice, remove, patch,
+    list, stats, PAGE, VIEW
+  };
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof window !== "undefined") window.ChatPager = api;   // classic script 顶层 const 不挂 window
   return api;
