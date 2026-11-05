@@ -85,6 +85,7 @@ async def main():
             await pg.click("#memoryBtn")
             await asyncio.sleep(1)
             # 抽屉内容异步拉取（提醒清单来自后端），CI 上比本地慢：轮询到稳定，不缩短断言
+            # 抽屉结构：提醒区（"提醒"/"即将到来"）+ 记忆区；提醒行含药物名与时间
             drawer = ""
             deadline = time.time() + 8
             while time.time() < deadline:
@@ -92,10 +93,10 @@ async def main():
                     drawer = await pg.inner_text("#memoryDrawer")
                 except Exception:
                     drawer = ""
-                if "定好的提醒" in drawer and "吃药" in drawer:
+                if "吃药" in drawer and ("08:00" in drawer or "8:00" in drawer) and "提醒" in drawer:
                     break
                 await asyncio.sleep(0.5)
-            ok3 = "定好的提醒" in drawer and ("吃药" in drawer)
+            ok3 = ("吃药" in drawer and ("08:00" in drawer or "8:00" in drawer) and "提醒" in drawer)
             print("DRAWER_LIST:", "PASS" if ok3 else "FAIL", "|", drawer.replace("\n", " / ")[:160])
             check("DRAWER_LIST", ok3)
             await pg.screenshot(path=os.path.join(SHOTS, "07_memory_reminder_drawer.png"))
