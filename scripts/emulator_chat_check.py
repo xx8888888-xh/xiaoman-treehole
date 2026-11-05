@@ -88,7 +88,7 @@ PROBE_JS = r"""
 (() => {
   const i = document.querySelector('#textInput');
   const b = document.querySelector('#sendBtn');
-  const msgs = document.querySelectorAll('#messages .msg-row');
+  const msgs = document.querySelectorAll('#messages .msg-row:not(.hidden)');
   const rect = el => {
     if (!el) return null;
     const r = el.getBoundingClientRect();
@@ -99,12 +99,23 @@ PROBE_JS = r"""
     send: rect(b),
     value: i ? i.value : null,
     disabled: b ? !!b.disabled : null,
+    busy: typeof window.__isBusy === "function" ? window.__isBusy() : null,
     rows: msgs.length,
     active: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : '',
     dpr: window.devicePixelRatio || 1,
     innerHeight: window.innerHeight
   };
 })()
+"""
+
+# 页面是否真的初始化完成：app.js 在 API 缺失时会整段中断（bind 不执行），
+# 表现是输入框永远 disabled、消息发不出去。先单独断言，避免把根因误报成"点偏"。
+INIT_JS = r"""
+(() => ({
+  api: typeof window.API,
+  bind: typeof window.__isBusy,
+  rows: document.querySelectorAll('#messages .msg-row:not(.hidden)').length
+}))()
 """
 
 
@@ -162,17 +173,20 @@ def main():
         sys.exit(1)
     print(f"[CHAT] 已附着: {url}", flush=True)
 
-    # 2) 等页面把输入框渲染出来（DOM 就绪后再谈坐标与断言）
+    # 2) 等页面把输入框渲染出来，并确认 app.js 真的初始化完（API/绑定都在）
     ready = False
+    init = {}
     for _ in range(30):
         try:
-            if cdp.eval("!!document.querySelector('#textInput')"):
+            init = cdp.eval(INIT_JS)
+            if init.get("api") == "object" and init.get("bind") == "function":
                 ready = True
                 break
         except Exception:
             pass
         time.sleep(1)
-    check("主界面 DOM 就绪（#textInput 已渲染）", ready)
+    check("主界面 DOM 就绪且 app.js 初始化完成（window.API / __isBusy）", ready,
+          f"api={init.get('api')} bind={init.get('bind')} rows={init.get('rows')}")
     if not ready:
         dump_webview_logs()
 
@@ -228,7 +242,7 @@ def main():
         p2 = cdp.eval(PROBE_JS)
     check("textInput.text 非空（真的打进字了）", typed, f"value={p2.get('value')!r}")
     check("sendBtn 不再是 disabled", p2.get("disabled") is False,
-          f"disabled={p2.get('disabled')}")
+          f"disabled={p2.get('disabled')} busy={p2.get('busy')}")
 
     # 5) 收软键盘再点发送（坐标同样按 DOM 盒子动态取）
     sh("adb shell input keyevent 111")
@@ -239,7 +253,10 @@ def main():
     grew, p3 = False, None
     for _ in range(30):
         time.sleep(1)
-        p3 = cdp.eval(PROBE_JS)
+        try:
+            p3 = cdp.eval(PROBE_JS)
+        except Exception:
+            continue
         if p3["rows"] > rows_before and not (p3.get("value") or "").strip():
             grew = True
             break

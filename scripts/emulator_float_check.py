@@ -518,8 +518,8 @@ def main():
         check("双击触发探针（[probe] pet-double / pet-panel）",
               probe_has("[probe] pet-double") and probe_has("[probe] pet-panel"))
         # 迷你窗是 index.html?float=1，同样必须拿到 window.AndroidTTS（否则浮窗朗读永远无声）
-        check("迷你窗 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/index.html）",
-              probe_has("[probe] AndroidTTS injected=1 /www/index.html"))
+        check("迷你窗 WebView 注入 AndroidTTS（[probe] AndroidTTS injected=1 /www/index.html?float=1）",
+              probe_has("[probe] AndroidTTS injected=1 /www/index.html?float=1"))
         check("迷你窗展开（大面积像素差分>30万px）", cnt6 > PANEL_MIN, f"diff={cnt6}px")
         pf6 = pet_frame(wins6)
         hidden_diff = region_diff(base, gray("emulator_06_float_panel.png"), pf6) if pf6 else 0

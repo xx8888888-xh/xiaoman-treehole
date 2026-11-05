@@ -84,35 +84,45 @@ const API = (() => {
   // W20 单一源：提示词只在 server/prompt_core.py 维护，经
   // scripts/gen_persona_rules.py 生成 web/js/persona_rules.js；
   // 本文件不再手写副本。index.html 不在可改范围，浏览器侧在解析期用
-  // document.write 同步注入（插入的脚本会先执行，SYSTEM_PROMPT 随即可用），
-  // Node 单测 / 其它环境走 require。若两边都拿不到，宁可报错也不退回旧副本。
-  let PR = null;
-  if (typeof module !== "undefined" && typeof require === "function") {
-    PR = require("./persona_rules.js");
-  }
-  if (!PR && typeof document !== "undefined" && typeof document.write === "function") {
+  // document.write 注入，Node 单测 / 其它环境走 require。
+  // 注意：document.write 插入的 <script> 由解析器在"当前脚本执行完之后"才执行，
+  // 解析期立刻读 window.XMPersonaRules 必然还是 undefined；在这里直接抛错会让
+  // api.js 整体失败（window.API 不存在），进而 app.js 初始化中断、输入框永远
+  // disabled、消息发不出去。所以：注入留在解析期，取值推迟到首次真正用到提示词。
+  if (typeof document !== "undefined" && typeof document.write === "function"
+      && document.readyState === "loading"
+      && !(typeof window !== "undefined" && window.XMPersonaRules)) {
     document.write('<script src="js/persona_rules.js"><\/script>');
-    PR = (typeof window !== "undefined") ? window.XMPersonaRules : null;
   }
-  if (!PR) throw new Error("persona_rules.js 未加载：提示词必须来自单一源");
-  const {
-    SAFETY_RULES, PERSONA_RULES, REALISM_RULES, HUMAN_FEEL_RULES,
-    MEMORY_RULES, MEMORY_SLOT_RULES, BASELINE, OUTPUT_PROTOCOL,
-  } = PR;
-  const SYSTEM_PROMPT = PR.SYSTEM_PROMPT;
+
+  let personaPR = null;
+  function personaRules() {
+    if (personaPR) return personaPR;
+    if (typeof module !== "undefined" && typeof require === "function") {
+      personaPR = require("./persona_rules.js");
+    } else if (typeof window !== "undefined" && window.XMPersonaRules) {
+      personaPR = window.XMPersonaRules;
+    }
+    if (!personaPR) throw new Error("persona_rules.js 未加载：提示词必须来自单一源");
+    return personaPR;
+  }
+  function personaSection(name) { return personaRules()[name]; }
+  function systemPrompt() { return personaRules().SYSTEM_PROMPT; }
 
   // 心跳专用：隔了一段时间没聊，朋友随手发来的一条微信（不是客服回访！）
-  const HEARTBEAT_PROMPT = `${SAFETY_RULES}\n\n你是小满，用户的朋友。你们隔了一段时间没说话，你随手给ta发条微信。
+  function heartbeatPrompt() {
+    return `${personaSection("SAFETY_RULES")}\n\n你是小满，用户的朋友。你们隔了一段时间没说话，你随手给ta发条微信。
 像真人朋友那样：可以从下面挑一个角度，也可以自由发挥——
 - 分享自己的一件小事（团子干的蠢事/班上的破事/吃到的好吃的）
 - 接上你们上次聊的话题（如果下面材料里有未了的事，轻轻问一句进展）
 - 跟时间点有关的自然感慨（下班了/到饭点了/周五晚上/下雨了）
 【绝对禁止】"在吗""你好""好久不见""想你了""需要我陪你吗"这类客服腔和查岗腔。就当是顺手发的一条消息，ta不回也无所谓。
 一条，短，用||分成1-2条。输出同款JSON（memory_updates填{}，reminders填null）。`;
+  }
 
   function buildSystemPrompt(opts) {
     opts = opts || {};
-    const base = opts.heartbeat ? HEARTBEAT_PROMPT : SYSTEM_PROMPT;
+    const base = opts.heartbeat ? heartbeatPrompt() : systemPrompt();
     const parts = [base];
     const mem = (opts.memSection || "").trim();
     if (mem) parts.push(`【你记得的关于ta的事】\n${mem}\n（自然地用，别背诵，别一次全提）`);
@@ -1101,9 +1111,19 @@ const API = (() => {
   }
 
   return {
-    chat, chatStream, loadCfg, saveCfg, buildSystemPrompt, SYSTEM_PROMPT, HEARTBEAT_PROMPT,
-    SAFETY_RULES, REALISM_RULES, HUMAN_FEEL_RULES, MEMORY_RULES, MEMORY_SLOT_RULES,
-    PERSONA_RULES, BASELINE, OUTPUT_PROTOCOL,
+    chat, chatStream, loadCfg, saveCfg, buildSystemPrompt,
+    // 提示词常量走惰性 getter：浏览器里 persona_rules.js 要等解析器执行到注入的
+    // <script> 后才可用，模块加载期取不到（Node 单测 require 则立即可用）。
+    get SYSTEM_PROMPT() { return systemPrompt(); },
+    get HEARTBEAT_PROMPT() { return heartbeatPrompt(); },
+    get SAFETY_RULES() { return personaSection("SAFETY_RULES"); },
+    get REALISM_RULES() { return personaSection("REALISM_RULES"); },
+    get HUMAN_FEEL_RULES() { return personaSection("HUMAN_FEEL_RULES"); },
+    get MEMORY_RULES() { return personaSection("MEMORY_RULES"); },
+    get MEMORY_SLOT_RULES() { return personaSection("MEMORY_SLOT_RULES"); },
+    get PERSONA_RULES() { return personaSection("PERSONA_RULES"); },
+    get BASELINE() { return personaSection("BASELINE"); },
+    get OUTPUT_PROTOCOL() { return personaSection("OUTPUT_PROTOCOL"); },
     sessionId, bootstrap, serverConfig, testConnection,
     sessionExport, sessionImport, messageDelete, messageUpdate,
     getApiKey, setApiKey, parseStructured, effectiveMode, routePlan,
