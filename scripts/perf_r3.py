@@ -223,27 +223,29 @@ async def measure_load_once(browser, throttle=1):
             except ValueError:
                 pass
     await asyncio.sleep(2.2)          # 舞台 idle 挂载 + 纹理预热窗口
-    # 观测器自检：主动忙等 80ms，确认 longtask 真的会被采集（避免"0 个长任务"被误读成探针失灵）
-    selfcheck_at = await page.evaluate("performance.now()")
-    await page.evaluate("() => { const t0 = performance.now(); while (performance.now() - t0 < 80) {} }")
-    await asyncio.sleep(0.35)
     task.cancel()
     perf = await page.evaluate("window.__perf")
-    real_tasks = [t for t in perf["longTasks"] if t["start"] < selfcheck_at - 1]
-    self_task = [t for t in perf["longTasks"] if t["start"] >= selfcheck_at - 1]
-    selfcheck = self_task[0]["dur"] if self_task else None
     after = await js_state(page, session)
     stage = await page.evaluate(
         """() => ({ mode: window.__stageMode, tier: window.__stageTier,
                     vram: window.__stageVram, decode: window.__stageDecode || null,
                     hasCanvas: !!document.querySelector('#stage canvas') })""")
+    # 观测器自检放在所有真实指标取完之后：忙等 80ms 应被 longtask 采集，
+    # 只用于自证探针没失灵，不计入 long 统计（headless 未节流时根本不出长任务）
+    selfcheck_at = await page.evaluate("performance.now()")
+    await page.evaluate("() => { const t0 = performance.now(); while (performance.now() - t0 < 80) {} }")
+    await asyncio.sleep(0.35)
+    perf2 = await page.evaluate("window.__perf")
+    self_task = [t for t in perf2["longTasks"] if t["start"] >= selfcheck_at - 1]
+    selfcheck = self_task[0]["dur"] if self_task else None
     res = {
         "fcp": perf.get("fcp"), "lcp": perf.get("lcp"),
         "dclMs": dcl, "bindMs": bind, "mountMs": mount,
         "inputReadyMs": input_ready, "readyToSendMs": ready_to_send,
         "firstSendMs": first_send,
-        "long": lt_summary(real_tasks),
+        "long": lt_summary(perf["longTasks"]),
         "longTaskSelfCheckMs": selfcheck,
+        "selfcheckAtMs": round(selfcheck_at),
         "throttle": throttle,
         "heapPeakMB": round(heap_peak["v"] / 1048576, 2),
         "heapAfterGcMB": round((after["JSHeapUsedSize"] or 0) / 1048576, 2),
