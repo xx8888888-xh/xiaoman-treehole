@@ -71,6 +71,8 @@
       </div>
     </div>
     <div class="hook-bar hidden" id="hookBar"></div>
+    <!-- 状态区统一收在一列：可操作的错误在上，环境旁白在下 -->
+    <div class="status-stack" id="statusStack">
     <!-- 本机记录读不出来 / 存储满：给出可操作的提示，不白屏 -->
     <div class="notice-bar hidden" id="noticeBar" role="alert">
       <span id="noticeText"></span>
@@ -92,6 +94,7 @@
     <div id="degradeBadge" class="degrade hidden" role="status">
       <span id="degradeText">本地模式</span>
       <button id="degradeClose" aria-label="关闭提示">✕</button>
+    </div>
     </div>
     <div class="inputbar">
       <textarea id="textInput" rows="1" placeholder="跟小满说点什么…" aria-label="给小满发消息" enterkeyhint="send" autocomplete="off" maxlength="500"></textarea>
@@ -132,97 +135,117 @@
     <div class="drawer-mask overlay"></div>
     <div class="modal-panel">
       <div class="drawer-head"><h2 id="settingsTitle">设置</h2><button class="icon-btn" id="settingsClose" aria-label="关闭">✕</button></div>
-      <label class="field"><span>对话模式</span>
-        <select id="cfgMode">
-          <option value="openai">在线 AI（原生桥 / 服务端代理，推荐）</option>
-          <option value="mock">本地 Mock（无需 Key，仅作兜底）</option>
-          <option value="offline">纯离线规则引擎</option>
-        </select>
-      </label>
-      <p class="mini" id="cfgModeActual" role="status" aria-live="polite"></p>
-      <label class="field"><span>对话服务地址（OpenAI 兼容）</span>
-        <input id="cfgApi" type="url" inputmode="url" placeholder="https://api.kilo.ai/api/gateway">
-      </label>
-      <label class="field"><span>API Key（仅本页内存，不写入本地存储）</span>
-        <input id="cfgApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="留空则用服务端环境变量 / Kilo 免 Key">
-      </label>
-      <label class="field"><span>模型</span>
-        <input id="cfgModel" type="text" spellcheck="false" placeholder="nvidia/nemotron-3.5-lightning:free">
-      </label>
-      <label class="field"><span>语音服务地址</span>
-        <input id="cfgTtsBase" type="url" inputmode="url" placeholder="http://127.0.0.1:8903">
-      </label>
-      <label class="field"><span>外观</span>
-        <select id="cfgTheme">
-          <option value="auto">跟随系统</option>
-          <option value="light">浅色</option>
-          <option value="dark">深色</option>
-        </select>
-      </label>
-      <div class="field appearance-field">
-        <span id="apLabel">外观预设</span>
-        <div class="seg" id="apPresets" role="radiogroup" aria-labelledby="apLabel">
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="minimal" title="灰阶图标 · 零动画 · 大字号 · 扁平层级">极简</button>
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="default" title="灰阶图标 · 正常字号 · 轻过渡">默认</button>
-          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="lively" title="彩色图标 · 正常字号 · 轻过渡">生动</button>
+
+      <section class="sheet-section">
+        <h3 class="section-title">模型与连接</h3>
+        <label class="field"><span>对话模式</span>
+          <select id="cfgMode">
+            <option value="openai">在线 AI（原生桥 / 服务端代理，推荐）</option>
+            <option value="mock">本地 Mock（无需 Key，仅作兜底）</option>
+            <option value="offline">纯离线规则引擎</option>
+          </select>
+        </label>
+        <p class="mini" id="cfgModeActual" role="status" aria-live="polite"></p>
+        <label class="field"><span>对话服务地址（OpenAI 兼容）</span>
+          <input id="cfgApi" type="url" inputmode="url" placeholder="https://api.kilo.ai/api/gateway">
+        </label>
+        <label class="field"><span>API Key（仅本页内存，不写入本地存储）</span>
+          <input id="cfgApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="留空则用服务端环境变量 / Kilo 免 Key">
+        </label>
+        <label class="field"><span>模型</span>
+          <input id="cfgModel" type="text" spellcheck="false" placeholder="nvidia/nemotron-3.5-lightning:free">
+        </label>
+        <button class="ghost-btn" id="cfgTestBtn">测试连接</button>
+        <p class="mini" id="cfgTestResult" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="sheet-section">
+        <h3 class="section-title">语音</h3>
+        <label class="field"><span>语音回复</span>
+          <select id="cfgTts">
+            <option value="server">服务端语音（自然，需配置地址）</option>
+            <option value="browser">本机语音（离线）</option>
+            <option value="off">关闭</option>
+          </select>
+        </label>
+        <p class="mini" id="ttsHint" role="status" aria-live="polite"></p>
+        <label class="field"><span>语音服务地址</span>
+          <input id="cfgTtsBase" type="url" inputmode="url" placeholder="http://127.0.0.1:8903">
+        </label>
+        <label class="field"><span>说话音色</span>
+          <select id="cfgVoice">
+            <option value="zh-CN-XiaoyiNeural">小艺 · 元气少女</option>
+            <option value="zh-CN-XiaoxiaoNeural">小晓 · 温柔御姐</option>
+            <option value="zh-CN-XiaoyuanNeural">小圆 · 甜妹</option>
+          </select>
+        </label>
+        <p class="mini" id="voiceHint">音色只在「服务端语音」真正出声时生效；本机语音使用系统音色。</p>
+        <label class="field"><span>语速</span>
+          <select id="cfgRate">
+            <option value="slow">慢一点</option>
+            <option value="normal">正常</option>
+            <option value="fast">快一点</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="sheet-section">
+        <h3 class="section-title">外观</h3>
+        <label class="field"><span>主题</span>
+          <select id="cfgTheme">
+            <option value="auto">跟随系统</option>
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </label>
+        <div class="field appearance-field">
+          <span id="apLabel">外观预设</span>
+          <div class="seg" id="apPresets" role="radiogroup" aria-labelledby="apLabel">
+            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="minimal" title="灰阶图标 · 零动画 · 大字号 · 扁平层级">极简</button>
+            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="default" title="灰阶图标 · 正常字号 · 轻过渡">默认</button>
+            <button type="button" class="seg-btn" role="radio" aria-checked="false" data-preset="lively" title="彩色图标 · 正常字号 · 轻过渡">生动</button>
+          </div>
+          <div class="ap-switches">
+            <label class="switch"><input type="checkbox" id="apFont" role="switch"><span>大字号</span></label>
+            <label class="switch"><input type="checkbox" id="apMotion" role="switch"><span>动画</span></label>
+            <label class="switch"><input type="checkbox" id="apIcons" role="switch"><span>图标灰阶</span></label>
+          </div>
+          <p class="mini" id="apHint" role="status" aria-live="polite"></p>
         </div>
-        <div class="ap-switches">
-          <label class="switch"><input type="checkbox" id="apFont" role="switch"><span>大字号</span></label>
-          <label class="switch"><input type="checkbox" id="apMotion" role="switch"><span>动画</span></label>
-          <label class="switch"><input type="checkbox" id="apIcons" role="switch"><span>图标灰阶</span></label>
+      </section>
+
+      <section class="sheet-section">
+        <h3 class="section-title">陪伴方式</h3>
+        <div class="field settings-switch-field">
+          <div class="ap-switches">
+            <label class="switch"><input type="checkbox" id="cfgHeartbeat" role="switch"><span>主动问候</span></label>
+            <label class="switch"><input type="checkbox" id="cfgAllowFree" role="switch"><span>允许免费通道</span></label>
+          </div>
+          <p class="mini" id="heartbeatHint">关掉后小满不会主动找你；你自己定的提醒仍会照常送达。</p>
+          <p class="mini" id="allowFreeHint">「允许免费通道」仅在安卓免 Key 环境生效：默认关闭，避免把倾诉内容发给有使用限制的免费额度。</p>
         </div>
-        <p class="mini" id="apHint" role="status" aria-live="polite"></p>
-      </div>
-      <button class="ghost-btn" id="cfgTestBtn">测试连接</button>
-      <p class="mini" id="cfgTestResult" role="status" aria-live="polite"></p>
-      <label class="field"><span>语音回复</span>
-        <select id="cfgTts">
-          <option value="server">服务端语音（自然，需配置地址）</option>
-          <option value="browser">本机语音（离线）</option>
-          <option value="off">关闭</option>
-        </select>
-      </label>
-      <p class="mini" id="ttsHint" role="status" aria-live="polite"></p>
-      <label class="field"><span>说话音色</span>
-        <select id="cfgVoice">
-          <option value="zh-CN-XiaoyiNeural">小艺 · 元气少女</option>
-          <option value="zh-CN-XiaoxiaoNeural">小晓 · 温柔御姐</option>
-          <option value="zh-CN-XiaoyuanNeural">小圆 · 甜妹</option>
-        </select>
-      </label>
-      <p class="mini" id="voiceHint">音色只在「服务端语音」真正出声时生效；本机语音使用系统音色。</p>
-      <label class="field"><span>语速</span>
-        <select id="cfgRate">
-          <option value="slow">慢一点</option>
-          <option value="normal">正常</option>
-          <option value="fast">快一点</option>
-        </select>
-      </label>
-      <div class="field settings-switch-field">
-        <span>陪伴方式</span>
-        <div class="ap-switches">
-          <label class="switch"><input type="checkbox" id="cfgHeartbeat" role="switch"><span>主动问候</span></label>
-          <label class="switch"><input type="checkbox" id="cfgAllowFree" role="switch"><span>允许免费通道</span></label>
+      </section>
+
+      <section class="sheet-section">
+        <h3 class="section-title">记录与隐私</h3>
+        <div class="field backup-field">
+          <div class="backup-actions">
+            <button class="ghost-btn" id="backupExport">导出为 JSON 文件</button>
+            <button class="ghost-btn" id="backupImport">从 JSON 文件导入</button>
+          </div>
+          <input id="backupFile" type="file" accept="application/json,.json" hidden />
+          <p class="mini" id="backupResult" role="status" aria-live="polite"></p>
+          <p class="mini">只导出这台手机上的聊天记录与记忆，不上传云端。</p>
         </div>
-        <p class="mini" id="heartbeatHint">关掉后小满不会主动找你；你自己定的提醒仍会照常送达。</p>
-        <p class="mini" id="allowFreeHint">「允许免费通道」仅在安卓免 Key 环境生效：默认关闭，避免把倾诉内容发给有使用限制的免费额度。</p>
-      </div>
-      <div class="field backup-field">
-        <span>倾诉记录</span>
-        <div class="backup-actions">
-          <button class="ghost-btn" id="backupExport">导出为 JSON 文件</button>
-          <button class="ghost-btn" id="backupImport">从 JSON 文件导入</button>
-        </div>
-        <input id="backupFile" type="file" accept="application/json,.json" hidden />
-        <p class="mini" id="backupResult" role="status" aria-live="polite"></p>
-        <p class="mini">只导出这台手机上的聊天记录与记忆，不上传云端。</p>
-      </div>
-      <div class="about">
+      </section>
+
+      <section class="about">
         <p>小满树洞 v0.5 · 开源软件（MIT）</p>
         <p class="mini">渲染: LayeredPuppet 分层立绘（Canvas 2D, MIT）· 模型: 潮·原创角色（CC BY 4.0，1235×2841 分层纹理）· 语音: 设备系统 TTS / 浏览器 speechSynthesis / 可选自建服务（默认关闭）</p>
         <p class="mini">隐私：聊天和记忆默认存在本机；用在线模式时，聊天内容会发到模型服务商那里；如果你连的是自己的服务器，服务器也可能留一份上下文，可随时删除。可随时导出或清空本机记录。</p>
         <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）；紧急情况打 120 / 110。</p>
-      </div>
+      </section>
+
       <label class="field float-field" id="floatField" hidden><span>悬浮小满（桌宠）</span>
         <p class="mini" id="floatHint">退出 App 后，会呼吸、会眨眼的小满仍留在桌面：单击互动，双击聊天，拖动可贴边，长按可关闭。需要「显示在其他应用上层」权限。</p>
         <div class="float-actions">
