@@ -116,6 +116,8 @@ git config core.hooksPath .githooks
 | `e2e.yml` | 42018259928 | workflow_dispatch | success，产物 `e2e-artifacts-40d25b2`（4.38 MB，7 天） |
 | `gates.yml` | 42018318180 | workflow_dispatch | success（ci + e2e + android 全绿） |
 
+文档补丁提交 `33f724b` 的回归 ci：run 42019285745 → success。
+
 ## 维护约定
 
 1. 新增源文件进 `web/js/` 时，先在本地跑 `biome check js/<file>.js --reporter=summary`；
