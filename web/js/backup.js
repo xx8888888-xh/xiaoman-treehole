@@ -77,6 +77,24 @@ const Backup = (() => {
     };
   }
 
+  /**
+   * 提醒闹钟设定（原生 ReminderAlarmScheduler 的登记状态）：
+   * 只作为"导出时的现场记录"随包带走，导入时**不还原系统权限**——
+   * 权限属于 OS，备份无权替用户打开；导入后靠 syncReminders 重新登记。
+   */
+  function normalizeAlarm(a) {
+    if (!a || typeof a !== "object" || Array.isArray(a)) return null;
+    const num = v => Math.max(0, Math.floor(Number(v) || 0));
+    return {
+      notifications: !!a.notifications,
+      exactAlarm: !!a.exactAlarm,
+      ignoringBattery: !!a.ignoringBattery,
+      // 原生给的是 pendingReminders；已归一化的对象带 pending，两种都接受
+      pending: num(a.pendingReminders != null ? a.pendingReminders : a.pending),
+      capturedAt: Number(a.capturedAt) || 0,
+    };
+  }
+
   /** 小本本统计：计数取非负整数，按天/表情表做类型校验 */
   function normalizeStats(s) {
     if (!s || typeof s !== "object" || Array.isArray(s)) return null;
@@ -161,10 +179,12 @@ const Backup = (() => {
   /** 组装导出对象（纯函数） */
   function buildBackup(input) {
     const src = input || {};
-    const messages = (src.messages || []).map(normalizeMessage).filter(Boolean).slice(-MAX_MESSAGES);
-    const memories = (src.memories || []).map(normalizeMemory).filter(Boolean);
-    const riskEvents = (src.riskEvents || []).map(normalizeRiskEvent).filter(Boolean).slice(-MAX_RISK_EVENTS);
-    const reminders = (src.reminders || []).map(normalizeReminder).filter(Boolean).slice(-MAX_REMINDERS);
+    // 老备份/脏文件里某一块可能不是数组：按空块降级，不能整份导入失败
+    const list = v => (Array.isArray(v) ? v : []);
+    const messages = list(src.messages).map(normalizeMessage).filter(Boolean).slice(-MAX_MESSAGES);
+    const memories = list(src.memories).map(normalizeMemory).filter(Boolean);
+    const riskEvents = list(src.riskEvents).map(normalizeRiskEvent).filter(Boolean).slice(-MAX_RISK_EVENTS);
+    const reminders = list(src.reminders).map(normalizeReminder).filter(Boolean).slice(-MAX_REMINDERS);
     return {
       app: APP_TAG,
       version: VERSION,
@@ -174,6 +194,7 @@ const Backup = (() => {
       memories,
       riskEvents,
       reminders,
+      alarm: normalizeAlarm(src.alarm),
       stats: normalizeStats(src.stats),
       server: normalizeServer(src.server),
     };
@@ -188,6 +209,12 @@ const Backup = (() => {
       return { ok: false, error: "备份文件格式不对" };
     }
     if (obj.app !== APP_TAG) return { ok: false, error: "这不是小满树洞的备份文件" };
+    const fromVersion = Number(obj.version) || 0;
+    // 老版本（v1 草稿）把消息放在 chats 里：就地改名后继续走同一套白名单，
+    // 缺字段的块按 null/[] 降级，绝不因为一处结构不同整份备份导入失败。
+    if (!Array.isArray(obj.messages) && Array.isArray(obj.chats)) {
+      obj = Object.assign({}, obj, { messages: obj.chats });
+    }
     if (!Array.isArray(obj.messages)) return { ok: false, error: "备份里没有聊天记录" };
     const data = buildBackup({
       sid: obj.sid,
@@ -195,11 +222,12 @@ const Backup = (() => {
       memories: obj.memories,
       riskEvents: obj.riskEvents,
       reminders: obj.reminders,
+      alarm: obj.alarm,
       stats: obj.stats,
       server: obj.server,
       exportedAt: Date.parse(String(obj.exportedAt || "")) || Date.now(),
     });
-    return { ok: true, data };
+    return { ok: true, data, fromVersion, migrated: fromVersion > 0 && fromVersion < VERSION };
   }
 
   function msgKey(m) { return `${m.role}\u0000${m.at}\u0000${m.content}`; }
@@ -253,20 +281,47 @@ const Backup = (() => {
     try { return await window.API.sessionExport(sid); } catch (e) { return null; }
   }
 
-  /** 导出当前会话（消息 + 记忆 + 提醒 + 统计 + 服务端会话） */
+  /** 原生闹钟当前登记状态（Web/纯浏览器环境返回 null） */
+  function readAlarm() {
+    try {
+      if (typeof window === "undefined" || !window.AndroidHost) return null;
+      if (typeof window.AndroidHost.status !== "function") return null;
+      const raw = window.AndroidHost.status();
+      const st = raw ? JSON.parse(raw) : null;
+      if (!st || typeof st !== "object") return null;
+      return normalizeAlarm(Object.assign({}, st, { capturedAt: Date.now() }));
+    } catch (e) { return null; }
+  }
+
+  /**
+   * 导入后把整张提醒表重新推给原生：AlarmManager 的登记不在备份文件里，
+   * 换机/清数据后必须重推一次，否则"提醒还在、闹钟不响"。
+   */
+  function rearmAlarms() {
+    try {
+      if (typeof window === "undefined" || !window.AndroidHost || !window.Reminders) return null;
+      if (typeof window.AndroidHost.syncReminders !== "function") return null;
+      const raw = window.AndroidHost.syncReminders(JSON.stringify(Reminders.all()));
+      return raw ? JSON.parse(raw) : { ok: true };
+    } catch (e) { return { ok: false }; }
+  }
+
+  /** 导出当前会话（消息 + 记忆 + 提醒 + 闹钟设定 + 统计 + 服务端会话） */
   async function exportNow(sid) {
     const messages = window.ChatStore ? await ChatStore.list(sid, MAX_MESSAGES) : [];
     const memories = window.MemoryStore ? MemoryStore.all() : [];
     const riskEvents = typeof window.__riskLog === "function" ? window.__riskLog() : [];
     const reminders = window.Reminders ? Reminders.all() : [];
+    const alarm = readAlarm();
     const stats = window.Stats ? Stats.raw() : null;
     const server = await fetchServer(sid);
-    const data = buildBackup({ sid, messages, memories, riskEvents, reminders, stats, server });
+    const data = buildBackup({ sid, messages, memories, riskEvents, reminders, alarm, stats, server });
     const text = JSON.stringify(data, null, 2);
     const name = filename();
     const meta = {
       count: data.messages.length,
       reminders: data.reminders.length,
+      alarm: !!data.alarm,
       server: !!data.server,
       slots: data.server ? data.server.slots.slots.length : 0,
     };
@@ -303,6 +358,8 @@ const Backup = (() => {
     // 提醒：按 id / 文案+时刻 去重合并，还原"几点几分该做什么"
     let remind = { added: 0, updated: 0 };
     if (window.Reminders) remind = Reminders.merge(data.reminders);
+    // 闹钟登记：系统闹钟不在文件里 → 合并完必须重推一次（否则提醒在表里却不会响）
+    const alarm = rearmAlarms();
     // 小本本：逐项取较大值，换机等于完整还原，本机重复导入不翻倍
     if (data.stats && window.Stats) Stats.merge(data.stats);
     // 服务端会话（含记忆槽）：整体覆盖写回；失败只影响这一段，不阻断其余数据
@@ -324,7 +381,7 @@ const Backup = (() => {
     }
     return { ok: true, imported: fresh.length, skipped: data.messages.length - fresh.length,
              memories: memAdded, crises, reminders: remind.added, remindersUpdated: remind.updated,
-             stats: !!data.stats, server };
+             alarm, stats: !!data.stats, server };
   }
 
   function readFile(file) {
@@ -340,7 +397,8 @@ const Backup = (() => {
   return {
     APP_TAG, VERSION, MAX_MESSAGES, MAX_RISK_EVENTS, MAX_REMINDERS,
     buildBackup, parseBackup, mergeMessages, mergeRiskEvents, filename,
-    normalizeReminder, normalizeStats, normalizeServer,
+    normalizeReminder, normalizeStats, normalizeServer, normalizeAlarm,
+    readAlarm, rearmAlarms,
     exportNow, importNow, readFile,
   };
 })();

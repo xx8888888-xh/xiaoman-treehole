@@ -172,8 +172,19 @@
     if (!R || remindersPatched) return !!R;
     remindersPatched = true;
     var origAdd = R.add, origDone = R.markDone, origCancel = R.cancel, origDue = R.due;
+    var origUpdate = R.update, origMerge = R.merge, origClearDone = R.clearDone;
     if (typeof origAdd === "function") {
       R.add = function () { var out = origAdd.apply(R, arguments); pushReminders(); return out; };
+    }
+    // 备份导入 / 改时间 / 清已完成也属于"表变了"：漏推会导致提醒在列表里却不响
+    if (typeof origUpdate === "function") {
+      R.update = function () { var out = origUpdate.apply(R, arguments); pushReminders(); return out; };
+    }
+    if (typeof origMerge === "function") {
+      R.merge = function () { var out = origMerge.apply(R, arguments); pushReminders(); return out; };
+    }
+    if (typeof origClearDone === "function") {
+      R.clearDone = function () { var out = origClearDone.apply(R, arguments); pushReminders(); return out; };
     }
     if (typeof origCancel === "function") {
       R.cancel = function () { var out = origCancel.apply(R, arguments); pushReminders(); return out; };
