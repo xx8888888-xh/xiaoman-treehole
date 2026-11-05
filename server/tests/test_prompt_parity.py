@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_prompt_parity.py · 提示词 v2 两端逐字对齐（W7）
+"""test_prompt_parity.py · 提示词两端逐字对齐（W7，W20 改为读生成物）
 
 约束（用户要求）：
   - 原安全三条、原身份段、原长度/跑题/分寸、原底线、原 JSON 协议逐字保留；
   - 新增只有【真人感细则】与【记忆】两段；
-  - 服务端 server/prompt_core.py 与客户端 web/js/api.js 必须同源，防漂移。
+  - 真源只能有一处：server/prompt_core.py；
+    web/js/persona_rules.js 是 scripts/gen_persona_rules.py 的生成物，
+    Android 由 build_assets.sh 同步 web/，三端不手写副本。
 运行：python -m pytest server/tests -q
 """
 import re
@@ -21,10 +23,11 @@ if str(SERVER_DIR) not in sys.path:
 import prompt_core  # noqa: E402
 
 API_JS = ROOT / "web" / "js" / "api.js"
+PERSONA_JS = ROOT / "web" / "js" / "persona_rules.js"
 
 
 def client_const(name):
-    text = API_JS.read_text(encoding="utf-8")
+    text = PERSONA_JS.read_text(encoding="utf-8")
     m = re.search(r"const %s = `([^`]*)`;" % re.escape(name), text, re.S)
     if not m:
         raise AssertionError("客户端缺少常量 %s" % name)
@@ -37,7 +40,9 @@ class PromptParityTest(unittest.TestCase):
             ("SAFETY_RULES", prompt_core.SAFETY_RULES),
             ("PERSONA_RULES", prompt_core.PERSONA_RULES),
             ("REALISM_RULES", prompt_core.REALISM_RULES),
+            ("HUMAN_FEEL_RULES", prompt_core.HUMAN_FEEL_RULES),
             ("MEMORY_RULES", prompt_core.MEMORY_RULES),
+            ("MEMORY_SLOT_RULES", prompt_core.MEMORY_SLOT_RULES),
             ("BASELINE", prompt_core.BASELINE),
             ("OUTPUT_PROTOCOL", prompt_core.OUTPUT_PROTOCOL),
         ]
