@@ -366,6 +366,7 @@ const App = (() => {
     const entry = { role, content, at: ts };
     history.push(entry);
     if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    if (rec) rec.at = ts;   // 单条删除/编辑要用同一时间戳定位记录
     if (window.ChatStore) {
       appendChain = appendChain
         .then(() => ChatStore.append(SID, entry))
@@ -710,6 +711,7 @@ const App = (() => {
       }
       row.appendChild(bubble);
     }
+    attachMsgMenu(row, rec);
     return row;
   }
 
@@ -720,6 +722,276 @@ const App = (() => {
     if (meta && meta.id != null) rec.id = meta.id;
     if (meta && meta.at != null) rec.at = meta.at;
     return ChatPager.push(rec);
+  }
+
+  // ---------- 单条消息操作（悬停/长按 → 删除 / 编辑后重发；菜单全部动态生成） ----------
+  let openMsgMenu = null;
+  let menuOpenedAt = 0;
+
+  function closeMsgMenu() {
+    if (openMsgMenu && openMsgMenu.parentElement) openMsgMenu.parentElement.removeChild(openMsgMenu);
+    openMsgMenu = null;
+  }
+
+  function closeMsgMenuOnDoc(ev) {
+    if (ev && openMsgMenu && openMsgMenu.contains(ev.target)) return;
+    if (Date.now() - menuOpenedAt < 300) return;   // 触屏长按后合成的 click 不立刻关掉
+    closeMsgMenu();
+    document.removeEventListener("click", closeMsgMenuOnDoc, true);
+  }
+
+  function toggleMsgMenu(row, rec, ev) {
+    if (ev) ev.stopPropagation();
+    if (openMsgMenu && openMsgMenu.__rec === rec) { closeMsgMenu(); return; }
+    closeMsgMenu();
+    const menu = document.createElement("div");
+    menu.className = "msg-menu";
+    menu.__rec = rec;
+    menu.style.cssText = "position:fixed;z-index:60;background:#fff;color:#111;border:1px solid #cfcac2;"
+      + "border-radius:10px;box-shadow:0 8px 22px rgba(0,0,0,.16);padding:4px;display:flex;flex-direction:column;min-width:116px;";
+    const mk = (label, fn, tone) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.style.cssText = "border:0;background:transparent;color:" + (tone || "inherit")
+        + ";text-align:left;padding:9px 12px;font-size:14px;cursor:pointer;border-radius:8px;line-height:1.2;";
+      b.addEventListener("click", e => { e.stopPropagation(); fn(b); });
+      menu.appendChild(b);
+      return b;
+    };
+    mk("编辑后重发", () => { closeMsgMenu(); startEdit(rec); });
+    let armed = false;
+    const del = mk("删除这条", () => {
+      if (!armed) {
+        armed = true;
+        del.textContent = "再点一次删除";
+        del.style.background = "rgba(140,60,60,.10)";
+        return;
+      }
+      closeMsgMenu();
+      deleteMsg(rec);
+    }, "#8a3f3f");
+    document.body.appendChild(menu);
+    // 定位：桌面端贴气泡侧边，窄屏贴视口边；越界自动回拉
+    const rect = row.getBoundingClientRect();
+    const mw = menu.offsetWidth || 120, mh = menu.offsetHeight || 84;
+    let left = rec.who === "me" ? rect.left - mw - 8 : rect.right + 8;
+    if (left < 8 || left + mw > window.innerWidth - 8) left = Math.max(8, rect.left + 8);
+    let top = rect.top;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, window.innerHeight - mh - 8);
+    menu.style.left = left + "px";
+    menu.style.top = top + "px";
+    openMsgMenu = menu;
+    menuOpenedAt = Date.now();
+    setTimeout(() => document.addEventListener("click", closeMsgMenuOnDoc, true), 0);
+  }
+
+  /** 每条真实消息挂一个"⋯"，悬停显现（触屏长按 450ms 直接弹菜单） */
+  function attachMsgMenu(row, rec) {
+    if (!rec || (rec.opts && (rec.opts.tip || rec.opts.crisis))) return;
+    row.style.position = "relative";
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.className = "msg-more";
+    dot.setAttribute("aria-label", "这条消息的操作");
+    dot.title = "更多操作";
+    dot.textContent = "⋯";
+    dot.style.cssText = "position:absolute;top:0;right:0;width:26px;height:26px;padding:0;border:0;"
+      + "background:transparent;color:inherit;font-size:15px;line-height:26px;opacity:0;cursor:pointer;transition:none;";
+    dot.addEventListener("click", ev => toggleMsgMenu(row, rec, ev));
+    row.appendChild(dot);
+    dot.style.opacity = "0";
+    const show = () => { dot.style.opacity = "0.55"; };
+    const hide = () => { if (!openMsgMenu || openMsgMenu.__rec !== rec) dot.style.opacity = "0"; };
+    row.addEventListener("pointerenter", show);
+    row.addEventListener("pointerleave", hide);
+    let timer = null;
+    const arm = () => {
+      timer = setTimeout(() => toggleMsgMenu(row, rec), 450);
+    };
+    const disarm = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    row.addEventListener("touchstart", arm, { passive: true });
+    row.addEventListener("touchend", disarm);
+    row.addEventListener("touchmove", disarm);
+  }
+
+  /** 删除消息时清掉由它产生的记忆引用（旧文本记忆 + 结构化记忆） */
+  function purgeMemory(fragment) {
+    const frag = String(fragment || "").trim();
+    if (frag.length < 2) return 0;
+    let n = 0;
+    const mem = loadMem();
+    for (const key of Object.keys(mem)) {
+      const val = String(mem[key] == null ? "" : mem[key]);
+      if (val && (frag.includes(val) || (val.length >= 4 && val.includes(frag)))) {
+        delete mem[key];
+        n++;
+      }
+    }
+    if (n) saveMem(mem);
+    if (window.MemoryStore) {
+      for (const m of MemoryStore.all()) {
+        const t = String(m && m.text ? m.text : "");
+        if (!t) continue;
+        if (t.includes(frag) || (t.length >= 4 && frag.includes(t))) {
+          if (typeof MemoryStore.remove === "function") { MemoryStore.remove(m.id); n++; }
+        }
+      }
+    }
+    return n;
+  }
+
+  function dropHistoryEntry(rec) {
+    const role = rec.who === "me" ? "user" : "assistant";
+    const at = rec.at == null ? null : Number(rec.at);
+    let i = history.length - 1;
+    for (; i >= 0; i--) {
+      const m = history[i];
+      if (m.role !== role) continue;
+      if (at != null && Number(m.at) !== at) continue;
+      if (String(m.content) !== String(rec.text)) continue;
+      break;
+    }
+    if (i >= 0) history.splice(i, 1);
+    return i >= 0;
+  }
+
+  /** 删除单条：本机存储 → 内存历史 → 分页 DOM → 统计 → 记忆 → 服务端
+   *  删用户消息时，紧随其后、由它生成的那串回复一起删，不留"无主答案" */
+  async function deleteMsg(rec, opts = {}) {
+    if (!rec) return false;
+    const role = rec.who === "me" ? "user" : "assistant";
+    const at = rec.at == null ? 0 : Number(rec.at);
+    const following = [];
+    if (role === "user" && !opts.noCascade) {
+      const rows = ChatPager.list();
+      const pos = rows.indexOf(rec);
+      for (let k = pos + 1; pos >= 0 && k < rows.length; k++) {
+        const n = rows[k];
+        if (n.who !== "them" || (n.opts && (n.opts.tip || n.opts.crisis))) break;
+        following.push(n);
+      }
+    }
+    try {
+      if (window.ChatStore) {
+        if (rec.id != null) await ChatStore.remove(rec.id);
+        else await ChatStore.removeMatch(SID, at, rec.text);
+      }
+    } catch (e) { /* 本机存储失败也继续清界面，避免"点了没反应" */ }
+    dropHistoryEntry(rec);
+    ChatPager.remove(rec);
+    let pruned = 0;
+    if (role === "user" && window.Stats) Stats.unbump(rec.text, at || undefined);
+    pruned = purgeMemory(rec.text);
+    renderMem();
+    if (window.Stats) renderStats();
+    if (window.API && typeof API.messageDelete === "function") {
+      API.messageDelete(SID, { role, at, content: rec.text }).catch(() => {});
+    }
+    for (const n of following) await deleteMsg(n, { silent: true, noCascade: true });
+    syncEmptyState();
+    if (!opts.silent) {
+      toast(pruned ? `已删除这条，同时清掉 ${pruned} 条相关记忆` : "已删除这条消息");
+    }
+    return true;
+  }
+
+  /** 编辑弹层：保存后清掉紧随其后的旧回复，并按新文案重发 */
+  function startEdit(rec) {
+    const old = String(rec.text == null ? "" : rec.text);
+    const mask = document.createElement("div");
+    mask.className = "msg-edit-mask";
+    mask.style.cssText = "position:fixed;inset:0;z-index:70;background:rgba(20,18,16,.32);"
+      + "display:flex;align-items:center;justify-content:center;padding:16px;";
+    const panel = document.createElement("div");
+    panel.className = "msg-edit-panel";
+    panel.style.cssText = "width:min(520px,100%);box-sizing:border-box;background:#fff;color:#111;"
+      + "border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px;box-shadow:0 18px 48px rgba(0,0,0,.24);";
+    const title = document.createElement("p");
+    title.textContent = "改一下，再发一次";
+    title.style.cssText = "margin:0;font-size:15px;font-weight:600;";
+    const area = document.createElement("textarea");
+    area.className = "msg-edit-area";
+    area.value = old;
+    area.rows = 3;
+    area.style.cssText = "width:100%;box-sizing:border-box;resize:vertical;min-height:72px;padding:10px;"
+      + "font:inherit;font-size:15px;line-height:1.5;border:1px solid #cfcac2;border-radius:10px;background:#fff;color:#111;";
+    const hint = document.createElement("p");
+    hint.textContent = "保存后会清掉原来那条回复，再按新内容重新回你。";
+    hint.style.cssText = "margin:0;font-size:12px;opacity:.72;line-height:1.5;";
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "取消";
+    cancel.style.cssText = "border:1px solid #cfcac2;background:transparent;color:inherit;border-radius:10px;padding:8px 14px;font-size:14px;cursor:pointer;";
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.textContent = "保存并重发";
+    ok.style.cssText = "border:0;background:#22201e;color:#fff;border-radius:10px;padding:8px 14px;font-size:14px;cursor:pointer;";
+    bar.appendChild(cancel);
+    bar.appendChild(ok);
+    panel.appendChild(title);
+    panel.appendChild(area);
+    panel.appendChild(hint);
+    panel.appendChild(bar);
+    mask.appendChild(panel);
+    document.body.appendChild(mask);
+    area.focus();
+    try { area.setSelectionRange(old.length, old.length); } catch (e) {}
+    const close = () => { if (mask.parentElement) mask.parentElement.removeChild(mask); };
+    mask.addEventListener("click", ev => { if (ev.target === mask) close(); });
+    mask.addEventListener("keydown", ev => { if (ev.key === "Escape") close(); });
+    cancel.onclick = close;
+    ok.onclick = () => {
+      const text = String(area.value || "").trim();
+      if (!text) { hint.textContent = "不能改成空的。"; return; }
+      close();
+      if (text === old) return;
+      applyEdit(rec, text, old);
+    };
+  }
+
+  /** 编辑落地：本机库 + 内存历史 + 服务端 + 清旧回复 + 重发 */
+  async function applyEdit(rec, text, oldText) {
+    const old = String(oldText == null ? rec.text : oldText);
+    const role = rec.who === "me" ? "user" : "assistant";
+    const at = rec.at == null ? 0 : Number(rec.at);
+    try {
+      if (window.ChatStore) {
+        if (rec.id != null) await ChatStore.update(rec.id, text);
+        else {
+          await ChatStore.removeMatch(SID, at, old);
+          await ChatStore.append(SID, { role, content: text, at: at || undefined });
+        }
+      }
+    } catch (e) { /* 存储失败不挡重发 */ }
+    let i = -1;
+    for (let k = history.length - 1; k >= 0; k--) {
+      const m = history[k];
+      if (m.role === role && String(m.content) === old && (at ? Number(m.at) === at : true)) { i = k; break; }
+    }
+    if (i >= 0) history[i] = Object.assign({}, history[i], { content: text });
+    ChatPager.patch(rec, text);
+    if (window.API && typeof API.messageUpdate === "function") {
+      API.messageUpdate(SID, { role, at, content: old }, text).catch(() => {});
+    }
+    if (role === "user") {
+      // 旧回复是按旧文案生成的，留着会变成"幽灵答案"：先把紧随其后的整串回复删掉再重发
+      const rows = ChatPager.list();
+      const pos = rows.indexOf(rec);
+      const tail = [];
+      for (let k = pos + 1; pos >= 0 && k < rows.length; k++) {
+        const n = rows[k];
+        if (n.who !== "them" || (n.opts && (n.opts.tip || n.opts.crisis))) break;
+        tail.push(n);
+      }
+      for (const n of tail) await deleteMsg(n, { silent: true });
+      await send(text, { resend: true });
+      toast("已按新内容重发");
+    } else {
+      toast("已修改这条回复");
+    }
   }
 
   function renderMem() {
@@ -914,6 +1186,9 @@ const App = (() => {
   }
 
   // ---------- 小本本：统计真的跨会话保留，日期按本地日切 ----------
+  let statsClearArmed = false;
+  let statsClearTimer = null;
+
   function renderStats() {
     if (!window.Stats) return;
     const box = $("statsBox");
@@ -982,6 +1257,37 @@ const App = (() => {
       tip.textContent = `招牌表情：${s.emoji}（${s.emojiN} 次）`;
       box.appendChild(tip);
     }
+
+    // 清空入口：二次确认（5 秒内不点第二次就自动撤销），清完就地重绘成空状态
+    const clearRow = document.createElement("div");
+    clearRow.className = "stats-clear";
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.id = "statsClear";
+    clearBtn.textContent = statsClearArmed ? "再点一次，确认清空" : "清空小本本";
+    clearBtn.style.cssText = "margin-top:12px;border:1px solid rgba(0,0,0,.28);background:"
+      + (statsClearArmed ? "rgba(0,0,0,.06)" : "transparent")
+      + ";color:inherit;border-radius:10px;padding:8px 12px;font-size:13px;line-height:1.2;cursor:pointer;";
+    clearBtn.onclick = () => {
+      if (!statsClearArmed) {
+        statsClearArmed = true;
+        renderStats();
+        if (statsClearTimer) clearTimeout(statsClearTimer);
+        statsClearTimer = setTimeout(() => {
+          statsClearTimer = null;
+          statsClearArmed = false;
+          renderStats();
+        }, 5000);
+        return;
+      }
+      if (statsClearTimer) { clearTimeout(statsClearTimer); statsClearTimer = null; }
+      statsClearArmed = false;
+      Stats.clear();
+      renderStats();
+      toast("小本本已清空");
+    };
+    clearRow.appendChild(clearBtn);
+    box.appendChild(clearRow);
   }
 
   // ---------- 打字指示（W7：真流式不再靠固定预等） ----------
@@ -1083,18 +1389,21 @@ const App = (() => {
   }
 
   // ---------- 发送主流程 ----------
-  async function send(text) {
+  // opts.resend=true：文案已就地改好（气泡/历史都已更新），只重跑回复链路，不再新增用户消息
+  async function send(text, opts = {}) {
     text = (text || "").trim();
     if (!text || busy) return;
     busy = true; $("sendBtn").disabled = true;
     resetIdle();
 
     await withSendLock(async () => {
-      const meHandle = addMsg(text, "me");
-      pushHistory("user", text, undefined, meHandle && meHandle.rec);
-      syncEmptyState();
-      bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
-      if (window.Stats) Stats.bump(text);   // P2-1：小本本计数（真实数据，自我叙事素材）
+      if (!opts.resend) {
+        const meHandle = addMsg(text, "me");
+        pushHistory("user", text, undefined, meHandle && meHandle.rec);
+        syncEmptyState();
+        bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
+        if (window.Stats) Stats.bump(text);   // P2-1：小本本计数（真实数据，自我叙事素材）
+      }
 
       // P0 危机闸门（客户端第一道；服务端 risk_guard 是独立的第二道）
       // 高危/中危：不调用模型、不播 TTS、不做里程碑，直接给分级安全话术。
@@ -1576,21 +1885,26 @@ const App = (() => {
     });
     $("textInput").addEventListener("input", syncComposer);
     syncComposer();
-    $("micBtn") && ($("micBtn").onclick = () => toast("语音输入接入中，先打字撩她吧"));
-    $("degradeClose") && ($("degradeClose").onclick = () => {
+    const micBtn = $("micBtn");
+    if (micBtn) micBtn.onclick = () => toast("语音输入接入中，先打字撩她吧");
+    const degradeClose = $("degradeClose");
+    if (degradeClose) degradeClose.onclick = () => {
       $("degradeBadge").classList.add("hidden");
       try { sessionStorage.setItem("xiaoman_degrade_off", "1"); } catch (e) {}
-    });
-    $("voiceTipClose") && ($("voiceTipClose").onclick = () => {
+    };
+    const voiceTipClose = $("voiceTipClose");
+    if (voiceTipClose) voiceTipClose.onclick = () => {
       $("voiceTip").classList.add("hidden");
       try { sessionStorage.setItem("xiaoman_voice_tip_off", "1"); } catch (e) {}
-    });
+    };
     // 排队提示：再试一次 / 本次不再提醒
-    $("pendingRetry") && ($("pendingRetry").onclick = () => retryPending());
-    $("pendingClose") && ($("pendingClose").onclick = () => {
+    const pendingRetry = $("pendingRetry");
+    if (pendingRetry) pendingRetry.onclick = () => retryPending();
+    const pendingClose = $("pendingClose");
+    if (pendingClose) pendingClose.onclick = () => {
       $("pendingBar").classList.add("hidden");
       try { sessionStorage.setItem(PENDING_CLOSED_KEY, "1"); } catch (e) {}
-    });
+    };
     renderPending();
     // 断网/恢复：离线时明确告知"还能看记录"，恢复时把排队提示重新亮出来
     window.addEventListener("offline", () => {
@@ -1604,7 +1918,14 @@ const App = (() => {
     $("memoryBtn").onclick = () => { renderMem(); openPanel($("memoryDrawer"), $("memoryBtn")); };
     $("memoryClose").onclick = () => closePanel($("memoryDrawer"));
     $("memoryDrawer").querySelector(".drawer-mask").onclick = () => closePanel($("memoryDrawer"));
-    $("memoryClear").onclick = () => { localStorage.removeItem(MEM_KEY); if (window.MemoryStore) MemoryStore.clear(); renderMem(); toast("小满失忆了，重新认识一下吧"); };
+    $("memoryClear").onclick = () => {
+      localStorage.removeItem(MEM_KEY);
+      if (window.MemoryStore) MemoryStore.clear();
+      // 会话状态一并清掉：清空记忆=重新认识，别让引擎的冷却/去重/引导节奏留幽灵
+      if (typeof MockEngine !== "undefined" && typeof MockEngine.resetSession === "function") MockEngine.resetSession(SID);
+      renderMem();
+      toast("小满失忆了，重新认识一下吧");
+    };
     // 首次引导的三个快捷入口（空状态内）
     if ($("quickSay")) $("quickSay").onclick = () => { $("textInput").focus(); };
     if ($("quickRemind")) $("quickRemind").onclick = () => {
@@ -1712,9 +2033,13 @@ const App = (() => {
       btn.disabled = true; out.textContent = "正在整理…";
       try {
         const r = await Backup.exportNow(SID);
+        const extra = [];
+        if (r.reminders) extra.push(`${r.reminders} 条提醒`);
+        if (r.server) extra.push(`服务端会话 ${r.slots} 条记忆槽`);
+        else extra.push("服务端会话未取到（已跳过）");
         out.textContent = r.count
-          ? `已导出 ${r.count} 条记录：${r.path || r.name}`
-          : "这台手机上还没有可导出的记录";
+          ? `已导出 ${r.count} 条记录 + ${extra.join(" + ")}：${r.path || r.name}`
+          : `这台手机上还没有可导出的记录（${extra.join("，")}）`;
         toast(r.count ? "记录已存到本机" : "还没有记录可以导出");
       } catch (e) {
         out.textContent = "导出失败：" + (e.message || "未知原因");
@@ -1729,9 +2054,18 @@ const App = (() => {
         const text = await Backup.readFile(file);
         const r = await Backup.importNow(text, SID);
         if (!r.ok) { out.textContent = "导入失败：" + r.error; return; }
-        out.textContent = r.imported
-          ? `导入 ${r.imported} 条（跳过重复 ${r.skipped} 条，记忆 ${r.memories} 条）`
-          : `没有新记录（${r.skipped} 条已存在）`;
+        const extra = [];
+        if (r.reminders) extra.push(`提醒 ${r.reminders} 条`);
+        if (r.stats) extra.push("小本本已合并");
+        if (r.server && r.server.ok) extra.push(`服务端已还原（${r.server.messages || 0} 条历史）`);
+        else if (r.server) extra.push("服务端未连上（跳过）");
+        out.textContent = (r.imported
+          ? `导入 ${r.imported} 条（跳过重复 ${r.skipped} 条，记忆 ${r.memories} 条`
+          : `没有新记录（${r.skipped} 条已存在，记忆 ${r.memories} 条`)
+          + (extra.length ? "，" + extra.join("，") : "") + "）";
+        // 导入=会话内容整体换血：清掉引擎的旧节奏（最近回复/冷却/引导），
+        // 否则刷新后还会按导入前的上下文去重或重复问"怎么称呼你"
+        if (typeof MockEngine !== "undefined" && typeof MockEngine.resetSession === "function") MockEngine.resetSession(SID);
         toast("导入完成，马上刷新");
         setTimeout(() => location.reload(), 500);
       } catch (e) {

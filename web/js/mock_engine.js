@@ -173,8 +173,10 @@ const MockEngine = (() => {
       "一个人待着也有一个人的好处，起码外卖不用分||……但要说不想有人陪，那是假的。说吧，我在"
     ],
     insomnia: [
-      "又是累的一天吧||饭还是要吃的，哪怕泡个面。躺下之前把手机放远一点，就远二十厘米，试试",
-      "失眠多久了？是睡不着，还是睡着了老醒||要是老这样，明天抽十分钟晒晒太阳，亲测比咖啡管用"
+      "又是累的一天吧||饭还是要吃的，哪怕泡个面。今晚别撑了，能早就早点躺",
+      "失眠这个我熟，越想睡越清醒||别跟自己较劲，睡不着就躺着听我说会儿",
+      "凌晨的脑子最不听劝||你现在是睡不着，还是不敢闭眼？",
+      "黑眼圈都快熬成勋章了||说说，是心里有事，还是身体在闹"
     ],
     family: ["家里的事最磨人，说不开又躲不掉||……慢慢说，我先听"],
     money:  ["钱的事最具体也最烦人||先别慌，说说是哪一环出问题了，我帮你捋捋"],
@@ -201,6 +203,10 @@ const MockEngine = (() => {
       "嗯……让我猜猜，这事儿对你还挺重要||说说看，我猜得准不准",
     ]
   };
+  // 拒绝建议守卫（与 server/mock_api.py REFUSAL_RE / ADVICE_WORD_RE 同源）：
+  // 用户说"不用给我方案"时，话题池里也不该再把被拒的词推回去
+  const REFUSAL_RE = /(?:不用|不要|不需要|别|少来|少给)(?:给我?|跟我?)?(?:方案|建议|步骤|分析|道理|鸡汤|大道理)|说句人话|说人话|别劝我|不用劝我/;
+  const ADVICE_WORD_RE = /方案|建议|步骤|分析|道理|鸡汤/;
   const HOOKS = {
     work: "对了，你们那个老板，上次说要请你们喝奶茶的事后来兑现了吗",
     love: "你现在……是一个人在家吗",
@@ -215,6 +221,142 @@ const MockEngine = (() => {
     intimate: ["gentle", "Nod"], happy: ["happy", "HappyJump"],
     greet: ["gentle", "Greeting"], generic: ["neutral", null]
   };
+  // ---------------- W11 轻量插值（详情回声，与服务端 mock_api.py 同源同表） ----------------
+  // 用户提到具体实体（橘猫/关东煮/三点/周报）→ 用占位符模板回声，同一句话两端答同一个意思。
+  // 保守抽取一个最强实体：宁可抽不出落回话题池，也不拼荒唐句
+  // （"差一点就迟到"不得抽出时间"一点"、"猫粮"不得当宠物）。
+  const DETAIL_NUM_CHARS = "零一二三四五六七八九十两\\d";
+  const ACTION_RE = /(不吃饭|不吃东西|不想吃|不睡觉|睡不着|吐了|拉肚子|拆家|掉毛|打喷嚏|没精神|不让人抱|乱叫|咬人|生病了)/;
+  // 负向守卫：猫粮/猫砂/猫抓板/狗窝是物品，不是宠物本体
+  const ANIMAL_RE = /((?:橘|黑|白|狸花|布偶|英短|小|大|胖|土|花)?(?:猫|狗|兔)子?|金毛|柯基|泰迪|哈士奇|边牧)(?!粮|砂|抓板|玩具|窝|毛)/;
+  const FOOD_RE = /(关东煮|糖醋排骨|火锅|奶茶|泡面|烧烤|煎饼|牛肉面|饺子|包子|蛋糕|雪糕|西瓜|外卖|咖啡|炸鸡|螺蛳粉|麻辣烫|小龙虾)/;
+  const BODY_RE = /(头疼|胃疼|肚子疼|腰疼|嗓子疼|牙疼|眼睛疼|发烧|感冒|低烧|过敏|落枕)/;
+  const WEATHER_RE = /(下雨|下[^，。！？\s]{0,4}雨|暴雨|大雨|下雪|下[^，。！？\s]{0,4}雪|暴雪|降温|刮风|闷热|雾霾|打雷|打[^，。！？\s]{0,3}雷|台风)/;
+  const DETAIL_WORK_RE = /(需求|会议|周报|报告|代码|简历|预算|合同|排期|方案|PPT)/;
+  const PLACE_RE = /(地铁|公交|便利店|超市|咖啡店|医院|学校|公司|办公室|公园)/;
+  // 时间只认两种高置信形态：带时间前缀的"X点"，或"X点才/就+动词"；
+  // 裸"X点"（三点头/一点点/三点水）一律不抽
+  const POINT_PREFIX_RE = new RegExp("(?:凌晨|半夜|昨晚|昨天|今晚|今天|上周)\\s*([" + DETAIL_NUM_CHARS + "]{1,3})\\s*点");
+  const POINT_VERB_RE = new RegExp("([" + DETAIL_NUM_CHARS + "]{1,3})\\s*点\\s*(?:才|就)\\s*(?:睡|醒|起|到|回|下班|上班)");
+  const GUESS_RE = /(你猜猜?|猜猜看|猜一下)/;
+  const ANIMAL_ACTION_TEMPLATES = [
+    "{v}{a}？是突然这样还是已经两天了",
+    "{a}……{v}这是怎么了，之前不这样吧",
+    "先别慌，{v}{a}这事，今天才开始的？",
+    "它又{a}了？{v}这几天一直这样吗",
+    "听到{v}{a}我心里也一紧，现在缓点没"
+  ];
+  const ANIMAL_TEMPLATES = [
+    "{v}？今天又怎么了",
+    "说说{v}吧，它最近乖不乖",
+    "你家{v}啊……它现在在干嘛",
+    "{v}又整什么活了",
+    "一想到{v}我就想笑，它今天又干嘛了"
+  ];
+  const DETAIL_TEMPLATES = {
+    food: [
+      "{v}？听着就馋了，是买的还是自己做的",
+      "{v}……我这会儿也有点想吃",
+      "哪家的{v}，好吃吗",
+      "又是{v}？你最近是不是就好这口",
+      "{v}这东西，我能连吃三天"
+    ],
+    body: [
+      "{v}？多久了，一直硬扛着？",
+      "{v}这事真不能忽视，现在好点没",
+      "又是{v}……今天比昨天轻点吗",
+      "{v}啊，那可太难受了",
+      "你这{v}是老毛病还是新添的"
+    ],
+    weather: [
+      "{v}……今天这天气真够呛",
+      "{v}？你出门带伞了吗",
+      "这种{v}天，最适合窝着不动",
+      "碰上{v}，我只想缩回被窝",
+      "{v}啊……窗户关好没"
+    ],
+    time: [
+      "{v}……这样多久了",
+      "{v}？这也太晚了",
+      "又是{v}，你这觉欠得有点多",
+      "{v}才睡？第二天怎么撑住的",
+      "{v}这个点，我听着都困了"
+    ],
+    work: [
+      "{v}这事还没完呢？",
+      "{v}最磨人，说说是哪一步卡住",
+      "又是{v}……你这几天净跟它耗了",
+      "{v}？先说，卡在哪儿了",
+      "{v}堆成这样，换谁都得炸"
+    ],
+    place: [
+      "{v}上？那会儿人多不多",
+      "{v}……今天路上顺吗",
+      "又是在{v}，累不累",
+      "{v}这会儿还挤吗",
+      "{v}那种地方，待久了确实闷"
+    ]
+  };
+  const GUESS_TEMPLATES = [
+    "不猜，你自己说||我最烦猜了",
+    "我猜不到，你直接交代吧",
+    "让我猜？那我猜你憋着笑||猜对没",
+    "你先说，猜错了多尴尬",
+    "我懒得猜，你说嘛"
+  ];
+  const GUESS_TIME_TEMPLATES = [
+    "我不猜，你说||几点？",
+    "不猜，你自己交代||到底几点",
+    "猜这个没意义，你直接说几点",
+    "我猜……算了不猜，你说",
+    "几点？你说，我不猜"
+  ];
+  /** 保守抽取一个最强实体；返回 {kind, v?, a?, focus?} 或 null（抽不出落回话题池）。
+   *  优先级：追问 > 动物 > 食物 > 身体 > 天气 > 时间 > 工作物 > 地点（与服务端逐字同源） */
+  function extractDetail(text) {
+    text = text || "";
+    if (!text) return null;
+    if (REFUSAL_RE.test(text)) return null;
+    if (GUESS_RE.test(text)) {
+      const focus = (text.includes("几点") || (text.includes("点") && text.includes("睡"))) ? "time" : "generic";
+      return { kind: "guess", focus };
+    }
+    let m = ANIMAL_RE.exec(text);
+    if (m) {
+      const a = ACTION_RE.exec(text);
+      return { kind: "animal", v: m[1], a: a ? a[1] : "" };
+    }
+    for (const [kind, pat] of [["food", FOOD_RE], ["body", BODY_RE]]) {
+      m = pat.exec(text);
+      if (m) return { kind, v: m[1] };
+    }
+    m = WEATHER_RE.exec(text);
+    if (m) {
+      // "下了好大的雨/打了半天雷"归一成短词，避免把整句塞进回复
+      const raw = m[1];
+      const v = raw.includes("雨") ? "下雨" : (raw.includes("雪") ? "下雪" : (raw.includes("雷") ? "打雷" : raw));
+      return { kind: "weather", v };
+    }
+    m = POINT_PREFIX_RE.exec(text) || POINT_VERB_RE.exec(text);
+    if (m) return { kind: "time", v: m[1] + "点" };
+    for (const [kind, pat] of [["work", DETAIL_WORK_RE], ["place", PLACE_RE]]) {
+      m = pat.exec(text);
+      if (m) return { kind, v: m[1] };
+    }
+    return null;
+  }
+  /** 实体 → 占位符模板池；抽不出返回 null（调用方继续用话题池） */
+  function detailPool(text) {
+    const d = extractDetail(text);
+    if (!d) return null;
+    if (d.kind === "guess") return (d.focus === "time" ? GUESS_TIME_TEMPLATES : GUESS_TEMPLATES).slice();
+    if (d.kind === "animal") {
+      const tmpl = d.a ? ANIMAL_ACTION_TEMPLATES : ANIMAL_TEMPLATES;
+      return tmpl.map(t => t.split("{v}").join(d.v).split("{a}").join(d.a || ""));
+    }
+    return (DETAIL_TEMPLATES[d.kind] || []).map(t => t.split("{v}").join(d.v));
+  }
+
   const MEM_PATTERNS = [
     ["昵称", /(我叫|叫我|你可以叫我)\s*([一-龥A-Za-z]{1,4})(?=\b|[，。！？,.!?\s]|$)/],
     ["老板", /(我们?|我的)\s*(老板|领导|上司)\s*([一-龥a-zA-Z]{0,6})/],
@@ -227,10 +369,9 @@ const MockEngine = (() => {
     ["大事", /((?:下周|下个月|下学期|明天|后天|这?周五|这?周六|这?周日|月底|年底|马上|快)?\s*(?:要|得|准备|打算)?\s*(?:考试|月考|期中考试|期末考试|期中|期末|中考|高考|考研|复试|答辩|面试|搬家|入职|报到|交稿|交报告|交方案|比赛|演出|体检|领证)(?:啦|了)?)/]
   ];
 
-  // P0-1 首日引导（离线兜底版）：模块级 flags，问过即递进（无服务端会话状态，刷新重置可接受）
+  // P0-1 首日引导（离线兜底版）：问过即递进；状态按会话隔离（见末尾 stateFor）
   const ONBOARD_NAME_HOOK = "对了，聊了这么久还不知道怎么称呼你——我叫你什么顺口？";
   const ONBOARD_EVENT_HOOK = "还有呀，你最近有啥大事吗？考试、搬家、换工作那种，说一件，我帮你记着";
-  let onbTurns = 0, askedName = false, askedEvent = false;
 
   // ---------------- P0-2 主动回提（离线兜底同源简化版） ----------------
   // 与 mock_api.py 同源同表：话题映射→宠物词表→兜底大事；三重闸门防烦人
@@ -243,7 +384,6 @@ const MockEngine = (() => {
     "在忙": v => `你之前说在${v}，现在缓过来了吗`
   };
   const RECALL_EXTRACT_GAP = 3, RECALL_COOLDOWN = 6, RECALL_MAX = 4;
-  let memHits = {}, memExtracted = {}, recallCount = 0;
 
   // ---------------- P3-1 记忆感知回复：用户主动提已存具体记忆值（与 mock_api.py/MEM_AWARE_POOL 同源同表） ----------------
   // 体检证据（ux_audit_transcript L53-57）："你猜我家年糕在干嘛"（年糕=已存记忆）
@@ -268,8 +408,61 @@ const MockEngine = (() => {
     ]
   };
   const MEM_AWARE_COOLDOWN = 3;
-  let memAwareTs = {};
-  let recentReplies = [];  // P3-1 近轮去重：近 2 轮已用回复（模块级，刷新重置与 onb 同限制）
+
+  // ---------------- 会话状态：按 sid 隔离 ----------------
+  // 状态项：最近回复（去重）/ 记忆感知冷却 / 回提计数与命中 / 首日引导 / 上轮话题。
+  // 契约 reply(history, sid)；sid 缺省退化为默认会话（老调用方不崩）。
+  // 持久化：localStorage 按 sid 一键一值，刷新/重启后按会话恢复；无 localStorage（node 直调）退纯内存。
+  // resetSession(sid)：删除/清空某会话时同步清掉引擎状态，不留幽灵。
+  const DEFAULT_SID = "__default__";
+  const ENGINE_STATE_KEY = "xiaoman_engine_state::";
+  const states = new Map();
+  function sidKey(sid) { return (sid === null || sid === undefined || sid === "") ? DEFAULT_SID : String(sid); }
+  function blankState() {
+    return {
+      onbTurns: 0, askedName: false, askedEvent: false,
+      memHits: {}, memExtracted: {}, recallCount: 0,
+      memAwareTs: {}, recentReplies: [], lastTopic: null
+    };
+  }
+  function plainObj(v) { return v && typeof v === "object" && !Array.isArray(v) ? v : {}; }
+  function hydrateState(raw) {
+    const s = blankState();
+    if (!raw || typeof raw !== "object") return s;
+    s.onbTurns = Number.isFinite(Number(raw.onbTurns)) ? Number(raw.onbTurns) : 0;
+    s.askedName = !!raw.askedName;
+    s.askedEvent = !!raw.askedEvent;
+    s.memHits = plainObj(raw.memHits);
+    s.memExtracted = plainObj(raw.memExtracted);
+    s.recallCount = Number.isFinite(Number(raw.recallCount)) ? Number(raw.recallCount) : 0;
+    s.memAwareTs = plainObj(raw.memAwareTs);
+    s.recentReplies = Array.isArray(raw.recentReplies)
+      ? raw.recentReplies.filter(x => typeof x === "string").slice(-8)
+      : [];
+    s.lastTopic = typeof raw.lastTopic === "string" ? raw.lastTopic : null;
+    return s;
+  }
+  function stateKeyOf(sid) { return ENGINE_STATE_KEY + sidKey(sid); }
+  function stateFor(sid) {
+    const key = sidKey(sid);
+    let st = states.get(key);
+    if (st) return st;
+    let raw = null;
+    try { raw = JSON.parse(lsGet(stateKeyOf(key)) || "null"); } catch (e) { raw = null; }
+    st = hydrateState(raw);
+    states.set(key, st);
+    return st;
+  }
+  function saveState(key, st) {
+    try { lsSet(ENGINE_STATE_KEY + key, JSON.stringify(st)); } catch (e) { /* 配额满不挡主流程 */ }
+  }
+  function resetSession(sid) {
+    const key = sidKey(sid);
+    states.delete(key);
+    try {
+      if (typeof localStorage !== "undefined" && localStorage.removeItem) localStorage.removeItem(ENGINE_STATE_KEY + key);
+    } catch (e) { /* 隐私模式无存储：内存态已清 */ }
+  }
   /** 用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ [键, 值] 或 null。
    *  同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
    *  prior=当前轮之前的记忆（reply 约定：history 末尾即当前轮）。
@@ -277,10 +470,10 @@ const MockEngine = (() => {
    *  xiaoman_memory（localStorage 持久）——两源合并（stored 先、prior 后，
    *  同 session 内最新扫描值优先；reload 后 stored 兜底），记忆感知跨 reload 生效，
    *  与服务端 session 持久记忆天然对齐。node 直调无 localStorage 时 try 降级。 */
-  function matchMemoryValue(prior, userText) {
+  function matchMemoryValue(prior, userText, st) {
     const merged = {};
     try {
-      const stored = JSON.parse(localStorage.getItem("xiaoman_memory") || "{}") || {};
+      const stored = JSON.parse(lsGet("xiaoman_memory") || "{}") || {};
       Object.assign(merged, stored);
     } catch (e) { /* 无 localStorage（node 测试）→ 退化为 history 扫描 */ }
     Object.assign(merged, prior || {});
@@ -289,8 +482,8 @@ const MockEngine = (() => {
       if (!v || v.length < 2 || k === "昵称") continue;
       if (k === "宠物" && petGeneric(v)) continue;
       if (userText.includes(v)) {
-        if (onbTurns - (memAwareTs[k] ?? -99) < MEM_AWARE_COOLDOWN) return null;
-        memAwareTs[k] = onbTurns;
+        if (st.onbTurns - (st.memAwareTs[k] ?? -99) < MEM_AWARE_COOLDOWN) return null;
+        st.memAwareTs[k] = st.onbTurns;
         return [k, v];
       }
     }
@@ -335,7 +528,6 @@ const MockEngine = (() => {
     return mem;
   }
 
-  let lastTopic = null;
   const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 
   function topicOf(text) {
@@ -393,7 +585,10 @@ const MockEngine = (() => {
     return v;
   }
 
-  function reply(history) {
+  /** 主回复入口。sid 用于隔离会话状态（最近回复/记忆冷却/回提计数/引导节奏）；
+   *  缺省退化为默认会话，老调用方 reply(history) 行为不变。 */
+  function reply(history, sid) {
+    const st = stateFor(sid);
     let userText = "";
     for (let i = history.length - 1; i >= 0; i--) {
       if (history[i].role === "user") { userText = history[i].content; break; }
@@ -421,7 +616,7 @@ const MockEngine = (() => {
 
     const topic = topicOf(userText);
     // P3-1：记忆提取/守卫提前（记忆感知需"本轮更新后"记忆，与服务端 memories_now 同口径）
-    onbTurns++;
+    st.onbTurns++;
     const memUpdates = extractMemory(userText);
     // 泛指不覆盖具体（P0-2 遗留守卫·返回值防线）：用当前轮之前的会话状态判定，
     // 阻止"那只猫"式泛指值发给 app.js 覆盖 localStorage 里的具体值（"橘猫"）。
@@ -435,27 +630,45 @@ const MockEngine = (() => {
     if (memUpdates["老板"] && prior["老板"] && !bossNameOk(memUpdates["老板"]) && bossNameOk(prior["老板"])) {
       delete memUpdates["老板"];
     }
-    for (const k of Object.keys(memUpdates)) memExtracted[k] = onbTurns; // 闸门0数据
+    for (const k of Object.keys(memUpdates)) st.memExtracted[k] = st.onbTurns; // 闸门0数据
     // P3-1 记忆感知：用户主动提已存具体记忆值（"你猜我家年糕在干嘛"）→
     // 该键偏置记忆感知池（值原文嵌入，零虚构）；频控=同键 3 轮冷却防刻意感；
     // greet 轮跳过（开场引用文本含记忆值会误烧冷却——引用≠用户主动提，与服务端同修）
-    const aware = topic === "greet" ? null : matchMemoryValue(Object.assign({}, prior, memUpdates), userText);
+    const aware = topic === "greet" ? null : matchMemoryValue(Object.assign({}, prior, memUpdates), userText, st);
     let pool = TOPIC[topic] || TOPIC.generic;
     if (aware) {
       const awarePool = (MEM_AWARE_POOL[aware[0]] || []).map(t => t.split("{v}").join(aware[1]));
       if (awarePool.length) pool = awarePool;  // topic 保持原值（lastTopic/EMO_MAP 不受影响）
     }
-    // P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行
-    let msg = null;
-    for (let i = 0; i < pool.length; i++) {
-      const cand = pick(pool);
-      if (!recentReplies.slice(-2).includes(cand)) { msg = cand; break; }
+    // W11 详情回声：用户提到具体实体（橘猫/关东煮/三点/周报）→ 占位符模板回声。
+    // 记忆感知优先（存过的记忆比新细节更"像人"）；greet 跳过；抽不出实体落回话题池。
+    if (!aware && topic !== "greet") {
+      const echoPool = detailPool(userText);
+      if (echoPool && echoPool.length) pool = echoPool;
     }
-    if (msg === null) msg = pick(pool);
-    recentReplies.push(msg);
-    if (recentReplies.length > 4) recentReplies.shift();
+    // 用户明确拒绝建议/方案时，回声池与话题池都先滤掉被拒的词（与服务端同规则）
+    if (REFUSAL_RE.test(userText)) {
+      const offAdvice = arr => arr.filter(t => !ADVICE_WORD_RE.test(t));
+      pool = offAdvice(pool);
+      if (!pool.length) pool = offAdvice(TOPIC.generic);
+      if (!pool.length) pool = TOPIC.generic;
+    }
+    // P3-1 近轮去重升级（与服务端 _pick 同算法）：先算"可用候选"再随机，
+    // 而不是随机撞次数——撞大运会随机漏掉池内某些模板（句长/开头方差被动塌陷）
+    const prevOpen = st.recentReplies.length ? st.recentReplies[st.recentReplies.length - 1].slice(0, 4) : "";
+    const availPick = (avoid, avoidOpen) => {
+      const cands = pool.filter(c => !avoid.includes(c)
+        && !(avoidOpen && c.length >= 4 && c.slice(0, 4) === prevOpen));
+      return cands.length ? pick(cands) : null;
+    };
+    let msg = availPick(st.recentReplies, true)
+      || availPick(st.recentReplies.slice(-2), true)
+      || availPick(st.recentReplies.slice(-1), false)
+      || pick(pool);
+    st.recentReplies.push(msg);
+    if (st.recentReplies.length > 8) st.recentReplies.shift();  // 与服务端同容量（8 轮）
     if (msg.startsWith("@CTX|")) {
-      const neg = ["work", "love", "family", "money"].includes(lastTopic);
+      const neg = ["work", "love", "family", "money"].includes(st.lastTopic);
       msg = neg ? msg.slice(5)
                 : "抱可以，团子表示强烈抗议||但它批准了，它说你看起来需要多一点，哈哈。抱好了吗";
     }
@@ -468,22 +681,23 @@ const MockEngine = (() => {
       // P1-1 里程碑+月度回放（幂等键与 app.js 双端同键；播报时写键，不双播）
       msg += greetAnnex();
     }
-    if (topic !== "greet") lastTopic = topic;
+    if (topic !== "greet") st.lastTopic = topic;
     const [emotion, motion] = EMO_MAP[topic] || ["neutral", null];
     // P0-1 首日引导：前几轮确定性引导（称呼→大事）
     // P0-2 主动回提：引导完成后接管（优先级：引导 > 回提 > 常规随机，与服务端同序）
     // （memUpdates/prior/守卫已 P3-1 前移至池选定前——记忆感知需要）
     let hook = null;
-    if (!askedName && onbTurns <= 4) {
+    if (!st.askedName && st.onbTurns <= 4) {
       hook = ONBOARD_NAME_HOOK;
-      askedName = true;
-    } else if (!askedEvent && onbTurns <= 8) {
+      st.askedName = true;
+    } else if (!st.askedEvent && st.onbTurns <= 8) {
       hook = ONBOARD_EVENT_HOOK;
-      askedEvent = true;
+      st.askedEvent = true;
     } else {
-      hook = pickRecall(memUpdates, topic, userText, history);
+      hook = pickRecall(memUpdates, topic, userText, history, st);
       if (!hook) hook = Math.random() < 0.55 ? (HOOKS[topic] || null) : null;
     }
+    saveState(sidKey(sid), st);
     return {
       reply: msg, emotion, motion,
       memory_updates: memUpdates,
@@ -493,25 +707,25 @@ const MockEngine = (() => {
 
   /** P0-2 回提决策（离线版，无服务端会话状态）：三重闸门内确定性触发。
    *  简化差异：不含 greet 开场标记（app.js 的开场引用不经本引擎） */
-  function pickRecall(memUpdates, topic, userText, history) {
-    if (recallCount >= RECALL_MAX) return null;
+  function pickRecall(memUpdates, topic, userText, history, st) {
+    if (st.recallCount >= RECALL_MAX) return null;
     const mem = recallMemories(history);
     let cands = (RECALL_MAP[topic] || []).filter(k => mem[k]);
     if (PET_TOPIC_RE.test(userText) && mem["宠物"]) cands.push("宠物");
     if (!cands.length && mem["大事"]) cands = ["大事"];
     for (const k of cands) {
       if (k in memUpdates) continue;                       // 当轮刚提取：回提=复读
-      const ext = memExtracted[k];
-      if (ext !== undefined && onbTurns - ext < RECALL_EXTRACT_GAP) continue; // 闸门0
-      const hit = memHits[k];
-      if (hit === undefined || onbTurns - hit >= RECALL_COOLDOWN) {           // 闸门1
-        memHits[k] = onbTurns;
-        recallCount++;                                       // 闸门2 计数
+      const ext = st.memExtracted[k];
+      if (ext !== undefined && st.onbTurns - ext < RECALL_EXTRACT_GAP) continue; // 闸门0
+      const hit = st.memHits[k];
+      if (hit === undefined || st.onbTurns - hit >= RECALL_COOLDOWN) {           // 闸门1
+        st.memHits[k] = st.onbTurns;
+        st.recallCount++;                                     // 闸门2 计数
         return RECALL_TPL[k](mem[k]);
       }
     }
     return null;
   }
 
-  return { reply };
+  return { reply, resetSession };
 })();

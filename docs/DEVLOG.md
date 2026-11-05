@@ -21,6 +21,73 @@
 
 **触及**：`docs/android-battery/**`、`scripts/emulator_adapt_sweep.py`、`scripts/emulator_power_probe.py`；本条 + `docs/PROJECT_STATE.md`。
 
+## 2026-11-05 · 数据完整性收口 w16（feat/data-completeness，起点 r3-20261105 `0a86007`）
+
+> 背景：上一轮会话因宿主机意外断电被取消，本条为**续做**而非重来：先 `git status` 保住工作区成果（4 个提交），再补文档与推送。负载纪律：本地只跑与改动相关的短测试，完整闸门交云端 Actions。
+
+### 四项收口
+1. **备份/导出漏项**：`backup.js` schema 升 v3，新增 `reminders` / `stats` / `server`（服务端状态 + 落盘历史 + w11 记忆槽）；导入按 id 及「文案+时刻」去重、统计逐项取大（换机=完整还原，重复导入不翻倍），v2 老备份仍可读。服务端新增 `GET /api/session/export`、`POST /api/session/import`（白名单化：sid 校验、消息上限 200、状态字段类型过滤）。
+2. **单条消息删/改**：服务端 `POST /api/message/delete|update` 改历史的同时清掉「由该消息产生」的 memories 与记忆槽（编辑时仍保留新文案里还存在的记忆）；前端悬停「⋯」/触屏长按 450ms 出菜单，**全部动态生成、未碰 `web/index.html`**；删用户消息级联清掉其回复，统计逐项回退、记忆引用同步，五处状态一致。
+3. **统计清空入口**：小本本底部按钮 + 5 秒二次确认，清后 `Stats.clear()` 与界面同帧归零。
+4. **biome 覆盖面**：`web/package.json` lint 白名单加入 `errors.js` / `app.js` / `chat_pager.js` / `pet.js`，**0 error**（`pet.js` 仅加白名单未改源码，只有 warning 级建议）。
+
+### 验证（本地实跑）
+- `pytest server/tests` → **153 passed + 19 subtests**（新增 `test_session_io.py` 8 项：round-trip / 白名单清洗 / 200 上限 / 删改同步记忆与槽）
+- `node --test tests/*.test.js` → **192/192**（新增 `backup_roundtrip.test.js` 6 项 + store/reminders/stats 5 项）
+- `biome check`（新白名单）→ **0 error**
+- `scripts/test_roundtrip.py` → **22/22**：导出→清空（CDP 抹 localStorage+IDB，服务端同步清空）→导入，提醒 id/文案/时刻/完成态、统计 6 个键、服务端 memories/slots/state/历史逐项一致
+- `scripts/test_msg_edit.py` → **26/26**：动态菜单、二次确认防误删、删后计数回退/记忆清空/无幽灵节点、编辑重发清旧回复且不重复计数、统计清空前后端同步
+- 未在本地跑（交云端）：`test_e2e.py` 60、`test_feature_loop.py` 43、`test_live2d_original.py` 24、`test_raf_budget.py` 8、`verify_assets.py`
+
+**触及**：`server/mock_api.py`、`server/tests/test_session_io.py`、`web/js/{api,backup,store,reminders,stats,app,chat_pager}.js`、`web/package.json`、`web/tests/{backup_roundtrip,idb_stub,reminders,stats,store}.test.js`、`scripts/{test_roundtrip,test_msg_edit}.py`、`docs/{FEATURE_MATRIX,DEVLOG}.md`
+
+### 补丁（追补）：修云端 python-fast 两条既有红灯（`64f9ff6`）
+> 这两条从 r3 起就红，回退 `mock_api.py` 到 `0a86007` 复跑同样红，确认非 w16 引入。
+
+| 现象 | 真因 | 修法 |
+|---|---|---|
+| `test_refusal_guard_keeps_pool_off_advice` 偶发（约 6/20）：输入「不用给我方案」答「那方案你熬了多久」 | `extract_detail` 有拒绝守卫，但 `_pick` 直接从 work 话题池抽签，池里那条恰好含「方案」——把用户刚拒的词原样推回去 | 新增 `ADVICE_WORD_RE`，命中 `REFUSAL_RE` 时先把池内 方案/建议/步骤/分析/道理/鸡汤 过滤掉（空则退回 generic 再过滤） |
+| `test_same_input_five_times...` 偶发：5 次回复句长差 <2 | `_pick` 用「随机撞 `len*2` 次」找不重复，随机漏掉池内最短那条（5 条池只出 4 条），句长差被动变小 | 改为**先算出可用候选**（未被用过且首 4 字不撞上轮）再 `random.choice`；随机性保留，"不重样"从碰运气变成确定性保证 |
+| `test_memory_recall` G11-2①/② 稳定挂（150/152） | W11 只改了服务端：`_match_memory_value` 跳过本轮写入键 → 介绍轮不提名字（失忆），下一轮突然复读（刻意）；离线 `mock_engine.js` 无此跳过，G11-5① 反而通过 | 去掉写入轮跳过，写入轮当场接住并**从该轮计 3 轮冷却**（`mock_api.py` 与离线同源） |
+
+**关于被改的那条单元断言**：`test_mock_human_feel_fixes::test_write_turn_does_not_burn_the_cooldown` 原断言「写入轮不复述=炫耀记忆」与 G11-2/5 的验收口径直接冲突，且造成服务端/离线两套人格。改判据：① 用户主动介绍宠物名时只字不提=没听见，比提一次更假；② 真正要防的是"连续几轮句句带名字"，不是第一次回应。新断言更强——写入轮必须接住 1 次，随后 2 轮静默，第 3 轮可再提，第 4 轮重新进冷却；理由写进用例 docstring，`HUMAN_FEEL.md` 第 3 行同步更正。
+
+**验证**：`pytest server/tests` 连跑 5 次独立进程 **5/5 绿**（153 passed + 19 subtests）；`python -m unittest discover -s server/tests` 5/5 OK（153 tests）；`test_mock_echo` 连跑 **20/20**；`test_memory_recall` **152/152**；`test_mock_api` **12/12**。云端：旧 `quick.yml` 已被另一路并入 `ci.yml`，本次推送 `ci #11`（sha `1c014c9`）`python-tests` + `node-tests-and-lint` **全绿**。
+
+### 补丁（追补 II）：离线引擎 `mock_engine.js` 与在线同源
+| 对齐项 | 改动 |
+|---|---|
+| 拒绝建议守卫 | 新增 `REFUSAL_RE` / `ADVICE_WORD_RE`（与服务端同正则）；命中后先过滤当前池，空则退 `TOPIC.generic` 再过滤——"不用给我方案"不会再答「那方案你熬了多久」 |
+| 不重样选句 | 由"随机撞 `pool.length` 次"改为 `availPick` 三级降级（会话内未用过+首 4 字不撞 → 近 2 轮未用过 → 不逐字复读上轮 → 任意），先算候选再 `pick`；`recentReplies` 容量 4→8 与服务端一致 |
+| 记忆写入轮 | 离线本就合并 `prior+memUpdates`（写入轮接住并计冷却），本轮与在线对齐后**两端行为一致**，补用例锁死 |
+| 话题池 | `insomnia` 从 2 条含建议的旧文案换成服务端 4 条不含建议的版本（原离线版与在线不一致，且违反"不主动给方案"） |
+
+新增 [mock_engine.test.js](file:///D:/我的/编程/vibe%20coding%20tools/treehole-w16/web/tests/mock_engine.test.js) **5 例**：拒绝词 30 次零违规、`说人话/别劝我` 同样生效、同输入 5 次唯一度/句长差/首 4 字、写入轮接住+2 轮静默+冷却满再提、普通工作话题不受守卫影响。每例 `new Function` 重载引擎，隔离模块级状态，无浏览器依赖。
+
+**验证**：`node --test tests/*.test.js` **197/197**（基线 192 + 新增 5）；`pytest server/tests` **153 passed + 19 subtests**；`biome check js/mock_engine.js tests/mock_engine.test.js` **0 error**。
+
+**仍存在的分叉（补丁 II 时点）**：
+1. ~~W11 轻量模板插值（回声）只在服务端~~ → **补丁 III 已移植**（见下）。
+2. ~~状态作用域：离线状态为模块级~~ → **补丁 III 已按 sid 隔离**（见下）。
+3. **关系里程碑/月度回放**：离线有 `greetAnnex()`（依赖 localStorage），服务端本就没有用户级本地状态，属设计差异而非 bug。
+4. ~~服务端 `extract_detail` 的拒绝守卫在离线无对应实现~~ → **补丁 III 已同源**。
+
+### 补丁（追补 III）：详情回声移植 + 会话状态隔离
+
+| 对齐项 | 改动 |
+|---|---|
+| 详情回声 | 服务端 `extract_detail` 与模板池（食物/身体/天气/时段/工作物/地点 + 宠物动作/追问）逐字搬到 `mock_engine.js`；同一句「今天中午吃了关东煮」两端都答「…听着就馋了…」；裸「X点」（三点头/一点点）不抽，保守落回话题池 |
+| 回声守卫 | 优先级 `greet 跳过 > 记忆感知 > 详情回声 > 话题池`；用户拒绝建议时 `extract_detail` 直接返回 null，回声不夹带被拒词；抽不出实体落回 generic |
+| 细节去重 | 回声句进入 `recentReplies`，连续两轮不复读且首 4 字不撞；宠物名等记忆值仍走记忆感知池，不被详情池抢走 |
+| 会话隔离 | 契约扩为 `reply(history, sid)`；`recentReplies`/`memAwareTs`/召回计数/引导节奏/上轮话题全部按 sid 存，`localStorage` 键 `xiaoman_engine_state::<sid>`，刷新按会话恢复；`resetSession(sid)` 清内存+持久化键；`sid` 缺省退默认会话，老调用方不崩 |
+| 调用点 | `api.js` 统一传 `sessionId()`；`app.js` 清空记忆、导入备份后 `resetSession(SID)`，不留幽灵 |
+
+**验证**：`node --test` **205/205**（基线 197 + 新增 8）；`pytest server/tests` **153 passed + 19 subtests**；`biome` **0 error**。新增用例见 [mock_engine.test.js](file:///D:/我的/编程/vibe%20coding%20tools/treehole-w16/web/tests/mock_engine.test.js)：详情命中、连续两轮不复读、拒绝让位、记忆池优先、两会话不串味、刷新恢复、删除清理、无 sid 可用。
+
+
+
+
+
 ---
 
 ## 2026-11-05 · 第三轮合并 r3（w10/w11/w12/w13 → feat/containerize-and-config）

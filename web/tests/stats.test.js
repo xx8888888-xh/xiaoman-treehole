@@ -104,3 +104,34 @@ test("清空小本本：只清统计，不碰聊天/提醒键", () => {
   assert.equal(store.has(Stats.KEY), false);
   assert.equal(store.get("xiaoman_chat_v1"), "keep-me");
 });
+
+test("删除单条消息：计数逐项回退且不会变成负数", () => {
+  store.clear();
+  const at = new Date("2026-03-01T23:30:00").getTime();
+  Stats.bump("哈哈哈笑死🥺", at);
+  const before = Stats.snapshot();
+  assert.equal(before.msgs, 1);
+  assert.equal(before.haha, 1);
+  assert.equal(before.night, 1);
+  Stats.unbump("哈哈哈笑死🥺", at);
+  const after = Stats.snapshot();
+  assert.equal(after.msgs, 0);
+  assert.equal(after.haha, 0);
+  assert.equal(after.night, 0);
+  assert.equal(after.last7[6].n, 0, "按天计数也要回退");
+  Stats.unbump("不存在的句子", at);
+  assert.equal(Stats.snapshot().msgs, 0, "重复回退也不小于 0");
+});
+
+test("备份合并：空本机等价完整还原，重复导入不翻倍", () => {
+  store.clear();
+  Stats.bump("a", new Date("2026-03-01T09:00:00").getTime());
+  Stats.bump("b", new Date("2026-03-02T09:00:00").getTime());
+  const backup = Stats.raw();
+  Stats.clear();
+  Stats.merge(backup);
+  assert.equal(Stats.raw().msgs, backup.msgs);
+  assert.deepEqual(Stats.raw().perDay, backup.perDay);
+  Stats.merge(backup);
+  assert.equal(Stats.raw().msgs, backup.msgs, "同一份备份再导入一次不累加");
+});

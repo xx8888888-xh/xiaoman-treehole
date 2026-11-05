@@ -5,7 +5,7 @@
 覆盖（对应 docs/HUMAN_FEEL.md 的遗留项 1-5）：
 1. 沉默轮：极短/无内容输入 → 1-5 字短回应，不追问、不带引导 hook
 2. 姓名提取：老板/家人/室友的值不再等于键自身词
-3. 记忆感知冷却：本轮刚写入的键不感知，冷却从下一轮起算
+3. 记忆感知冷却：写入轮当场接住（与离线引擎同源），冷却从写入轮起算
 4. hook 优先级：主动回提命中时让位给固定新手引导
 5. 失眠/熬夜/睡不着入"状态"槽，且能在失眠话题下被回提
 """
@@ -93,19 +93,30 @@ class NameExtractionTest(unittest.TestCase):
 
 
 class MemoryAwareCooldownTest(unittest.TestCase):
-    def test_write_turn_does_not_burn_the_cooldown(self):
+    def test_write_turn_catches_then_starts_cooldown(self):
+        """写入轮当场接住新介绍，并从这一轮开始计 3 轮冷却。
+
+        为什么改掉原断言「写入轮不复述=炫耀记忆」：
+        ① 用户主动介绍"我家猫叫年糕"时，回复一个字不提"年糕"=根本没接住，
+           比复述更像失忆；真正该防的是"连着几轮句句带年糕"，不是第一次回应。
+        ② 离线引擎 mock_engine.js 写入轮就接住（G11-5① 同款断言），服务端跳过
+           造成 HTTP 直连与离线两种表现；G11-2①（介绍轮接住）/②（下一轮不复读）
+           从 r3 起长期红，正是这条单端改动造成的。
+        新断言依据：接住一次后立即进入冷却（同一轮记 hits），随后两轮静默、
+        第三轮冷却满可再提——既"听见"又不连提，比原断言覆盖更严。
+        """
         payloads = say("aware-cool", [
-            "我家猫叫年糕",          # 写入轮：不感知
-            "你猜年糕在干嘛",        # 下一轮：可感知（并开始冷却）
-            "年糕今天拆家了",        # 冷却 1
-            "年糕是不是欠揍",        # 冷却 2
-            "年糕最近乖不乖",        # 冷却满 3：可再次感知
+            "我家猫叫年糕",          # 轮0 写入：当场接住并开始冷却
+            "你猜年糕在干嘛",        # 轮1 冷却中：不应再提
+            "年糕今天拆家了",        # 轮2 冷却中：不应再提
+            "年糕是不是欠揍",        # 轮3 冷却满：可再次感知
+            "年糕最近乖不乖",        # 轮4 冷却中：不应再提
         ])
-        self.assertNotIn("年糕", payloads[0]["reply"], "写入轮复述=炫耀记忆")
-        self.assertIn("年糕", payloads[1]["reply"], "下一轮应能自然接住")
+        self.assertIn("年糕", payloads[0]["reply"], "介绍轮必须当场接住")
+        self.assertNotIn("年糕", payloads[1]["reply"], "冷却期不应连提")
         self.assertNotIn("年糕", payloads[2]["reply"], "冷却期不应连提")
-        self.assertNotIn("年糕", payloads[3]["reply"], "冷却期不应连提")
-        self.assertIn("年糕", payloads[4]["reply"], "冷却结束后应可再提")
+        self.assertIn("年糕", payloads[3]["reply"], "冷却结束后应可再提")
+        self.assertNotIn("年糕", payloads[4]["reply"], "再提之后重新进入冷却")
 
     def test_greet_turn_skips_awareness(self):
         """开场引用不是用户主动提，不应烧冷却（既有守卫保持）。"""
