@@ -33,20 +33,19 @@
   <header class="topbar">
     <h1 class="brand"><span class="brand-dot"></span>小满树洞</h1>
     <div class="top-actions">
-      <button class="icon-btn" id="widgetBtn" title="收起成挂件" aria-label="收起成挂件">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 14 L10 14 L10 20"/><path d="M20 10 L14 10 L14 4"/><path d="M14 10 L20 4"/><path d="M4 14 L10 20"/></svg>
-      </button>
-      <button class="icon-btn" id="memoryBtn" title="小满记得的事" aria-label="记忆">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 3 C7 3 4 6.5 4 10.5 C4 13 5.2 14.6 6.6 15.8 L6 21 L10.5 17.6 C11 17.7 11.5 17.8 12 17.8 C17 17.8 20 14.3 20 10.4 C20 6.5 17 3 12 3 Z"/></svg>
-      </button>
-      <button class="icon-btn" id="settingsBtn" title="设置" aria-label="设置">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8 L13 5.4 A6.8 6.8 0 0 1 15.2 6.3 L17.8 5.2 L19 6.9 L17 9 A6.8 6.8 0 0 1 17.4 11.3 L19.8 12.6 L19.2 14.6 L16.5 14.5 A6.8 6.8 0 0 1 15 16.7 L15.4 19.4 L13.4 20.3 L11.7 18.3 A6.8 6.8 0 0 1 9.3 18.3 L7.6 20.3 L5.6 19.4 L6 16.7 A6.8 6.8 0 0 1 4.5 14.5 L1.8 14.6 L1.2 12.6 L3.6 11.3 A6.8 6.8 0 0 1 4 9 L2 6.9 L3.2 5.2 L5.8 6.3 A6.8 6.8 0 0 1 8 5.4 L9 2.8 Z"/></svg>
-      </button>
+      <button class="icon-btn" id="widgetBtn" title="收起成挂件" aria-label="收起成挂件" data-icon="widget"></button>
+      <button class="icon-btn" id="memoryBtn" title="小满记得的事" aria-label="记忆" data-icon="memory"></button>
+      <button class="icon-btn" id="settingsBtn" title="设置" aria-label="设置" data-icon="settings"></button>
     </div>
   </header>
 
   <!-- ============ Live2D 舞台 ============ -->
   <div id="stage" tabindex="0" role="button" aria-label="和小满互动（回车或空格摸头）">
+    <!-- 加载占位：静态极简（无转圈/无 shimmer）；canvas 或降级卡出现后自动让位 -->
+    <div class="stage-skeleton" aria-hidden="true">
+      <span class="sk-figure"></span>
+      <span class="sk-caption"></span>
+    </div>
     <span class="stage-mood"><span id="moodText">在听你说</span></span>
   </div>
 
@@ -61,8 +60,12 @@
       </div>
       <!-- 首次使用引导：没有聊天记录时显示；发出第一条后自动收起 -->
       <div id="emptyState" class="empty-state hidden">
+        <svg class="empty-art" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M7 20 V11.4 A5 5 0 0 1 17 11.4 V20"/>
+          <circle cx="12" cy="12.6" r="1.7"/>
+        </svg>
         <p class="empty-title">这里只有你和小满</p>
-        <p class="empty-sub">不用组织语言，想到什么说什么。小满会记住你在意的人和事，也会在你定好的时间提醒你。</p>
+        <p class="empty-sub">不用组织语言，想到什么说什么。</p>
         <div class="quick-starts" role="group" aria-label="第一次使用可以从这里开始">
           <button class="quick-chip" id="quickSay" type="button">随便说一句</button>
           <button class="quick-chip" id="quickRemind" type="button">定个提醒</button>
@@ -77,31 +80,29 @@
     <div class="notice-bar hidden" id="noticeBar" role="alert">
       <span id="noticeText"></span>
       <button class="pending-btn hidden" id="noticeRetry">重试</button>
-      <button class="pending-close" id="noticeClose" aria-label="关闭提示">✕</button>
+      <button class="pending-close" id="noticeClose" aria-label="关闭提示" data-icon="close">×</button>
     </div>
     <!-- 429/断网排队提示：安静、可关闭；只有存在未回复消息时出现 -->
     <div class="pending-bar hidden" id="pendingBar" role="status" aria-live="polite">
       <span id="pendingText">还有 1 条没回</span>
       <button class="pending-btn" id="pendingRetry">再试一次</button>
-      <button class="pending-close" id="pendingClose" aria-label="关闭排队提示">✕</button>
+      <button class="pending-close" id="pendingClose" aria-label="关闭排队提示" data-icon="close">×</button>
     </div>
     <!-- 语音不可用：不出声，文字照常；一条可关闭的安静提示（不弹窗） -->
     <div class="pending-bar hidden" id="voiceTip" role="status" aria-live="polite">
       <span id="voiceTipText">语音暂时没法出声，文字照常</span>
-      <button class="pending-close" id="voiceTipClose" aria-label="关闭语音提示">✕</button>
+      <button class="pending-close" id="voiceTipClose" aria-label="关闭语音提示" data-icon="close">×</button>
     </div>
     <!-- 降级提示：安静、可关闭；跟随输入区排列，不遮挡对话 -->
     <div id="degradeBadge" class="degrade hidden" role="status">
       <span id="degradeText">本地模式</span>
-      <button id="degradeClose" aria-label="关闭提示">✕</button>
+      <button id="degradeClose" aria-label="关闭提示" data-icon="close">×</button>
     </div>
     </div>
     <div class="inputbar">
       <textarea id="textInput" rows="1" placeholder="跟小满说点什么…" aria-label="给小满发消息" enterkeyhint="send" autocomplete="off" maxlength="500"></textarea>
       <span class="char-count" id="charCount" aria-hidden="true" hidden></span>
-      <button class="send-btn" id="sendBtn" aria-label="发送" disabled>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12 L20 4 L14.5 20 L11.5 13.5 Z"/></svg>
-      </button>
+      <button class="send-btn" id="sendBtn" aria-label="发送" disabled data-icon="send"></button>
     </div>
   </main>
 
@@ -109,11 +110,11 @@
   <div class="drawer hidden" id="memoryDrawer" role="dialog" aria-modal="true" aria-labelledby="memoryDrawerTitle">
     <div class="drawer-mask overlay"></div>
     <div class="drawer-panel">
-      <div class="drawer-head"><h2 id="memoryDrawerTitle">小满记得的事</h2><button class="icon-btn" id="memoryClose" aria-label="关闭">✕</button></div>
-      <p class="drawer-sub">称呼、人物、事件会记在这台手机上。开启在线对话时，聊天内容会经服务器转发给第三方模型；选离线模式则只在本地。</p>
+      <div class="drawer-head"><h2 id="memoryDrawerTitle">小满记得的事</h2><button class="icon-btn" id="memoryClose" aria-label="关闭" data-icon="close">×</button></div>
+      <p class="drawer-sub">称呼、在意的人和事，只存在这台手机上。</p>
+      <div class="chips" id="memoryChips"></div>
       <div id="reminderList"></div>
       <div id="statsBox"></div>
-      <div class="chips" id="memoryChips"></div>
       <button class="solid-btn" id="cardBtn">生成我们的友谊卡片</button>
       <button class="ghost-btn" id="memoryClear">清空记忆</button>
     </div>
@@ -123,7 +124,7 @@
   <div class="modal hidden" id="cardModal" role="dialog" aria-modal="true" aria-labelledby="cardTitle">
     <div class="drawer-mask overlay"></div>
     <div class="modal-panel">
-      <div class="drawer-head"><h2 id="cardTitle">我们的友谊卡片</h2><button class="icon-btn" id="cardClose" aria-label="关闭">✕</button></div>
+      <div class="drawer-head"><h2 id="cardTitle">我们的友谊卡片</h2><button class="icon-btn" id="cardClose" aria-label="关闭" data-icon="close">×</button></div>
       <img id="cardImg" alt="友谊卡片预览（由你手机上的真实聊天数据生成）" />
       <button class="solid-btn" id="cardSave">保存 / 分享</button>
       <p class="card-mini">卡片由本机真实数据生成，不含任何聊天内容</p>
@@ -134,7 +135,7 @@
   <div class="modal hidden" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="drawer-mask overlay"></div>
     <div class="modal-panel">
-      <div class="drawer-head"><h2 id="settingsTitle">设置</h2><button class="icon-btn" id="settingsClose" aria-label="关闭">✕</button></div>
+      <div class="drawer-head"><h2 id="settingsTitle">设置</h2><button class="icon-btn" id="settingsClose" aria-label="关闭" data-icon="close">×</button></div>
 
       <section class="sheet-section">
         <h3 class="section-title">模型与连接</h3>
@@ -240,10 +241,10 @@
       </section>
 
       <section class="about">
-        <p>小满树洞 v0.5 · 开源软件（MIT）</p>
-        <p class="mini">渲染: LayeredPuppet 分层立绘（Canvas 2D, MIT）· 模型: 潮·原创角色（CC BY 4.0，1235×2841 分层纹理）· 语音: 设备系统 TTS / 浏览器 speechSynthesis / 可选自建服务（默认关闭）</p>
-        <p class="mini">隐私：聊天和记忆默认存在本机；用在线模式时，聊天内容会发到模型服务商那里；如果你连的是自己的服务器，服务器也可能留一份上下文，可随时删除。可随时导出或清空本机记录。</p>
-        <p class="mini">如果你正处于困境：全国心理援助热线 12356（24小时）；紧急情况打 120 / 110。</p>
+        <p>小满树洞 v0.5 · 开源（MIT）</p>
+        <p class="mini">渲染 LayeredPuppet · 模型 潮（CC BY 4.0）· 语音 系统 TTS，默认不出声</p>
+        <p class="mini">隐私：记录默认只在本机；在线模式会把聊天发给你配置的模型服务商，可随时导出或清空。</p>
+        <p class="mini">如果你正处于困境：心理援助热线 12356（24h）；紧急情况 120 / 110。</p>
       </section>
 
       <label class="field float-field" id="floatField" hidden><span>悬浮小满（桌宠）</span>
@@ -265,6 +266,7 @@
 <!-- 分层立绘引擎（puppet.js，约 20KB）与模型清单改为 stage.js 里按需加载：
      先把输入/历史/开场交给用户（TTI），舞台随后补上，不阻塞首屏 -->
 <script src="js/config.js"></script>
+<script src="js/icons.js"></script>
 <script src="js/errors.js"></script>
 <script src="js/store.js"></script>
 <script src="js/risk.js"></script>
