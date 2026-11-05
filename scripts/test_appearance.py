@@ -13,6 +13,10 @@ import os
 import subprocess
 import sys
 
+from browser_guard import require_browser_allowed
+
+require_browser_allowed(__file__)
+
 from playwright.async_api import async_playwright
 
 

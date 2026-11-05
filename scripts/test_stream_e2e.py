@@ -14,6 +14,10 @@ import time
 import urllib.request
 from pathlib import Path
 
+from browser_guard import require_browser_allowed
+
+require_browser_allowed(__file__)
+
 ROOT = Path(__file__).resolve().parents[1]
 PROMPT = "我今天加班到十点老板还骂我"
 

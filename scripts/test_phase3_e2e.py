@@ -11,6 +11,10 @@ import sys
 import time
 from pathlib import Path
 
+from browser_guard import require_browser_allowed
+
+require_browser_allowed(__file__)
+
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
