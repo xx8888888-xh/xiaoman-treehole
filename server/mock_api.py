@@ -435,19 +435,18 @@ MEM_AWARE_POOL = {
 }
 MEM_AWARE_COOLDOWN = 3  # 同键记忆感知间隔轮数
 
-def _match_memory_value(memories, user_text, sess, mem_updates=None):
+def _match_memory_value(memories, user_text, sess):
     """用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ (键, 值) 或 None。
     同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
-    W11：本轮刚写入的键跳过感知——"刚记下"就复述会显得像在炫耀记忆，
-    且会白烧一次冷却；从下一轮起才可命中。"""
+    写入轮同样参与感知：用户主动介绍（"我家猫叫年糕"）当场接住才算听见，
+    这一轮即开始计冷却（所以下一轮不会再提），与离线引擎 mock_engine.js 同源；
+    W11 曾让写入轮跳过，结果服务端"介绍轮失忆、下一轮忽然复读"，G11-2 ①/② 连挂。"""
     if not memories or not user_text:
         return None
     turn = sess.get("turns", 0)
     hits = sess.setdefault("mem_aware_ts", {})
     for k, v in memories.items():
         if not v or len(v) < 2 or k == "昵称":
-            continue
-        if mem_updates and k in mem_updates:
             continue
         if k == "宠物" and _pet_generic(v):
             continue
@@ -601,6 +600,8 @@ REFUSAL_RE = re.compile(
     r"(?:不用|不要|不需要|别|少来|少给)(?:给我?|跟我?)?"
     r"(?:方案|建议|步骤|分析|道理|鸡汤|大道理)"
     r"|说句人话|说人话|别劝我|不用劝我")
+# 用户刚拒绝建议时，回复池也不该再出现这些词（把被拒的词原样推回去=没听人说话）
+ADVICE_WORD_RE = re.compile(r"方案|建议|步骤|分析|道理|鸡汤")
 
 ANIMAL_ACTION_TEMPLATES = [
     "{v}{a}？是突然这样还是已经两天了",
@@ -1414,9 +1415,9 @@ def make_reply(messages, session_id=None):
     # P3-1 体检复跑发现：greet 开场引用文本含记忆值（"你家年糕最近乖不乖"）会
     # 误烧记忆感知冷却（引用≠用户主动提，不该计入）→ greet 轮跳过记忆感知，
     # greet 池+开场引用自身已保证不冷场
-    # W11：传 mem_updates——本轮刚写入的键不参与感知（写入轮烧冷却=白烧，且复述=炫耀）
+    # 写入轮也参与感知（当场接住新介绍），冷却从写入轮开始计——与离线引擎同源
     mem_aware = None if topic == "greet" else _match_memory_value(
-        memories_now, user_text, sess, mem_updates)
+        memories_now, user_text, sess)
     if mem_aware:
         k_aware, v_aware = mem_aware
         aware_pool = [t.replace("{v}", v_aware) for t in MEM_AWARE_POOL.get(k_aware, [])]
@@ -1428,6 +1429,11 @@ def make_reply(messages, session_id=None):
         echo_pool = detail_pool(user_text)
         if echo_pool:
             pool = echo_pool
+    # 用户明确拒绝建议/方案时，回声与话题池都避开这些词——否则等于把刚被拒的词
+    # 又推回去（"不用给我方案"→"那方案你熬了多久"，听着就是没在听）
+    if REFUSAL_RE.search(user_text):
+        pool = [t for t in pool if not ADVICE_WORD_RE.search(t)] or [
+            t for t in TOPIC["generic"] if not ADVICE_WORD_RE.search(t)] or pool
     # P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行。
     # W11：再加"开头 4 字不复读"与"整段会话内优先不重样"——5 条同实体的插值
     # 模板若只做近 2 轮去重，5 次同一句输入只能出 3 种，听感仍是复读机。
@@ -1435,14 +1441,12 @@ def make_reply(messages, session_id=None):
     prev_open = recent[-1][:4] if recent else ""
 
     def _pick(avoid, avoid_open):
-        for _ in range(len(pool) * 2):
-            cand = random.choice(pool)
-            if cand in avoid:
-                continue
-            if avoid_open and len(cand) >= 4 and cand[:4] == prev_open:
-                continue
-            return cand
-        return None
+        # 先在"可用"里取，而不是随机撞到不同为止：撞大运会让 5 次同输入
+        # 随机漏掉某些模板（曾随机漏最短句 → 句长差 <2 的假复读）
+        cands = [c for c in pool
+                 if c not in avoid
+                 and not (avoid_open and len(c) >= 4 and c[:4] == prev_open)]
+        return random.choice(cands) if cands else None
 
     # 三级降级：会话内没用过 → 近 2 轮没用过 → 至少不逐字复读上轮
     reply = (_pick(set(recent), True)
