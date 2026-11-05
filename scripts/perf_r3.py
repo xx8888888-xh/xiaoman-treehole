@@ -555,7 +555,7 @@ async def _ls_diag(page):
         }""")
 
 
-async def _top_alloc(profile, limit=15):
+def _top_alloc(profile, limit=15):
     """把 V8 分配采样（stop 时仍存活的对象）按 selfSize 聚合到顶层调用点。"""
     aggr = {}
     total = [0]
