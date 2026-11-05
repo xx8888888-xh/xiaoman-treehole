@@ -36,7 +36,7 @@ MOCK = f"http://127.0.0.1:{MOCK_PORT}"
 INSTRUMENT = r"""
 (() => {
   const p = window.__perf = {
-    longTasks: [], lcp: null, fcp: null,
+    longTasks: [], lcp: null, fcp: null, loaf: [],
     decode: { calls: 0, ms: 0, failed: 0 },
     draw: { calls: 0, totalMs: 0, slowest: [], hooked: location.search.indexOf("perfdraw=1") >= 0 }
   };
@@ -44,6 +44,15 @@ INSTRUMENT = r"""
     new PerformanceObserver(function (list) {
       for (const e of list.getEntries()) p.longTasks.push({ start: Math.round(e.startTime), dur: Math.round(e.duration) });
     }).observe({ entryTypes: ["longtask"] });
+  } catch (e) {}
+  try {
+    // LoAF：headless 下 longtask 有时不派发，用动画帧长任务兜底（blockingDuration=主线程阻塞）
+    new PerformanceObserver(function (list) {
+      for (const e of list.getEntries()) {
+        p.loaf.push({ start: Math.round(e.startTime), dur: Math.round(e.duration),
+                      block: Math.round(e.blockingDuration || 0) });
+      }
+    }).observe({ entryTypes: ["long-animation-frame"] });
   } catch (e) {}
   try {
     new PerformanceObserver(function (list) {
@@ -157,9 +166,12 @@ def lt_summary(tasks, since=0, until=None):
 
 
 # ---------------------------------------------------------------- 1) load
-async def measure_load_once(browser):
+async def measure_load_once(browser, throttle=1):
     ctx, page = await new_page(browser, CFG_MOCK)
     session = await attach(ctx, page)
+    if throttle > 1:
+        # 4x 节流：把「首帧同步解码」放大到低端手机量级，便于改前/改后对照
+        await session.send("Emulation.setCPUThrottlingRate", {"rate": throttle})
     console = []
     page.on("console", lambda m: console.append(m.text))
     heap_peak = {"v": 0}
@@ -232,6 +244,7 @@ async def measure_load_once(browser):
         "firstSendMs": first_send,
         "long": lt_summary(real_tasks),
         "longTaskSelfCheckMs": selfcheck,
+        "throttle": throttle,
         "heapPeakMB": round(heap_peak["v"] / 1048576, 2),
         "heapAfterGcMB": round((after["JSHeapUsedSize"] or 0) / 1048576, 2),
         "domNodes": after["domNodes"],
@@ -247,26 +260,33 @@ async def measure_load_once(browser):
     return res
 
 
-async def measure_load(browser, repeats=3):
-    runs = [await measure_load_once(browser) for _ in range(repeats)]
-
+def load_median(runs):
     def med(key):
         vals = [r[key] for r in runs if r.get(key) is not None]
         return round(statistics.median(vals)) if vals else None
 
     return {
+        "fcp": med("fcp"), "lcp": med("lcp"), "dclMs": med("dclMs"),
+        "bindMs": med("bindMs"), "mountMs": med("mountMs"),
+        "inputReadyMs": med("inputReadyMs"), "readyToSendMs": med("readyToSendMs"),
+        "firstSendMs": med("firstSendMs"),
+        "longMax": round(statistics.median([r["long"]["max"] for r in runs])),
+        "longOver50": round(statistics.median([r["long"]["over50"] for r in runs])),
+        "longOver50Max": round(statistics.median([r["long"]["over50max"] for r in runs])),
+        "longTaskSelfCheckMs": med("longTaskSelfCheckMs"),
+        "drawSlowestMs": round(max([max([d["ms"] for d in r["draw"]["slowest"]], default=0)
+                                    for r in runs]), 1),
+        "heapPeakMB": round(statistics.median([r["heapPeakMB"] for r in runs]), 2),
+    }
+
+
+async def measure_load(browser, repeats=3, throttle=4):
+    runs = [await measure_load_once(browser, throttle=1) for _ in range(repeats)]
+    thr = [await measure_load_once(browser, throttle=throttle) for _ in range(repeats)]
+    return {
         "runs": runs,
-        "median": {
-            "fcp": med("fcp"), "lcp": med("lcp"), "dclMs": med("dclMs"),
-            "bindMs": med("bindMs"), "mountMs": med("mountMs"),
-            "inputReadyMs": med("inputReadyMs"), "readyToSendMs": med("readyToSendMs"),
-            "firstSendMs": med("firstSendMs"),
-            "longMax": round(statistics.median([r["long"]["max"] for r in runs])),
-            "longOver50": round(statistics.median([r["long"]["over50"] for r in runs])),
-            "longOver50Max": round(statistics.median([r["long"]["over50max"] for r in runs])),
-            "longTaskSelfCheckMs": med("longTaskSelfCheckMs"),
-            "heapPeakMB": round(statistics.median([r["heapPeakMB"] for r in runs]), 2),
-        },
+        "median": load_median(runs),
+        "throttled": {"rate": throttle, "runs": thr, "median": load_median(thr)},
     }
 
 

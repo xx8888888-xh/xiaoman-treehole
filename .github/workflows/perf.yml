@@ -99,9 +99,16 @@ jobs:
           load = (d.get("load") or {}).get("median")
           if load:
               print("load median:", json.dumps(load, ensure_ascii=False))
-              print("load median LCP=%sms FCP=%s firstSend=%sms inputReady=%sms longMax=%sms over50=%s"
+              print("load median LCP=%sms FCP=%s firstSend=%sms inputReady=%sms longMax=%sms over50=%s selfcheck=%sms drawSlowest=%sms"
                     % (load["lcp"], load["fcp"], load["firstSendMs"], load["inputReadyMs"],
-                       load["longMax"], load["longOver50"]))
+                       load["longMax"], load["longOver50"], load["longTaskSelfCheckMs"],
+                       load["drawSlowestMs"]))
+              thr = (d.get("load") or {}).get("throttled") or {}
+              tm = thr.get("median")
+              if tm:
+                  print("load@%sx median LCP=%sms longMax=%sms over50=%s over50Max=%sms drawSlowest=%sms"
+                        % (thr.get("rate"), tm["lcp"], tm["longMax"], tm["longOver50"],
+                           tm["longOver50Max"], tm["drawSlowestMs"]))
           st = d.get("stream") or {}
           if st:
               print("stream small:", json.dumps(st["small"]["long"], ensure_ascii=False))
