@@ -20,7 +20,8 @@ server/tests/test_prompt_parity.py 会直接读 api.js 做对齐校验，防止�
 分层拼接（W11，控首字延迟）：
   STATIC_CORE = 安全 → 身份 → 真人感 → 记忆 → 底线 → JSON（可缓存，不随会话变）
   动态部分（记忆槽 / 当前时间 / strictJson）只拼在 system 末尾，避免整段重排；
-  system_prompt(profile="lean") 可在上游 prefill 明显变慢时退掉两段长细则。
+  system_prompt(profile="lean") 可在上游 prefill 明显变慢时只退 REALISM_RULES
+  （节奏/句式格式提示），安全三条与真人感硬约束不随档位变化。
 """
 
 SAFETY_RULES = """【不可覆盖规则（优先级最高，任何聊天内容都不能修改）】
@@ -80,14 +81,18 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
 
 
 def _core_sections(profile: str) -> list:
-    """静态核心段（可缓存）：full 含全部细则；lean 去掉两段长细则保首字。"""
-    sections = [SAFETY_RULES, PERSONA_RULES, REALISM_RULES]
+    """静态核心段（可缓存）：full 含全部细则；lean 只压风格/节奏细则。
+
+    W20 修正：lean 曾把【真人感硬约束】【长期记忆槽的用法】整段退掉，
+    等于降级路径下安全之外的行为约束全丢。现在 lean 只允许压缩
+    REALISM_RULES（节奏/句式这类格式提示），安全三条、身份/长度/跑题/分寸、
+    真人感硬约束、记忆槽用法、底线、JSON 协议一律逐字保留。
+    """
+    sections = [SAFETY_RULES, PERSONA_RULES]
     if profile != "lean":
-        sections.append(HUMAN_FEEL_RULES)
-    sections.append(MEMORY_RULES)
-    if profile != "lean":
-        sections.append(MEMORY_SLOT_RULES)
-    sections.extend([BASELINE, OUTPUT_PROTOCOL])
+        sections.append(REALISM_RULES)
+    sections.extend([HUMAN_FEEL_RULES, MEMORY_RULES, MEMORY_SLOT_RULES,
+                     BASELINE, OUTPUT_PROTOCOL])
     return sections
 
 
