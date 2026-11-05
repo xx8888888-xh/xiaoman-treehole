@@ -37,9 +37,12 @@ env:
   XIAOMAN_MOCK_PORT: "8902"
   XIAOMAN_TTS_PORT: "8903"
   XIAOMAN_TTS_PROVIDER: none
+  # 浏览器硬闸门（scripts/browser_guard.py）：云端显式放行，本地默认禁止起 headless 浏览器
+  XIAOMAN_ALLOW_LOCAL_BROWSER: "1"
   XIAOMAN_SHOTS_DIR: artifacts/shots
   RAF_SECONDS: ${{ inputs.raf_seconds || '60' }}
   PYTHONUNBUFFERED: "1"
+  PLAYWRIGHT_VERSION: "1.63.0"
   # 覆盖 build.network=host：新版 BuildKit 需要 network.host 特权，CI 用默认网络即可
   COMPOSE_FILE: docker-compose.yml:.github/ci/docker-compose.ci.yml
 
@@ -56,10 +59,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Cache Playwright browsers
+        # Chromium 压缩包 ~170MB：命中缓存可省 30–60s/次，key 绑定 playwright 版本
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ env.PLAYWRIGHT_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
       - name: Install Playwright
         run: |
           python -m pip install --upgrade pip
-          python -m pip install playwright==1.63.0
+          python -m pip install "playwright==${PLAYWRIGHT_VERSION}"
           python -m playwright install --with-deps chromium
 
       - name: Sync web assets (compose web 服务只消费 assets/www)
