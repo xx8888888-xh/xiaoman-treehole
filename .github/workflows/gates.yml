@@ -1,0 +1,36 @@
+name: gates
+
+# 手动一键跑全套：ci（快闸门）+ e2e（浏览器）+ android（出包），三个 workflow 并行复用。
+# 只在 workflow_dispatch 触发，日常 push 不会跑这条。
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      raf_seconds:
+        description: "rAF 采样秒数"
+        required: false
+        default: "60"
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: ci
+    uses: ./.github/workflows/ci.yml
+
+  e2e:
+    name: e2e
+    uses: ./.github/workflows/e2e.yml
+    with:
+      raf_seconds: ${{ inputs.raf_seconds || '60' }}
+
+  android:
+    name: android
+    uses: ./.github/workflows/android.yml
+    with:
+      variant: debug

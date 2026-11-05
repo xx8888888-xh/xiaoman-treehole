@@ -1,0 +1,164 @@
+name: e2e
+
+# 慢闸门（浏览器端到端）：docker compose 起 web/mock/tts 三容器，Playwright 真跑四套脚本。
+# 触发：main push（主干）/ 手动 / 被 gates.yml 调用。feature 分支默认不跑，避免每次 push 都烧分钟。
+# 全程静音：XIAOMAN_TTS_PROVIDER=none + Chromium --mute-audio + 用例内 tts=off。
+# 基线（main，2026-11-05）：test_e2e 60/60、test_feature_loop 43/43、test_live2d_original 24/24、test_raf_budget 8/8。
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      raf_seconds:
+        description: "rAF 采样秒数（静止/连续对话各采样多少秒）"
+        required: false
+        default: "60"
+  workflow_call:
+    inputs:
+      raf_seconds:
+        description: "rAF 采样秒数"
+        required: false
+        type: string
+        default: "60"
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AI_MODE: mock
+  # 端口/主机只在这里注入，脚本统一从 XIAOMAN_* 读取，避免写死 localhost。
+  XIAOMAN_HOST: 127.0.0.1
+  XIAOMAN_WEB_PORT: "8901"
+  XIAOMAN_MOCK_PORT: "8902"
+  XIAOMAN_TTS_PORT: "8903"
+  XIAOMAN_TTS_PROVIDER: none
+  XIAOMAN_SHOTS_DIR: artifacts/shots
+  RAF_SECONDS: ${{ inputs.raf_seconds || '60' }}
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  browser-e2e:
+    name: browser-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright==1.63.0
+          python -m playwright install --with-deps chromium
+
+      - name: Sync web assets (compose web 服务只消费 assets/www)
+        run: bash scripts/build_assets.sh
+
+      - name: Build & start 3 containers
+        run: |
+          docker compose up -d --build
+          docker compose ps
+
+      - name: Wait for services
+        run: |
+          set -euo pipefail
+          web_url="http://${XIAOMAN_HOST}:${XIAOMAN_WEB_PORT}/index.html"
+          mock_url="http://${XIAOMAN_HOST}:${XIAOMAN_MOCK_PORT}/health"
+          tts_url="http://${XIAOMAN_HOST}:${XIAOMAN_TTS_PORT}/health"
+          for i in $(seq 1 60); do
+            ok=1
+            curl -sf "$web_url" >/dev/null || ok=0
+            curl -sf "$mock_url" >/dev/null || ok=0
+            curl -sf "$tts_url" >/dev/null || ok=0
+            if [ "$ok" = "1" ]; then
+              echo "services ready after $((i * 2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "services not ready after 120s"
+          docker compose ps
+          docker compose logs --tail=100
+          exit 1
+
+      - name: Run browser suites
+        # 四套全部跑完再判定：一次 run 内暴露所有红项，避免"第一个失败就看不见后面"。
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          : > artifacts/failed.txt
+          web_base="http://${XIAOMAN_HOST}:${XIAOMAN_WEB_PORT}"
+          mock_base="http://${XIAOMAN_HOST}:${XIAOMAN_MOCK_PORT}"
+
+          run_suite() {
+            local name="$1"; shift
+            echo "::group::$name"
+            set +e
+            "$@" 2>&1 | tee "artifacts/${name}.log"
+            local code=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+            if [ "$code" -ne 0 ]; then
+              echo "$name (exit $code)" | tee -a artifacts/failed.txt
+              echo "::error::$name failed (exit $code)"
+            fi
+          }
+
+          run_suite e2e python scripts/test_e2e.py
+          run_suite feature_loop python scripts/test_feature_loop.py
+          run_suite live2d python scripts/test_live2d_original.py \
+            --base-url "$web_base" --out artifacts/live2d
+          run_suite raf python scripts/test_raf_budget.py \
+            --web-url "$web_base" --mock-base "$mock_base" \
+            --seconds "$RAF_SECONDS" --out artifacts/raf
+
+      - name: Enforce suite results
+        run: |
+          if [ -s artifacts/failed.txt ]; then
+            echo "失败套件："
+            cat artifacts/failed.txt
+            exit 1
+          fi
+          echo "四套浏览器用例全部通过"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### e2e · 浏览器闸门"
+            echo ""
+            echo "| 套件 | 结果 |"
+            echo "|---|---|"
+            grep -h "\[SUMMARY\]" artifacts/e2e.log 2>/dev/null | sed 's/^/| e2e | /; s/$/ |/' || echo "| e2e | (未运行/无汇总) |"
+            grep -h "RESULT" artifacts/feature_loop.log 2>/dev/null | sed 's/^/| feature_loop | /; s/$/ |/' || echo "| feature_loop | (未运行/无汇总) |"
+            grep -h "=== .* 通过 ===" artifacts/live2d.log 2>/dev/null | sed 's/^/| live2d | /; s/$/ |/' || echo "| live2d | (未运行/无汇总) |"
+            grep -h "=== .* 通过 ===" artifacts/raf.log 2>/dev/null | sed 's/^/| raf | /; s/$/ |/' || echo "| raf | (未运行/无汇总) |"
+            echo ""
+            echo "rAF 采样秒数：\`${RAF_SECONDS}\`；TTS provider：\`${XIAOMAN_TTS_PROVIDER}\`（静音）"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs --tail=120 || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down -v --remove-orphans || true
