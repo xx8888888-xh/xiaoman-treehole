@@ -441,6 +441,17 @@ def run_case(case: dict, backend, universal: dict) -> tuple:
         prev.append(turn)
         history.append({"role": "assistant", "content": turn.reply or " "})
     check_case_expect(result, universal)
+    # “忘了/别记”之后不仅嘴上不提，存储里也必须真的没了（mock 会话记忆 / 服务端槽）
+    forget = case.get("forget_after") or {}
+    if forget:
+        try:
+            snap = json.dumps(backend.snapshot(), ensure_ascii=False)
+        except Exception:
+            snap = ""
+        for vals in forget.values():
+            for v in vals:
+                if v in snap:
+                    result.fail(0, "记忆存储里仍有“%s”（说了忘了却没真删）" % v)
     return result, advice_turns
 
 
