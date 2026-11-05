@@ -248,15 +248,16 @@
     try { sessionStorage.setItem("xiaoman_voice_tip_off", "1"); } catch (e) {}
   }
 
+  var ttsOrig = null;
   var ttsPatched = false;
   function patchTTS() {
     var T = window.TTS;
     if (!T || ttsPatched || typeof T.speak !== "function") return !!T;
     ttsPatched = true;
-    var origSpeak = T.speak;
+    ttsOrig = T.speak;
     T.speak = function (text, onFrame, onEnd) {
       var allowed = autoReadOn() || (Date.now() - lastVoiceTap < 5000);
-      if (!H.paused && allowed) return origSpeak.apply(T, arguments);
+      if (!H.paused && allowed) return ttsOrig.apply(T, arguments);
       // 不出声时**不回调 onEnd**：调用方会把它当成「播放完成」并把气泡标成
       // 「🔊 语音已播」。状态与 UI 必须同源：没出声就不能有已播标记。
       if (!H.paused) silentTipOff();
@@ -267,6 +268,43 @@
   var ttsWatch = window.setInterval(function () {
     if (patchTTS()) { window.clearInterval(ttsWatch); ttsWatch = 0; }
   }, 400);
+
+  // 点已载入的回复气泡 → 立即重读这一条。
+  // 原来"5 秒内点过消息区才发声"只是给自动朗读开了一个时间窗，点击本身不朗读，
+  // 回复到达时窗口早已过期 → App 内实际上永远不出声（声明"点击才朗读"却没有入口）。
+  // 这里补上真正的入口；重播不走上面的 tap-only 门（用户手势就是明确意图）。
+  var replayCount = 0;
+  function bubbleText(b) {
+    var t = "";
+    for (var i = 0; i < b.childNodes.length; i++) {
+      var n = b.childNodes[i];
+      if (n.nodeType === 3) t += n.nodeValue;
+      else if (n.nodeType === 1
+               && !(n.className && String(n.className).indexOf("meta") >= 0)) {
+        t += n.textContent || "";
+      }
+    }
+    return String(t).replace(/\s+/g, " ").trim();
+  }
+  function replayBubble(ev) {
+    var el = ev && ev.target;
+    if (!el || !el.closest) return;
+    if (!ttsOrig) patchTTS();   // 页面可能晚于本脚本加载 TTS：点的时候再补一次包装
+    if (!ttsOrig) return;
+    // 消息操作按钮/菜单/链接不触发重播
+    if (el.closest(".msg-more, .msg-menu, button, a, input, textarea")) return;
+    var bubble = el.closest(".bubble.them");
+    if (!bubble || !bubble.closest(".msg-row.them")) return;
+    var text = bubbleText(bubble);
+    if (!text) return;
+    lastVoiceTap = Date.now();
+    replayCount++;
+    try {
+      window.__ttsReplay = { at: lastVoiceTap, count: replayCount, text: text };
+    } catch (e) {}
+    try { ttsOrig.call(window.TTS, text, function () {}, function () {}); } catch (e) {}
+  }
+  document.addEventListener("click", replayBubble, false);
 
   // 页面脚本已加载完（本脚本在 </head> 前、业务脚本之后仍可能晚到）：再兜底扫一次
   window.addEventListener("load", function () {

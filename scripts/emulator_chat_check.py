@@ -118,6 +118,22 @@ INIT_JS = r"""
 }))()
 """
 
+# 最后一条小满回复气泡：滚到视口内并返回真实盒子（点击坐标仍由 DOM + WebView 原点算）
+REPLAY_JS = r"""
+(() => {
+  const list = [...document.querySelectorAll('#messages .msg-row.them .bubble.them')];
+  if (!list.length) return null;
+  const b = list[list.length - 1];
+  b.scrollIntoView({block: 'center'});
+  const r = b.getBoundingClientRect();
+  return {left: r.left, top: r.top, right: r.right, bottom: r.bottom,
+          text: (b.textContent || '').slice(0, 40)};
+})()
+"""
+
+# 点气泡后的重播记录由 xm_host_bootstrap.js 写入
+REPLAY_STATE_JS = "window.__ttsReplay || null"
+
 
 def tap_center(cdp, key, origin):
     """按 DOM 真实盒子中心点击；返回 (x, y) 或 None。"""
@@ -276,6 +292,26 @@ def main():
     _, fatal = sh("adb logcat -d")
     bad = [l for l in fatal.splitlines() if "AndroidRuntime" in l and PKG in l]
     check("聊天全程 logcat 无 FATAL", not bad, "\n".join(bad[-2:])[:150])
+
+    # 8) tap-only 门的可用入口：点已载入的回复气泡必须能重播
+    # 以前"5 秒内点过消息区才发声"只是给未来的自动朗读开窗口，点击本身不朗读，
+    # 回复到达时窗口早过期 → App 内永远不出声。修复后点气泡立即重读该条，
+    # 页面脚本把这次重播记在 window.__ttsReplay 上，供这里断言。
+    replay = None
+    cand = cdp.eval(REPLAY_JS)
+    if cand:
+        dpr = p3.get("dpr") or 1 if p3 else 1
+        x = int(origin[0] + (cand["left"] + cand["right"]) / 2 * dpr)
+        y = int(origin[1] + (cand["top"] + cand["bottom"]) / 2 * dpr)
+        sh(f"adb shell input tap {x} {y}")
+        for _ in range(6):
+            time.sleep(1)
+            replay = cdp.eval(REPLAY_STATE_JS)
+            if replay and replay.get("count", 0) >= 1:
+                break
+    check("点已载入的回复气泡可重播（window.__ttsReplay.count≥1）",
+          bool(replay and replay.get("count", 0) >= 1),
+          f"tap=({x},{y}) state={replay}" if cand else "页面里没有 .bubble.them 可点")
 
     cdp.close()
     ok = all(RESULTS)
