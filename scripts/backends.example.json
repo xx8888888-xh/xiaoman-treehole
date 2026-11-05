@@ -2,9 +2,9 @@
   "_说明": "多后端轮换示例。复制为 scripts/backends.local.json（已被 .gitignore 的 *.local 忽略）后填自己的 key。仓库里永远不要提交真实 key。",
   "backends": [
     {
-      "name": "openrouter-free",
+      "name": "openrouter",
       "base": "https://openrouter.ai/api/v1",
-      "model": "dots-studio/dots-3-note-preview:free",
+      "model": "qwen/qwen-2.5-72b-instruct",
       "key_env": "OPENROUTER_API_KEY",
       "use_default_credential": true,
       "retries": 1,

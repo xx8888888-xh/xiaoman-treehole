@@ -157,6 +157,22 @@ class ConfigTest(unittest.TestCase):
                               cwd=str(ROOT)).returncode
         self.assertEqual(code, 0, "backends.local.json 必须被 gitignore")
 
+    def test_bom_config_is_readable(self):
+        """Windows PowerShell 写出的 UTF-8 BOM 不能让轮换启动失败。"""
+        import tempfile
+        body = json.dumps([{"name": "bom", "base": "https://x.example",
+                            "model": "m", "requires_key": False}])
+        with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8-sig",
+                                         delete=False) as f:
+            f.write(body)
+            path = f.name
+        try:
+            providers, skipped = ev.load_providers(path)
+            self.assertEqual(providers[0]["name"], "bom")
+            self.assertEqual(skipped, [])
+        finally:
+            os.unlink(path)
+
 
 if __name__ == "__main__":
     unittest.main()

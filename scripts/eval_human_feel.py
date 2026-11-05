@@ -286,7 +286,8 @@ def load_providers(path=None) -> tuple:
     elif raw:
         cfg_path = Path(raw)
     if data is None and cfg_path.exists():
-        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        # utf-8-sig：兼容 Windows PowerShell 写出的 BOM
+        data = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
     if data is None:
         return [], []
     entries = data.get("backends", data) if isinstance(data, dict) else data
