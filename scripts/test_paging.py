@@ -24,6 +24,8 @@ require_browser_allowed(__file__)
 
 from playwright.async_api import async_playwright
 
+from ci_artifacts import shots_dir, write_result
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("XIAOMAN_PAGING_PORT", "8919"))
@@ -190,6 +192,7 @@ async def paging_and_fps(browser):
     check("30 → 300+ 条历史全部可取回", stats["total"] >= 300, f"total={stats['total']}")
     check("翻到最旧一条 m0", stats["first"] == "m0", f"first={stats['first']}")
     check("到底提示已就绪", stats["exhausted"] is True, f"exhausted={stats['exhausted']}")
+    await page.screenshot(path=str(shots_dir("paging") / "01_exhausted_top.png"))
 
     # 窗口内不重复（最后 k 行陷阱：只看当前窗口）
     texts = await page.evaluate(
@@ -358,8 +361,8 @@ async def main():
     if fails:
         for name, _ok, detail in fails:
             print(f"  FAIL {name} · {detail}")
-        return 1
-    return 0
+    write_result("test_paging", results, extra={"paging_port": PORT})
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":

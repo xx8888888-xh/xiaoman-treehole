@@ -1,0 +1,33 @@
+name: setup-playwright
+description: 缓存并安装 Playwright Chromium（云端唯一入口，避免每个 workflow 重复下载 ~170MB）
+
+# 复用约定（新 workflow 接入时必须走这个复合动作）：
+#   - uses: ./.github/actions/setup-playwright       # 需先 actions/checkout
+#   - 缓存 key = ${runner.os}-playwright-${version}
+#   - 版本变更（升级 Playwright）只需改各 workflow 的 PLAYWRIGHT_VERSION 或本默认值
+# 为什么不用 pip cache：playwright wheel ~40MB、安装数秒，命中率低但冷启动成本小，
+# 真正贵的是 Chromium 浏览器包（~170MB）与 apt 依赖，所以只缓存 ~/.cache/ms-playwright。
+
+inputs:
+  version:
+    description: "playwright 版本（与 scripts 里用的 API 版本保持一致）"
+    required: false
+    default: "1.63.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Playwright browsers
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-${{ inputs.version }}
+        restore-keys: |
+          ${{ runner.os }}-playwright-
+
+    - name: Install Playwright
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "playwright==${{ inputs.version }}"
+        python -m playwright install --with-deps chromium

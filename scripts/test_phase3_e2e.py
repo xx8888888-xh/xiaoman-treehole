@@ -15,6 +15,8 @@ from browser_guard import require_browser_allowed
 
 require_browser_allowed(__file__)
 
+from ci_artifacts import write_result
+
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
@@ -22,9 +24,12 @@ except ImportError:
     sys.exit(2)
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "artifacts" / "phase3"
+# 产物目录可被 CI 覆盖（默认 artifacts/phase3），截图 + report.json 一起进 artifact
+OUT = Path(os.environ.get("XIAOMAN_ARTIFACTS_DIR") or (ROOT / "artifacts")) / "phase3"
 OUT.mkdir(parents=True, exist_ok=True)
 URL = os.environ.get("TREEHOLE_URL", "http://127.0.0.1:8901/")
+# 设置页写入的对话模式：本地默认 openai（需真实 Key/代理）；云端传 mock 走 8902
+CFG_MODE = os.environ.get("PHASE3_CFG_MODE", "openai")
 FALLBACK_CHROME = os.environ.get(
     "PLAYWRIGHT_CHROME",
     str(Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright" / "chromium-1243" / "chrome-win64" / "chrome.exe"),
@@ -85,17 +90,17 @@ def main():
         # ---- 1) 设置页配置 + 测试连接 ----
         page.click("#settingsBtn")
         page.wait_for_selector("#settingsModal:not(.hidden)", timeout=10000)
-        page.evaluate("""() => {
+        page.evaluate("""(mode) => {
             const set = (id, v) => {
               const el = document.getElementById(id);
               el.value = v;
               el.dispatchEvent(new Event('change', { bubbles: true }));
             };
-            set('cfgMode', 'openai');
-            set('cfgApi', 'https://api.kilo.ai/api/gateway');
-            set('cfgModel', 'nvidia/nemotron-3.5-lightning:free');
+            set('cfgMode', mode);
+            set('cfgApi', mode === 'mock' ? '' : 'https://api.kilo.ai/api/gateway');
+            set('cfgModel', mode === 'mock' ? '' : 'nvidia/nemotron-3.5-lightning:free');
             set('cfgApiKey', '');
-        }""")
+        }""", CFG_MODE)
         page.click("#cfgTestBtn")
         page.wait_for_function(
             """() => {
@@ -165,8 +170,20 @@ def main():
         browser.close()
 
     (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    log("RESULT=" + ("PASS" if report["ok"] else "FAIL"))
-    return 0 if report["ok"] else 1
+    checks = [
+        ("三轮对话都有回复",
+         all(t["reply"] and len(t["reply"]) > 2 for t in report["turns"]),
+         f"turns={len(report['turns'])}"),
+        ("IndexedDB 落库条数 ≥ 3", idb_count >= len(MSGS), f"indexeddb={idb_count}"),
+        ("刷新后历史恢复", restored, f"after_reload_bubbles={len(after)}"),
+        ("设置项已生效", report["cfg"].get("mode") == CFG_MODE, str(report["cfg"])),
+    ]
+    ok = write_result("test_phase3_e2e", checks, extra={"report": "phase3/report.json"}) and report["ok"]
+    for item in checks:
+        if not item[1]:
+            log(f"FAIL {item[0]} · {item[2]}")
+    log("RESULT=" + ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

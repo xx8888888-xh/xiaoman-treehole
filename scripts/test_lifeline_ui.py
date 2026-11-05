@@ -16,6 +16,8 @@ require_browser_allowed(__file__)
 
 from playwright.async_api import async_playwright
 
+from ci_artifacts import write_result
+
 
 def _load_env():
     """端口/主机集中配置唯一真源：scripts/env.sh（经 bash source 读取）"""
@@ -136,6 +138,10 @@ async def main():
     failed = [n for n, ok in results if not ok]
     print(f"[SUMMARY] 检查点 {len(results) - len(failed)}/{len(results)} 通过"
           + (f"，FAIL: {failed}" if failed else ""))
+    for name, ok in results:
+        if not ok:
+            print(f"FAIL {name} · 见上方同名检查点的实时输出", flush=True)
+    write_result("test_lifeline_ui", results)
     return 1 if failed else 0
 
 

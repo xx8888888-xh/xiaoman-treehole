@@ -36,7 +36,8 @@ def _load_env():
 
 _HOST, _WEB_PORT = _load_env()
 BASE = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-SHOTS = os.path.join(BASE, "docs", "shots")
+# CI 用 XIAOMAN_SHOTS_DIR 重定向到 artifacts；本地默认仍写 docs/shots
+SHOTS = os.environ.get("XIAOMAN_SHOTS_DIR") or os.path.join(BASE, "docs", "shots")
 os.makedirs(SHOTS, exist_ok=True)
 URL = f"http://{_HOST}:{_WEB_PORT}/index.html"
 STRICT = os.environ.get("SHOT_STRICT", "0") == "1"

@@ -1,7 +1,7 @@
 name: e2e
 
-# 慢闸门（浏览器端到端）：docker compose 起 web/mock/tts 三容器，Playwright 真跑四套脚本。
-# 触发：main push（主干）/ 手动 / 被 gates.yml 调用。feature 分支默认不跑，避免每次 push 都烧分钟。
+# 慢闸门（浏览器端到端）：docker compose 起 web/mock/tts 三容器，Playwright 真跑浏览器用例。
+# 触发：main push（只跑核心四套）/ 手动（可选核心 + 额外脚本）/ 被 gates.yml（含周一 cron）调用。
 # 全程静音：XIAOMAN_TTS_PROVIDER=none + Chromium --mute-audio + 用例内 tts=off。
 # 基线（main，2026-11-05）：test_e2e 60/60、test_feature_loop 43/43、test_live2d_original 24/24、test_raf_budget 8/8。
 
@@ -13,12 +13,30 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      core:
+        description: "是否跑核心四套（e2e / feature_loop / live2d / raf）"
+        required: false
+        default: "true"
+      ui_scripts:
+        description: "额外脚本：all 或逗号分隔（test_appearance,test_lifeline_ui,test_onboarding,test_paging,test_phase3_e2e,test_stream_e2e,ui_tour,ux_walkthrough,shot）"
+        required: false
+        default: "all"
       raf_seconds:
         description: "rAF 采样秒数（静止/连续对话各采样多少秒）"
         required: false
         default: "60"
   workflow_call:
     inputs:
+      core:
+        description: "是否跑核心四套"
+        required: false
+        type: string
+        default: "true"
+      ui_scripts:
+        description: "额外脚本：all / none / 逗号分隔"
+        required: false
+        type: string
+        default: "none"
       raf_seconds:
         description: "rAF 采样秒数"
         required: false
@@ -49,30 +67,23 @@ env:
 jobs:
   browser-e2e:
     name: browser-e2e
+    if: ${{ inputs.core != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+
+      - name: Short sha
+        id: meta
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Cache Playwright browsers
-        # Chromium 压缩包 ~170MB：命中缓存可省 30–60s/次，key 绑定 playwright 版本
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ env.PLAYWRIGHT_VERSION }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Install Playwright
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "playwright==${PLAYWRIGHT_VERSION}"
-          python -m playwright install --with-deps chromium
+      # 共享复合动作：缓存 ~/.cache/ms-playwright + 装 chromium（约省 30–60s/次）
+      - uses: ./.github/actions/setup-playwright
 
       - name: Sync web assets (compose web 服务只消费 assets/www)
         run: bash scripts/build_assets.sh
@@ -168,8 +179,176 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-artifacts
+          name: e2e-core-${{ steps.meta.outputs.short }}
           path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down -v --remove-orphans || true
+
+  # 额外 9 套 Playwright 脚本：每个脚本一个矩阵项 → 独立 job 红/绿、独立 artifact（截图 + 结果 JSON）。
+  # 共用同一套 compose 服务；矩阵项之间是不同 runner，不抢 8901-8903 端口。
+  prepare:
+    name: prepare-ui-scripts
+    if: ${{ inputs.ui_scripts != '' && inputs.ui_scripts != 'none' }}
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.set.outputs.run }}
+      scripts: ${{ steps.set.outputs.scripts }}
+    steps:
+      - id: set
+        shell: bash
+        run: |
+          set -euo pipefail
+          sel="${{ inputs.ui_scripts }}"
+          if [ "$sel" = "all" ]; then
+            json='["test_appearance","test_lifeline_ui","test_onboarding","test_paging","test_phase3_e2e","test_stream_e2e","ui_tour","ux_walkthrough","shot"]'
+          else
+            json=$(python3 -c 'import json,sys; print(json.dumps([s.strip() for s in sys.argv[1].split(",") if s.strip()]))' "$sel")
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "scripts=$json" >> "$GITHUB_OUTPUT"
+          echo "选中脚本: $json"
+
+  ui-suites:
+    name: ui-${{ matrix.script }}
+    needs: prepare
+    if: ${{ needs.prepare.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        script: ${{ fromJSON(needs.prepare.outputs.scripts) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Short sha
+        id: meta
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/setup-playwright
+
+      - name: Sync web assets
+        run: bash scripts/build_assets.sh
+
+      - name: Build & start 3 containers
+        run: |
+          docker compose up -d --build
+          docker compose ps
+
+      - name: Wait for services
+        run: |
+          set -euo pipefail
+          web_url="http://${XIAOMAN_HOST}:${XIAOMAN_WEB_PORT}/index.html"
+          mock_url="http://${XIAOMAN_HOST}:${XIAOMAN_MOCK_PORT}/health"
+          tts_url="http://${XIAOMAN_HOST}:${XIAOMAN_TTS_PORT}/health"
+          for i in $(seq 1 60); do
+            ok=1
+            curl -sf "$web_url" >/dev/null || ok=0
+            curl -sf "$mock_url" >/dev/null || ok=0
+            curl -sf "$tts_url" >/dev/null || ok=0
+            if [ "$ok" = "1" ]; then
+              echo "services ready after $((i * 2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "services not ready after 120s"
+          docker compose ps
+          docker compose logs --tail=100
+          exit 1
+
+      - name: Run ${{ matrix.script }}
+        # 失败时把日志里的具体断言（FAIL / Traceback / 超时）逐条转成 ::error:: 注解，
+        # 避免只看到 "exit 1" 这类泛泛失败。
+        env:
+          SHOT_STRICT: "1"
+          PHASE3_CFG_MODE: mock
+          TREEHOLE_URL: http://${{ env.XIAOMAN_HOST }}:${{ env.XIAOMAN_WEB_PORT }}/
+        run: |
+          set -euo pipefail
+          OUT="artifacts/ui-${{ matrix.script }}"
+          mkdir -p "$OUT"
+          export XIAOMAN_ARTIFACTS_DIR="$OUT"
+          export XIAOMAN_SHOTS_DIR="$OUT/shots"
+          : > "$OUT/failed.txt"
+
+          run() {
+            local label="$1"; shift
+            echo "::group::$label"
+            set +e
+            "$@" 2>&1 | tee -a "$OUT/run.log"
+            local code=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+            if [ "$code" -ne 0 ]; then
+              echo "$label (exit $code)" >> "$OUT/failed.txt"
+              grep -aE "FAIL|❌|Traceback|TimeoutError|超时|缺失" "$OUT/run.log" \
+                | head -n 12 | while IFS= read -r line; do echo "::error::$label · $line"; done
+            fi
+          }
+
+          case "${{ matrix.script }}" in
+            test_appearance) run test_appearance python scripts/test_appearance.py ;;
+            test_lifeline_ui) run test_lifeline_ui python scripts/test_lifeline_ui.py ;;
+            test_onboarding) run test_onboarding python scripts/test_onboarding.py ;;
+            test_paging) run test_paging python scripts/test_paging.py ;;
+            test_phase3_e2e) run test_phase3_e2e python scripts/test_phase3_e2e.py ;;
+            test_stream_e2e) run test_stream_e2e python scripts/test_stream_e2e.py ;;
+            ui_tour) run ui_tour python scripts/ui_tour.py ;;
+            ux_walkthrough) run ux_walkthrough python scripts/ux_walkthrough.py ;;
+            shot)
+              for s in base chat poke crisis; do
+                run "shot-$s" python scripts/shot.py "$s"
+              done
+              ;;
+            *)
+              echo "::error::未知脚本 ${{ matrix.script }}"
+              exit 2
+              ;;
+          esac
+
+          if [ -s "$OUT/failed.txt" ]; then
+            echo "失败脚本："
+            cat "$OUT/failed.txt"
+            exit 1
+          fi
+
+      - name: Job summary
+        if: always()
+        run: |
+          OUT="artifacts/ui-${{ matrix.script }}"
+          {
+            echo "### ui-suites · \`${{ matrix.script }}\`"
+            echo ""
+            grep -aE "\[SUMMARY\]|RESULT=|SUMMARY pass|总计|✅|FAIL " "$OUT/run.log" 2>/dev/null \
+              | tail -n 25 | sed 's/^/    /' || echo "    (无汇总)"
+            if [ -s "$OUT/failed.txt" ]; then
+              echo ""
+              echo "**失败明细**"
+              sed 's/^/    /' "$OUT/failed.txt"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs --tail=120 || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # 带 commit 短 sha，保留 7 天：回溯时能直接对到某次提交
+          name: ui-${{ matrix.script }}-${{ steps.meta.outputs.short }}
+          path: artifacts/ui-${{ matrix.script }}/
           if-no-files-found: ignore
           retention-days: 7
 

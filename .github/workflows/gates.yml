@@ -1,7 +1,11 @@
 name: gates
 
-# 手动一键跑全套：ci（快闸门）+ e2e（浏览器）+ android（出包），三个 workflow 并行复用。
-# 只在 workflow_dispatch 触发，日常 push 不会跑这条。
+# 手动一键跑全套 + 每周定时巡检：
+#   ci（快闸门）+ e2e（核心四套 + 9 套额外 Playwright）+ android（APK），三条复用 workflow 并行。
+# 定时：cron '0 18 * * 0' = 每周日 18:00 UTC = 每周一 02:00（Asia/Shanghai）。
+#   GitHub 的 schedule 只在**默认分支**上生效（不会跑 feature 分支），符合"只跑主干"的预算要求。
+#   注意：本文件合并进 main 之后 cron 才会真正开始触发。
+# 预算：一周一次全套 ≈ 55 分钟 runner 分钟（详见 docs/ci-workflows.md §6），远低于私有仓库 2000 分钟/月。
 
 permissions:
   contents: read
@@ -13,6 +17,12 @@ on:
         description: "rAF 采样秒数"
         required: false
         default: "60"
+      ui_scripts:
+        description: "额外 9 套：all / none / 逗号分隔"
+        required: false
+        default: "all"
+  schedule:
+    - cron: "0 18 * * 0"
 
 concurrency:
   group: gates-${{ github.ref }}
@@ -27,6 +37,9 @@ jobs:
     name: e2e
     uses: ./.github/workflows/e2e.yml
     with:
+      core: "true"
+      # schedule 事件没有 inputs → 退回 'all'，即每周全套慢闸门
+      ui_scripts: ${{ inputs.ui_scripts || 'all' }}
       raf_seconds: ${{ inputs.raf_seconds || '60' }}
 
   android:

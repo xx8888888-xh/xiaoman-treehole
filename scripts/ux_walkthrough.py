@@ -6,20 +6,43 @@
   3) console 错误 / 4xx 汇总 → 一并写入 transcript 尾部
 用法: python3 scripts/ux_walkthrough.py   （需先 bash scripts/dev_up.sh）
 """
-import asyncio, json, os, sys, time
+import asyncio, json, os, subprocess, sys, time
 
 from browser_guard import require_browser_allowed
 
 require_browser_allowed(__file__)
 
-BASE = "http://127.0.0.1:8901"
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SHOTS = os.path.join(ROOT, "docs", "shots", "ux_audit")
-OUT = os.path.join(ROOT, "docs", "shots", "ux_audit_transcript.txt")
-os.makedirs(SHOTS, exist_ok=True)
+from ci_artifacts import shots_dir, write_result
+
+
+def _load_env():
+    """端口/主机集中配置唯一真源：scripts/env.sh（经 bash source 读取）"""
+    env_sh = os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.sh")
+    try:
+        out = subprocess.run(
+            ["bash", "-c", f'. "{env_sh}" >/dev/null 2>&1; echo "$XIAOMAN_HOST|$XIAOMAN_WEB_PORT"'],
+            capture_output=True, text=True, timeout=10, check=True).stdout.strip().split("|")
+        return (os.environ.get("XIAOMAN_HOST") or out[0] or "127.0.0.1",
+                int(os.environ.get("XIAOMAN_WEB_PORT") or out[1] or 8901))
+    except Exception:
+        return (os.environ.get("XIAOMAN_HOST", "127.0.0.1"),
+                int(os.environ.get("XIAOMAN_WEB_PORT", 8901)))
+
+
+_HOST, _WEB_PORT = _load_env()
+BASE = f"http://{_HOST}:{_WEB_PORT}"
+SHOTS = str(shots_dir("ux_audit"))
+OUT = os.path.join(SHOTS, "ux_audit_transcript.txt")
+
+# 必备画面：缺一张说明对应阶段没走通（B2 友谊卡片为条件性画面，不计）
+REQUIRED_SHOTS = (
+    "A1_first_open.png", "A2_chat.png", "A3_after_chat.png", "B1_memory_drawer.png",
+    "C1_return_greet.png", "C2_after_return.png", "D1_crisis.png", "D2_crisis_care.png",
+)
 
 TRANSCRIPT = []   # [(kind, text, meta)]
 ERRORS, BAD_RESP = [], []
+PAGE_ERRORS, CONSOLE_ERRORS = [], []
 
 
 def log(kind, text, meta=""):
@@ -72,8 +95,8 @@ async def main():
         # ========== Phase A · 全新用户首面 ==========
         ctx = await b.new_context(viewport={"width": 390, "height": 844})
         pg = await ctx.new_page()
-        pg.on("pageerror", lambda e: ERRORS.append(str(e)))
-        pg.on("console", lambda m: ERRORS.append(f"[console.{m.type}] {m.text}")
+        pg.on("pageerror", lambda e: PAGE_ERRORS.append(str(e)))
+        pg.on("console", lambda m: CONSOLE_ERRORS.append(f"[console.{m.type}] {m.text}")
               if m.type in ("error",) else None)
         pg.on("response", lambda r: BAD_RESP.append((r.status, r.url)) if r.status >= 400 else None)
 
@@ -169,16 +192,34 @@ async def main():
             suffix = f"  [{meta}]" if meta else ""
             f.write(f"{tag}: {text}{suffix}\n")
         f.write("\n\n== 错误汇总 ==\n")
-        f.write(f"console/page errors: {len(ERRORS)}\n")
-        for e in ERRORS[:10]:
+        f.write(f"page errors: {len(PAGE_ERRORS)}\n")
+        for e in PAGE_ERRORS[:10]:
+            f.write(f"  - {e[:200]}\n")
+        f.write(f"console errors: {len(CONSOLE_ERRORS)}\n")
+        for e in CONSOLE_ERRORS[:10]:
             f.write(f"  - {e[:200]}\n")
         f.write(f"4xx/5xx responses: {len(BAD_RESP)}\n")
         for s, u in BAD_RESP[:10]:
             f.write(f"  - {s} {u[:150]}\n")
     print(f"\n✅ transcript → {OUT}")
     print(f"   screenshots → {SHOTS}")
-    print(f"   console errors={len(ERRORS)}  bad responses={len(BAD_RESP)}")
+    print(f"   page errors={len(PAGE_ERRORS)}  console errors={len(CONSOLE_ERRORS)}  bad responses={len(BAD_RESP)}")
+
+    missing = [f for f in REQUIRED_SHOTS if not os.path.exists(os.path.join(SHOTS, f))]
+    checks = [
+        ("必备画面齐全", not missing,
+         f"缺失 {len(missing)} 张: {', '.join(missing)}" if missing else f"{len(REQUIRED_SHOTS)} 张"),
+        ("零 page error", len(PAGE_ERRORS) == 0, "; ".join(PAGE_ERRORS[:3])),
+        ("transcript 有对话内容",
+         len([t for t in TRANSCRIPT if t[0] in ("USER", "THEM", "ME")]) >= 12,
+         f"lines={len(TRANSCRIPT)}"),
+    ]
+    ok = write_result("ux_walkthrough", checks,
+                      extra={"console_errors": len(CONSOLE_ERRORS), "bad_responses": len(BAD_RESP)})
+    for c in checks:
+        print(("PASS " if c[1] else "FAIL ") + c[0] + (f" · {c[2]}" if c[2] else ""), flush=True)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))

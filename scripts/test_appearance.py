@@ -19,6 +19,8 @@ require_browser_allowed(__file__)
 
 from playwright.async_api import async_playwright
 
+from ci_artifacts import shots_dir, write_result
+
 
 def _env():
     env_sh = os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.sh")
@@ -112,6 +114,7 @@ async def main():
         check("极简字号：正文 18px", abs(st["bodyFontPx"] - 18) < 0.5, str(st["bodyFontPx"]))
         check("极简三个开关初始值", st["swFont"] is True and st["swMotion"] is False and st["swIcons"] is True)
         base_font = st["bodyFontPx"]
+        await pg.screenshot(path=str(shots_dir("appearance") / "01_minimal.png"))
 
         # ---------- 2. 三档预设 ----------
         await set_preset(pg, "default")
@@ -129,6 +132,7 @@ async def main():
         check("生动预设：仅 160ms 状态过渡", st["motion"] == "on" and "0.16" in (st["iconTransition"] or ""),
               st["iconTransition"])
         check("生动预设：无循环装饰动画", st["cssAnimations"] in (0, 1), str(st["cssAnimations"]))
+        await pg.screenshot(path=str(shots_dir("appearance") / "02_lively.png"))
 
         # ---------- 3. 三个独立开关 → 自定义 ----------
         await open_settings(pg)
@@ -189,6 +193,9 @@ async def main():
 
     failed = [r for r in results if not r[1]]
     print(f"\nRESULT {'PASS' if not failed else 'FAIL'} {len(results) - len(failed)}/{len(results)}")
+    for name, ok, detail in failed:
+        print(f"FAIL {name}" + (f" · {detail}" if detail else ""), flush=True)
+    write_result("test_appearance", results)
     return 0 if not failed else 1
 
 

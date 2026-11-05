@@ -18,6 +18,8 @@ from browser_guard import require_browser_allowed
 
 require_browser_allowed(__file__)
 
+from ci_artifacts import shots_dir, write_result
+
 ROOT = Path(__file__).resolve().parents[1]
 PROMPT = "我今天加班到十点老板还骂我"
 
@@ -63,7 +65,7 @@ def main():
     results = []
 
     def check(name, ok, extra=""):
-        results.append((name, bool(ok)))
+        results.append((name, bool(ok), extra))
         print(f"{'PASS' if ok else 'FAIL'} {name}{(' · ' + extra) if extra else ''}")
 
     try:
@@ -163,6 +165,7 @@ def main():
             check("⑦ 未发起任何 TTS 请求（provider=off）", len(tts_hits) == 0,
                   f"{len(tts_hits)} 个" + (f" · {tts_hits[:2]}" if tts_hits else ""))
             check("⑧ 页面零 JS 错误", len(errors) == 0, "; ".join(errors[:2]))
+            page.screenshot(path=str(shots_dir("stream") / "01_stream_reply.png"))
             browser.close()
     finally:
         for proc in (mock, web):
@@ -172,8 +175,12 @@ def main():
             except Exception:
                 pass
 
-    passed = sum(1 for _, ok in results if ok)
+    passed = sum(1 for r in results if r[1])
     print(f"\n总计 {passed}/{len(results)} 通过")
+    for name, ok, extra in results:
+        if not ok:
+            print(f"FAIL {name} · {extra}", flush=True)
+    write_result("test_stream_e2e", results)
     return 0 if passed == len(results) else 1
 
 

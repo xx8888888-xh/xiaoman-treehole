@@ -4,16 +4,41 @@
   产出 docs/shots/ui_tour/*.png + manifest.txt（截图↔操作对照清单）
 用法: python3 scripts/ui_tour.py  （需先 bash scripts/dev_up.sh）
 """
-import asyncio, os, time
+import asyncio, os, subprocess, sys, time
 
 from browser_guard import require_browser_allowed
 
 require_browser_allowed(__file__)
 
-BASE = "http://127.0.0.1:8901"
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SHOTS = os.path.join(ROOT, "docs", "shots", "ui_tour")
-os.makedirs(SHOTS, exist_ok=True)
+from ci_artifacts import shots_dir, write_result
+
+
+def _load_env():
+    """端口/主机集中配置唯一真源：scripts/env.sh（经 bash source 读取）"""
+    env_sh = os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.sh")
+    try:
+        out = subprocess.run(
+            ["bash", "-c", f'. "{env_sh}" >/dev/null 2>&1; echo "$XIAOMAN_HOST|$XIAOMAN_WEB_PORT"'],
+            capture_output=True, text=True, timeout=10, check=True).stdout.strip().split("|")
+        return (os.environ.get("XIAOMAN_HOST") or out[0] or "127.0.0.1",
+                int(os.environ.get("XIAOMAN_WEB_PORT") or out[1] or 8901))
+    except Exception:
+        return (os.environ.get("XIAOMAN_HOST", "127.0.0.1"),
+                int(os.environ.get("XIAOMAN_WEB_PORT", 8901)))
+
+
+_HOST, _WEB_PORT = _load_env()
+BASE = f"http://{_HOST}:{_WEB_PORT}"
+SHOTS = str(shots_dir("ui_tour"))
+
+# 必备画面：缺任何一张说明对应界面/操作没走通（条件性画面 A7/B3 不计）
+REQUIRED_SHOTS = (
+    "A1_first_open.png", "A2_onboarding.png", "A3_intro_memory.png", "A4_daily_chat.png",
+    "A5_poke.png", "A6_mic.png", "A8_widget_closed.png",
+    "B1_reminder_set.png", "B2_memory_drawer.png", "B4_settings.png", "B5_friend_card.png",
+    "C1_relation_days.png", "C2_memory_recall.png", "D1_crisis_care.png",
+    "E1_return_heartbeat.png", "F1_float_mode.png", "F2_float_chat.png", "G1_memory_clear.png",
+)
 
 MANIFEST = []   # (file, operation)
 ERRORS = []
@@ -218,5 +243,17 @@ async def main():
     print(f"   manifest → {mf}")
     print(f"   console errors={len(ERRORS)}")
 
+    missing = [f for f in REQUIRED_SHOTS if not os.path.exists(os.path.join(SHOTS, f))]
+    checks = [
+        ("必备画面齐全", not missing,
+         f"缺失 {len(missing)} 张: {', '.join(missing)}" if missing else f"{len(REQUIRED_SHOTS)} 张"),
+        ("零 page/console 错误", len(ERRORS) == 0, "; ".join(ERRORS[:3])),
+    ]
+    ok = write_result("ui_tour", checks, extra={"screenshots": len(MANIFEST)})
+    for c in checks:
+        print(("PASS " if c[1] else "FAIL ") + c[0] + (f" · {c[2]}" if c[2] else ""), flush=True)
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
