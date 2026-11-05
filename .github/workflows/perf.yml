@@ -119,9 +119,9 @@ jobs:
               thr = (d.get("load") or {}).get("throttled") or {}
               tm = thr.get("median")
               if tm:
-                  print("load@%sx median LCP=%sms longMax=%sms over50=%s over50Max=%sms drawSlowest=%sms"
-                        % (thr.get("rate"), tm["lcp"], tm["longMax"], tm["longOver50"],
-                           tm["longOver50Max"], tm["drawSlowestMs"]))
+                  print("load@%sx median LCP=%sms firstSend=%sms inputReady=%sms longMax=%sms over50=%s over50Max=%sms drawSlowest=%sms"
+                        % (thr.get("rate"), tm["lcp"], tm["firstSendMs"], tm["inputReadyMs"],
+                           tm["longMax"], tm["longOver50"], tm["longOver50Max"], tm["drawSlowestMs"]))
               gr = (d.get("load") or {}).get("greet") or {}
               if gr:
                   print("greet@%sx landed=%sms done=%sms played=%s skipped=%s records=%s"
@@ -139,9 +139,15 @@ jobs:
                        mi["olderAvgMs"], mi["olderMaxMs"]))
           me = d.get("memory") or {}
           if me:
-              print("memory heap %s→%sMB growth=%s marks=%s dom=%s→%s longMax=%s"
+              print("memory heap %s→%sMB growth=%s warmup=%s marks=%s dom=%s→%s longMax=%s"
                     % (me["heapStartMB"], me["heapEndMB"], me["heapGrowthMB"],
-                       me["heapPer40MB"], me["domNodesStart"], me["domNodesEnd"], me["longMax"]))
+                       me.get("warmup"), me["heapPer40MB"],
+                       me["domNodesStart"], me["domNodesEnd"], me["longMax"]))
+              co = me.get("consoleOn") or {}
+              if co:
+                  print("memory consoleOn heap %s→%sMB growth=%s marks=%s clearFrees=%sMB"
+                        % (co.get("heapStartMB"), co.get("heapEndMB"), co.get("heapGrowthMB"),
+                           co.get("heapPer40MB"), co.get("consoleClearFreesMB")))
               pg = me.get("paging") or {}
               if pg:
                   print("paging moves=%s calls=%s stepOk=%s overlapOk=%s fetchKeepsWindow=%s dupInPage=%s firstRepeat=%s idsPresent=%s totalStable=%s before=%s after=%s"

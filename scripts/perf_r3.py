@@ -503,16 +503,42 @@ async def paging_audit(page, pages=20):
 
 
 # ---------------------------------------------------------------- 4) memory
-async def measure_memory(browser, rounds=200):
+async def _memory_page(browser):
+    """长会话测量页：等开场白与舞台纹理预解码都结束，再开始取样。
+    纹理/IDB 首次打开这类"启动一次性分配"不算长会话增量，否则 heapStart 偏低、
+    看起来像消息数据在泄漏。stage.js 的窗口标记是 batches/wallMs（无 done 字段）。"""
     ctx, page = await new_page(browser, CFG_OFFLINE)
     session = await attach(ctx, page)
     await page.goto(BASE, wait_until="domcontentloaded")
     await wait_greet_done(page)
-    await asyncio.sleep(1.5)
-    s0 = await js_state(page, session)
+    try:
+        await page.wait_for_function(
+            """() => { const d = window.__stageDecode;
+                return !d || (Number(d.batches) > 0 && Number(d.wallMs) > 0); }""",
+            timeout=10000, polling=100)
+    except Exception:
+        pass
+    await asyncio.sleep(1.2)
+    return ctx, page, session
+
+
+async def _memory_run(browser, rounds, warmup, silence_console):
+    """warmup 轮先吸收启动一次性分配，再做 rounds 轮长会话采样。
+    silence_console=True：把 [probe] 埋点日志静音——Chromium 控制台缓冲是给安卓
+    logcat 用的诊断通道，不属于应用状态（且有容量上限），不能混进"消息数据是否泄漏"。"""
+    ctx, page, session = await _memory_page(browser)
     tex0 = await page.evaluate(
         """() => ({ vram: window.__stageVram || null,
                     decode: window.__stageDecode || null, mode: window.__stageMode })""")
+    for i in range(warmup):
+        await send_and_reply(page, f"预热第{i}轮，随便聊聊")
+    if silence_console:
+        await page.evaluate(
+            """() => { window.__probeLog = console.log; window.__probeWarn = console.warn;
+                console.log = function () {}; console.warn = function () {}; }""")
+    await page.evaluate("() => { try { console.clear(); } catch (e) {} }")
+    await asyncio.sleep(0.4)
+    s0 = await js_state(page, session)
     marks = []
     for i in range(rounds):
         await send_and_reply(page, f"今天有点累，随便聊聊第{i}轮")
@@ -527,11 +553,15 @@ async def measure_memory(browser, rounds=200):
                           "total": pg.get("total")})
     await asyncio.sleep(1.2)
     s1 = await js_state(page, session)
+    perf = await page.evaluate("window.__perf")
+    # 控制台缓冲诊断：清空控制台 + GC 后若堆明显回落，即证明残余增长是日志缓冲
+    await page.evaluate("() => { try { console.clear(); } catch (e) {} }")
+    await asyncio.sleep(0.5)
+    s2 = await js_state(page, session)
     tex1 = await page.evaluate(
         """() => ({ vram: window.__stageVram || null,
                     decode: window.__stageDecode || null, mode: window.__stageMode,
                     imgDecode: window.__perf ? window.__perf.decode : null })""")
-    perf = await page.evaluate("window.__perf")
     # 翻页自检放在堆取样之后：取回淘汰段会让内存短暂变大，不能污染 heapEnd
     paging = await paging_audit(page, pages=20)
     await ctx.close()
@@ -540,8 +570,11 @@ async def measure_memory(browser, rounds=200):
         "heapStartMB": round(s0["JSHeapUsedSize"] / 1048576, 2),
         "heapEndMB": round(s1["JSHeapUsedSize"] / 1048576, 2),
         "heapGrowthMB": round((s1["JSHeapUsedSize"] - s0["JSHeapUsedSize"]) / 1048576, 2),
-        "heapPer40MB": [marks[i]["heapMB"] - marks[i - 1]["heapMB"] for i in range(1, len(marks))],
+        "heapPer40MB": [round(marks[i]["heapMB"] - marks[i - 1]["heapMB"], 2)
+                        for i in range(1, len(marks))],
         "marks": marks,
+        "afterConsoleClearMB": round(s2["JSHeapUsedSize"] / 1048576, 2),
+        "consoleClearFreesMB": round((s1["JSHeapUsedSize"] - s2["JSHeapUsedSize"]) / 1048576, 2),
         "domNodesStart": s0["domNodes"], "domNodesEnd": s1["domNodes"],
         "pager": s1["pager"],
         "paging": paging,
@@ -549,6 +582,22 @@ async def measure_memory(browser, rounds=200):
         "textureStart": tex0, "textureEnd": tex1,
         "nodesMetric": {"start": s0["Nodes"], "end": s1["Nodes"]},
     }
+
+
+async def measure_memory(browser, rounds=200, warmup=40):
+    """口径：先 warmup 轮吸收启动一次性分配，再 200 轮长会话。
+    - top-level = 控制台静音（应用真实状态），验收用这组
+    - consoleOn = 保留 [probe] 日志的对照，用来证明日志缓冲贡献"""
+    quiet = await _memory_run(browser, rounds, warmup, silence_console=True)
+    loud = await _memory_run(browser, rounds, warmup, silence_console=False)
+    out = dict(quiet)
+    out["warmup"] = warmup
+    out["consoleOn"] = {k: loud.get(k) for k in
+                        ("heapStartMB", "heapEndMB", "heapGrowthMB", "heapPer40MB",
+                         "marks", "consoleClearFreesMB", "longMax", "pager")}
+    out["consoleLogFreesMB"] = loud.get("consoleClearFreesMB")
+    out["textureEnd"] = quiet.get("textureEnd") or loud.get("textureEnd")
+    return out
 
 
 # ---------------------------------------------------------------- main
