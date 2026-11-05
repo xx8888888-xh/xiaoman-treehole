@@ -37,6 +37,27 @@
 
 **验证**：`pytest server/tests` 连跑 5 次独立进程 **5/5 绿**（153 passed + 19 subtests）；`python -m unittest discover -s server/tests` 5/5 OK（153 tests）；`test_mock_echo` 连跑 **20/20**；`test_memory_recall` **152/152**；`test_mock_api` **12/12**。云端：旧 `quick.yml` 已被另一路并入 `ci.yml`，本次推送 `ci #11`（sha `1c014c9`）`python-tests` + `node-tests-and-lint` **全绿**。
 
+### 补丁（追补 II）：离线引擎 `mock_engine.js` 与在线同源
+| 对齐项 | 改动 |
+|---|---|
+| 拒绝建议守卫 | 新增 `REFUSAL_RE` / `ADVICE_WORD_RE`（与服务端同正则）；命中后先过滤当前池，空则退 `TOPIC.generic` 再过滤——"不用给我方案"不会再答「那方案你熬了多久」 |
+| 不重样选句 | 由"随机撞 `pool.length` 次"改为 `availPick` 三级降级（会话内未用过+首 4 字不撞 → 近 2 轮未用过 → 不逐字复读上轮 → 任意），先算候选再 `pick`；`recentReplies` 容量 4→8 与服务端一致 |
+| 记忆写入轮 | 离线本就合并 `prior+memUpdates`（写入轮接住并计冷却），本轮与在线对齐后**两端行为一致**，补用例锁死 |
+| 话题池 | `insomnia` 从 2 条含建议的旧文案换成服务端 4 条不含建议的版本（原离线版与在线不一致，且违反"不主动给方案"） |
+
+新增 [mock_engine.test.js](file:///D:/我的/编程/vibe%20coding%20tools/treehole-w16/web/tests/mock_engine.test.js) **5 例**：拒绝词 30 次零违规、`说人话/别劝我` 同样生效、同输入 5 次唯一度/句长差/首 4 字、写入轮接住+2 轮静默+冷却满再提、普通工作话题不受守卫影响。每例 `new Function` 重载引擎，隔离模块级状态，无浏览器依赖。
+
+**验证**：`node --test tests/*.test.js` **197/197**（基线 192 + 新增 5）；`pytest server/tests` **153 passed + 19 subtests**；`biome check js/mock_engine.js tests/mock_engine.test.js` **0 error**。
+
+**仍存在的分叉（未在本轮对齐）**：
+1. **W11 轻量模板插值（回声）只在服务端**：离线没有 `extract_detail` 与 5 组详情模板（食物/身体/天气/时段/动作），同一句「今天中午吃了关东煮」在线答「关东煮？听着就馋了…」、离线落 generic「好耶||不对，先问一句…」。（宠物名例外：离线靠记忆感知池也能接住"橘猫"，与在线结构相同、模板不同。）移植=把抽取器+5 组模板搬到前端，属新功能而非对齐，且会改写离线大多数回复，需产品确认后再做。
+2. **状态作用域**：离线 `recentReplies`/`memAwareTs`/召回计数是模块级（多会话共享、刷新即清），服务端按 session 落盘。对齐需把 `reply(history)` 扩成 `reply(history, sid)` 并改 `app.js` 与 `stream.test.js` 的契约，超出"顺手"范围。
+3. **关系里程碑/月度回放**：离线有 `greetAnnex()`（依赖 localStorage），服务端本就没有用户级本地状态，属设计差异而非 bug。
+4. 服务端 `extract_detail` 的拒绝守卫在离线无对应实现（离线根本没有详情抽取）。
+
+
+
+
 
 
 ---
