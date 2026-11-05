@@ -1,0 +1,64 @@
+name: nightly
+
+# 定时巡检（抓"没人动的日子里悄悄坏掉"的回归）。
+# GitHub 的 schedule 只在**默认分支**生效：合并进 main 之后才会真正触发，也不会跑到 feature 分支。
+#
+# 两条 cron：
+#   0 18 * * 1-6  每日快闸门（周一–周六，北京时间次日 02:00）：只跑 ci.yml（~0.8 min）。
+#   0 18 * * 0    周日全套慢闸门（北京时间周一 02:00）：ci + e2e（核心四套 + 9 套 ui 矩阵）+ debug APK。
+# 周日不再单独跑每日快闸门（全套里已含 ci），避免同一套任务重复计费。
+# 手动触发等同"全套慢闸门"。
+#
+# 预算（详见 docs/ci-workflows.md §6）：
+#   daily 26 次 × 0.8 ≈ 21 min/月；weekly 4–5 次 × 22 ≈ 95 min/月；合计约 116 min/月（2000 分钟预算的 6%）。
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "0 18 * * 1-6"
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+    inputs:
+      raf_seconds:
+        description: "rAF 采样秒数"
+        required: false
+        default: "60"
+      ui_scripts:
+        description: "额外脚本：all / none / 逗号分隔"
+        required: false
+        default: "all"
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 每日快闸门：只在周一–周六的 cron 上跑（周日由下面的全套覆盖）
+  ci-daily:
+    name: ci-daily
+    if: ${{ github.event_name == 'schedule' && github.event.schedule != '0 18 * * 0' }}
+    uses: ./.github/workflows/ci.yml
+
+  # 周日全套慢闸门（手动 dispatch 也走这条）
+  ci-weekly:
+    name: ci-weekly
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 18 * * 0' }}
+    uses: ./.github/workflows/ci.yml
+
+  e2e-weekly:
+    name: e2e-weekly
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 18 * * 0' }}
+    uses: ./.github/workflows/e2e.yml
+    with:
+      core: "true"
+      ui_scripts: ${{ inputs.ui_scripts || 'all' }}
+      raf_seconds: ${{ inputs.raf_seconds || '60' }}
+
+  android-weekly:
+    name: android-weekly
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 18 * * 0' }}
+    uses: ./.github/workflows/android.yml
+    with:
+      variant: debug

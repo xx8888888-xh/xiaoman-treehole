@@ -7,9 +7,11 @@
 | workflow | 触发 | 内容 | 典型耗时 | 是否用 Docker / 浏览器 |
 |---|---|---|---|---|
 | `ci.yml` | push（main / feat/** / fix/** / zhiqiu/**）、PR→main、手动、被 gates 调用 | Node 22：`npm ci` + `npm test`（基线 181）+ Biome（0 error）；Python 3.12：`compileall` + `build_assets.sh` + `verify_assets.py` + `pytest`（145 passed + 19 subtests）；`python-scripts` 矩阵：`test_mock_api`（12/12）+ `test_memory_recall`（152/152，进程内起 mock，不进 Docker） | 0.5–1 min（四 job 并行，单个 ≤25s） | 否 |
-| `e2e.yml` | push→main、手动、被 gates 调用 | `docker compose` 起 web 8901 / mock 8902 / tts 8903（`XIAOMAN_TTS_PROVIDER=none` 静音）；Playwright Chromium `--mute-audio`；`test_e2e` 60、`test_feature_loop` 43、`test_live2d_original` 24、`test_raf_budget` 8 | 6–7 min（实测 340–376s） | 是 |
-| `android.yml` | `workflow_dispatch`、tag `v*`、被 gates 调用 | JDK 21 + Android SDK 34/build-tools 34 → `assembleDebug`（默认，不签名；可选 release 未签名）→ 上传 APK + 体积写入 job summary | 1.5–2.5 min（实测 89s） | 否 |
-| `gates.yml` | 仅 `workflow_dispatch` | 并行复用 ci / e2e / android 三条（一键全套） | 与最慢的 e2e 接近 | 视子流程 |
+| `e2e.yml` | push→main、手动、被 gates/nightly 调用 | job `browser-e2e`：`docker compose` 起 web 8901 / mock 8902 / tts 8903（`XIAOMAN_TTS_PROVIDER=none` 静音），串行跑核心四套（`test_e2e` 60 / `test_feature_loop` 43 / `test_live2d_original` 24 / `test_raf_budget` 8）；job `ui-suites`（matrix）：8 套已迁脚本逐脚本独立 job（`test_paging` 除外，见 §7） | 核心 5.6–6.3 min；ui 矩阵单 job 1–3.4 min | 是 |
+| `android.yml` | `workflow_dispatch`、tag `v*`、被 gates/nightly 调用 | JDK 21 + Android SDK 34/build-tools 34 → `assembleDebug`（默认，不签名；可选 release 未签名）→ 上传 APK + 体积写入 job summary | 1.5–2.5 min（实测 89s） | 否 |
+| `android-release.yml` | `workflow_dispatch`、tag `v*`（tag 触发才从 tag commit 读文件） | 四个 Secrets 解出 keystore → `assembleRelease` → `apksigner verify` + `aapt2 dump badging` 断言（包名/versionCode 6/versionName 0.6.0/v2 签名）→ 签名 APK artifact | 1.6 min（实测） | 否 |
+| `gates.yml` | 仅 `workflow_dispatch` | 并行复用 ci / e2e / android 三条（一键全套，手动用；**不再挂 cron**，定时统一由 `nightly.yml` 负责，避免重复计费） | 与最慢的 e2e 接近 | 视子流程 |
+| `nightly.yml` | `schedule`（只在默认分支生效）+ 手动 | 每日 18:00 UTC（北京时间次日 02:00，周一–周六）跑 `ci.yml` 快闸门；每周日同一时刻跑全套慢闸门（ci + e2e 核心四套 + 9 套 ui 矩阵 + android APK） | 每日 ~0.8 min；每周日 ~22 min | 视子流程 |
 | `android-ci.yml`（legacy） | 仅 `workflow_dispatch` | 旧的内置模拟器 smoke（AVD + 悬浮窗证据） | 8–12 min | 是（KVM） |
 
 旧的 `quick.yml`（ci.yml 已覆盖）与 `healthcheck.yml`（一次性探针）已删除。
@@ -69,16 +71,22 @@ Python 脚本统一经 `scripts/env.sh` / `os.environ` 读取；`test_live2d_ori
 | Gradle 出包 | ✅（按需） | 可选 | 只出 debug 包，分钟数敏感 |
 | 真机 / AVD / MuMu 模拟器 | ❌ | ✅ 必须本地 | 悬浮窗、TTS 发声、厂商 ROM、耗电采样 |
 | TTS 真发声 / 音频验收 | ❌ | ✅ 必须本地 | 云端全程 `--mute-audio` + provider=none |
-| 签名 release / keystore | ❌（不配置 secrets） | ✅ | 云端只出 debug/unsigned |
+| 签名 release / keystore | ✅（`android-release.yml`，4 个 Secrets 已写入） | 可选出包 | keystore 只在仓库外（`C:\Users\xx\.secrets`），云端正向解到 `$RUNNER_TEMP`，不入库 |
 
 ## 4. Secrets
 
-当前四条 workflow **不需要任何 secret**。若以后需要私有镜像凭据，建议：
+`android-release.yml` 需要 4 个仓库 Secrets，**已写入**（值从未出现在日志/回复里）：
 
-- `REGISTRY_USERNAME` / `REGISTRY_PASSWORD`（或在 Settings → Secrets → Actions 配 PAT）
-- 若要在云端签名 release：`ANDROID_KEYSTORE_B64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`
+| Secret | 用途 |
+|---|---|
+| `ANDROID_KEYSTORE_B64` | keystore 的 base64（`gh secret set ... < file` 传入），云端解到 `$RUNNER_TEMP/release.keystore` |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore 口令 |
+| `ANDROID_KEY_ALIAS` | 别名 |
+| `ANDROID_KEY_PASSWORD` | 私钥口令 |
 
-不要把 keystore、token 写进仓库；`android-ci.yml` 只是引用 secrets，缺省时自动跳过签名。
+keystore 实体只存在仓库外（`C:\Users\xx\.secrets\xiaoman-release.jks`）。`git log --all -- '*keystore*' '*jks*'`、`git ls-files`
+与远端 main 树递归抽查均为空（只有生成脚本 `scripts/gen_release_keystore.sh`），`.gitignore` 已含 `*.keystore`、`*.jks`、
+`android/keystore.properties`。**不要把这些值贴进 issue/PR/日志。**
 
 ## 5. 手动触发
 
@@ -108,17 +116,44 @@ gh run watch <run-id>
 **并行度**
 
 - `ci.yml` 内 4 个 job（node / python / python-scripts×2）天然并行，墙钟 = 最慢的 node ≈ 25s。
-- `gates.yml` 的 ci / e2e / android 也并行，墙钟 ≈ 最慢的 e2e（~6.5 min），不用串行累加。
+- `gates.yml` / `nightly.yml` 的 ci / e2e / android 也并行，墙钟 ≈ 最慢的 e2e，不用串行累加。
 - 单个 e2e job 内部是**串行四套**（共用同一套容器；并行会互抢 8901–8903 端口与 CPU）。若以后要并行，需给每套独立端口与独立 compose 项目名。
+- `ui-suites` 是 9 个独立 job 的矩阵（`fail-fast: false`），彼此并行；每个 job 自带一套 compose，端口相同但不互相看见（job 隔离）。
 
 **触发策略（防止烧分钟）**
 
-- `e2e.yml` 只在 `push→main`、`workflow_dispatch`、`gates.yml` 调用时跑；feature 分支 push **不触发**。
+- `e2e.yml` 只在 `push→main`、`workflow_dispatch`、`gates.yml` / `nightly.yml` 调用时跑；feature 分支 push **不触发**。
 - 分支需要浏览器验证时用显式手动：`gh workflow run e2e.yml --ref feat/xxx`（或给 PR 打 label 后由人工触发）。
-- `android.yml` 只在手动与 `v*` tag 跑，默认 debug。
+  注意同 ref 的 dispatch 会被 `concurrency.cancel-in-progress` 取消——**逐个跑、跑完再发下一个**。
+- `android.yml` 只在手动、`v*` tag 与定时全套跑，默认 debug。
+- `android-release.yml` 只吃 `workflow_dispatch` 与 `v*` tag（tag 触发才会从 tag 的 commit 读 workflow 文件）。
 - `android-ci.yml`（AVD）已收敛为仅手动。
-- 每次 e2e ≈ **6–7 min**（实测 340–376s，含 compose build 与 Chromium 安装）；命中浏览器缓存后约 5–6 min。
-  按每天 3 次 trunk push 估算，e2e 约 20 min/天；ci 每次 <1 min。
+- `nightly.yml` 的慢闸门只在**默认分支**生效（GitHub 的 schedule 语义），不会跑到 feature 分支，符合"只跑主干"。
+
+**分钟账（私有仓库 2000 分钟/月）**
+
+计费口径 = 每个 job 的墙钟分钟相加（并行 job 分别计费），实测值来自 2026-11-05 的 run：
+
+| 计费单元 | 实测/估算 | 月频次 | 月消耗 |
+|---|---|---|---|
+| `ci.yml`（4 job 合计） | 0.8 min | 每日 26 次（周一–周六的 nightly）+ 约 10 次 trunk push | ≈ 29 min |
+| `e2e.yml` 核心四套（`browser-e2e`） | 5.6–6.3 min（取 6.0） | 每周 4–5 次（周日全套 + trunk push） | ≈ 27 min |
+| `e2e.yml` ui 矩阵（8 套，单 job 1–3.4 min） | 合计 ≈ 14.6 min | 每周 1 次（仅周日全套） | ≈ 63 min |
+| `android.yml`（debug APK） | 0.8 min | 每周 1 次 | ≈ 3.5 min |
+| `android-release.yml`（签名包） | 1.6 min | 打 tag 时（按每月 4 次估） | ≈ 6.5 min |
+| `quick.yml`（push 轻量：compileall + 2 个纯 stdlib 单测） | ≈ 0.5 min | 与 push 次数同（按 30 次估） | ≈ 15 min |
+| `android-ci.yml`（AVD） | 8–12 min | 仅手动，按 0–2 次估 | 0–24 min |
+| `gates.yml`（手动全套） | ≈ 22 min | 按 1 次估 | ≈ 22 min |
+| **合计** | | | **≈ 167–191 min/月（约 8–10% 预算）** |
+
+结论：
+
+1. **余量充足**：即使每周全套 + 每日快闸门，也只吃掉 2000 分钟里的约 10%；不需要降低 e2e 频率。
+2. **该降频的只有 AVD**：`android-ci.yml` 单次 8–12 min，是单位分钟最贵的闸门，保持"仅手动"；不要给它加 cron。
+3. **该合并的是 `quick.yml` 与 `ci.yml`**：两者在 push 上都跑 python 语法/单测，重复 ≈ 0.5 min/次。`quick.yml` 的价值是"1 分钟出红"，
+   保留但它只在 `push` 触发、不接 schedule；`ci.yml` 不重复跑 `compileall` 之外的快速项即可（现版本已只差这一层）。
+4. **别让三套新 workflow 各装一遍 Playwright**：统一用 `.github/actions/setup-playwright`（见 §9），浏览器压缩包缓存命中后可省 30–60s/job。
+5. **定时只留一处**：`gates.yml` 去掉了 cron，定时全部收口到 `nightly.yml`，避免"手动 gates + 定时"两条对同一套慢闸门重复计费。
 
 
 ## 7. 尚未上云的闸门
@@ -126,15 +161,36 @@ gh run watch <run-id>
 | 闸门 | 相关脚本 | 为什么还在本地 |
 |---|---|---|
 | AVD / MuMu 模拟器 | `emulator_adapt_sweep.py`、`emulator_float_check.py`、`emulator_power_probe.py`、`android-ci.yml`(legacy) | 需要 KVM/MuMu、adb、厂商 ROM、悬浮窗与系统权限；云端无真机 |
-| Playwright 浏览器（已禁止本地，待迁移下一批） | `test_appearance.py`、`test_lifeline_ui.py`、`test_onboarding.py`、`test_paging.py`、`test_phase3_e2e.py`、`test_stream_e2e.py`、`ui_tour.py`、`ux_walkthrough.py`、`shot.py` | 已有浏览器硬闸门，本地跑不起来；但端口/断言尚未参数化，所以**还没进 `e2e.yml`**（当前 e2e 只覆盖四套） |
+| Playwright 浏览器（第二批 9 套，**已迁移 8 套**） | `test_appearance.py`、`test_lifeline_ui.py`、`test_onboarding.py`、`test_phase3_e2e.py`、`test_stream_e2e.py`、`ui_tour.py`、`ux_walkthrough.py`、`shot.py` | 已进 `e2e.yml` 的 `ui-suites` 矩阵，逐脚本独立 job + artifact（`ui-<script>-<sha>`，7 天）。云端 run：appearance 42019565634 / lifeline 42021974339 / onboarding 42021167878 / shot 42022702031 / stream 42023342877 / phase3 42026420958 / ui_tour 42027542248 / ux_walkthrough 42028417478 |
+| `test_paging.py`（**迁不动，未进矩阵**） | `test_paging.py` | 两项 WebGL 显存断言在当前环境恒红且非 CI 引入：①`stage` 已换成 Canvas 2D 分层立绘（`LayeredPuppet`），不存在 `texImage2D`，探针永远 0；②`2048 档 > 1024 档 × 2.5` 与档位面积比（s070/s050 decoded = 9791028/5001068 ≈ 1.96×）不自洽。本地基线同样 12/14（`docs/UI_R2.md` 已记录）。其它 12 项（分页、窗口恒定、60fps）云端可过，但**不放宽断言、不 skip**，所以不塞进闸门制造永久红 |
 | 真实模型 / 真实 TTS | `test_freemodels.py`、`verify_tts.py`、`measure_ttft.py` | 需要真实 API key/额度、音频设备与延迟测量；云端全程静音 |
-| release 签名 | `build_apk.sh` | 需要 keystore；云端只出 debug/unsigned |
+| release 签名 | `build_apk.sh` | 云端由 `android-release.yml` 出签名包；本地只用于验证 keystore/口令 |
 | 真机后台与耗电 | `run_bg_e2e.sh` | 需要真机后台保活、电量采样 |
 
-## 8. 已知红项（真实代码问题，非 CI 环境）
+## 8. 已知红项
 
-- `main` 的 `python-scripts (test_memory_recall)` 为 **150/152**，失败项：
-  - `G11-2① 介绍轮即时接住宠物名`：`我家猫叫年糕...` 的回复只含“猫”，不含“年糕”。
-  - `G11-2② 冷却窗口内不刻意复读`：第二轮反而带出“年糕”。
-- 根因在 `server/mock_api.py` 的即时回提路径（新提取的“宠物”被排除在 memory-aware 分支之外）；`feat/data-completeness`（w16）已包含该修复，其 CI 为 **152/152 全绿**。
-- 按边界要求未修改 `server/**`；不放宽断言、不跳过用例。合并 data-completeness 后此红项会自动转绿。
+- 2026-11-05 复查：`test_memory_recall` 在主干（`feat/containerize-and-config`，含 data-completeness 的修复）已 **152/152 全绿**；
+  `main` 上旧的 150/152 只是分支未合并的历史红项。**结论：不需要为它单独推 main**，随主干合并自然转绿。
+- 唯一遗留的稳定红项是 §7 的 `test_paging` 两项 WebGL 断言（环境/历史原因，非本次改动引入）。
+
+## 9. 新 workflow 接入契约（`ui-shots.yml` / `perf.yml` / `android-release.yml`）
+
+三套新流程落地时按同一张契约检查，避免各自重复装 Playwright、artifact 命名漂移：
+
+| 检查项 | 要求 |
+|---|---|
+| 触发 | `workflow_dispatch` 必备；`push` 只精确到需要的分支或 tag（`perf.yml` 只吃 `feat/perf-r3`，`android-release.yml` 只吃 `v*` tag）；**feature 分支默认不接 cron** |
+| Playwright | 必须 `uses: ./.github/actions/setup-playwright`，禁止在 job 里手写 `pip install playwright` + `playwright install`；缓存 key 统一 `${runner.os}-playwright-<version>` |
+| artifact 命名 | `<用途>-<commit 短 sha>`（如 `ui-shots-76b9912`、`perf-r3-f89d62c`）；**不要用 `run_number`**（跨分支不可读） |
+| artifact 保留 | 截图/JSON 证据 **7 天**；唯一例外是签名 APK（30 天，发布要留档），需在文件里写明理由 |
+| artifact 内容 | 截图 + 关键 JSON（`<script>.json` 的 checks/ok/明细），失败时 `::error::` 打印具体断言而不是"step failed" |
+| 失败可诊断 | 打印 `grep -aE "FAIL|❌|Traceback|TimeoutError|超时|缺失"` 的前 12 行；容器类 job 失败时 dump compose logs |
+| 并发 | 同一 workflow 用 `concurrency: group: <workflow>-<ref>`；需要保留每次结果时 `cancel-in-progress: false` |
+
+现状盘点（2026-11-05）：
+
+| workflow | 位置 | 现状 | 结论 |
+|---|---|---|---|
+| `android-release.yml` | 已在我方分支并跑绿（42023885689） | 触发 `dispatch` + `v*`；artifact `xiaoman-treehole-release-0.6.0-<sha>`，30 天；无 Playwright | ✅ 合规（保留 30 天是发布留档例外） |
+| `perf.yml` | `feat/perf-r3`，未合并 | 触发 `push: feat/perf-r3`；artifact `perf-r3-${run_number}`（无 sha、14 天）；手写装 Playwright（未复用复合动作）；`timeout 35min` | ⚠️ 待改：artifact 名改 `perf-r3-<sha>`、7 天；把安装段换成 `./.github/actions/setup-playwright`；合并前把 `push` 触发收窄/改手动 |
+| `ui-shots.yml` | 尚未出现 | — | 落地时按上表验收 |

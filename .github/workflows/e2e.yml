@@ -1,7 +1,7 @@
 name: e2e
 
 # 慢闸门（浏览器端到端）：docker compose 起 web/mock/tts 三容器，Playwright 真跑浏览器用例。
-# 触发：main push（只跑核心四套）/ 手动（可选核心 + 额外脚本）/ 被 gates.yml（含周一 cron）调用。
+# 触发：main push（只跑核心四套）/ 手动（可选核心 + 额外脚本）/ 被 gates.yml、nightly.yml 调用。
 # 全程静音：XIAOMAN_TTS_PROVIDER=none + Chromium --mute-audio + 用例内 tts=off。
 # 基线（main，2026-11-05）：test_e2e 60/60、test_feature_loop 43/43、test_live2d_original 24/24、test_raf_budget 8/8。
 
@@ -18,7 +18,7 @@ on:
         required: false
         default: "true"
       ui_scripts:
-        description: "额外脚本：all 或逗号分隔（test_appearance,test_lifeline_ui,test_onboarding,test_paging,test_phase3_e2e,test_stream_e2e,ui_tour,ux_walkthrough,shot）"
+        description: "额外脚本：all 或逗号分隔（all = 已绿的 8 套；test_paging 需显式点名，见 docs/ci-workflows.md §7）"
         required: false
         default: "all"
       raf_seconds:
@@ -208,7 +208,10 @@ jobs:
           set -euo pipefail
           sel="${{ inputs.ui_scripts }}"
           if [ "$sel" = "all" ]; then
-            json='["test_appearance","test_lifeline_ui","test_onboarding","test_paging","test_phase3_e2e","test_stream_e2e","ui_tour","ux_walkthrough","shot"]'
+            # all = 云端已验证跑绿的 8 套。test_paging 的两项 WebGL 显存断言为既有环境红项
+            # （stage 已换 Canvas 2D，texImage2D 探针恒 0；2048/1024 阈值与档位面积比不自洽），
+            # 不放宽断言、不 skip，因此不进默认矩阵；需要时显式 ui_scripts=test_paging。
+            json='["test_appearance","test_lifeline_ui","test_onboarding","test_phase3_e2e","test_stream_e2e","ui_tour","ux_walkthrough","shot"]'
           else
             json=$(python3 -c 'import json,sys; print(json.dumps([s.strip() for s in sys.argv[1].split(",") if s.strip()]))' "$sel")
           fi

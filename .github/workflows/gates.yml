@@ -1,11 +1,10 @@
 name: gates
 
-# 手动一键跑全套 + 每周定时巡检：
+# 手动一键跑全套：
 #   ci（快闸门）+ e2e（核心四套 + 9 套额外 Playwright）+ android（APK），三条复用 workflow 并行。
-# 定时：cron '0 18 * * 0' = 每周日 18:00 UTC = 每周一 02:00（Asia/Shanghai）。
-#   GitHub 的 schedule 只在**默认分支**上生效（不会跑 feature 分支），符合"只跑主干"的预算要求。
-#   注意：本文件合并进 main 之后 cron 才会真正开始触发。
-# 预算：一周一次全套 ≈ 55 分钟 runner 分钟（详见 docs/ci-workflows.md §6），远低于私有仓库 2000 分钟/月。
+# 定时巡检已收口到 nightly.yml（每日快闸门 + 周日全套慢闸门），这里不再挂 cron，避免同一套慢闸门重复计费。
+#   GitHub 的 schedule 只在**默认分支**上生效，所以 nightly.yml 合并进 main 之后才会真正触发。
+# 预算：一次全套 ≈ 22 分钟（runner 分钟按 job 相加），详见 docs/ci-workflows.md §6。
 
 permissions:
   contents: read
@@ -21,8 +20,6 @@ on:
         description: "额外 9 套：all / none / 逗号分隔"
         required: false
         default: "all"
-  schedule:
-    - cron: "0 18 * * 0"
 
 concurrency:
   group: gates-${{ github.ref }}
