@@ -181,17 +181,31 @@ test("系统偏好变化只回调通知，不改写用户选择", () => {
   assert.equal(removed, true);
 });
 
-/* ---------- 7. CSS：仅极简零动画；默认/生动 160ms；无循环/自发动画 ---------- */
-test("仅极简模式命中零动画，默认/生动只允许 120–200ms 状态过渡", () => {
+/* ---------- 7. CSS：仅极简零动画；其余过渡全部令牌化 ---------- */
+test("仅极简模式命中零动画，其余过渡只允许 --dur-* 令牌（按压 80–120ms / 状态 120–200ms）", () => {
   const off = CSS.match(/html\[data-motion="off"\][\s\S]*?\{([\s\S]*?)\}/);
   assert.ok(off, "缺少 data-motion=off 的零动画规则");
   assert.match(off[1], /animation:\s*none\s*!important/);
   assert.match(off[1], /transition:\s*none\s*!important/);
 
-  const durations = [...CSS.matchAll(/transition:[^;]*?(\d+)ms/g)].map((m) => Number(m[1]));
-  assert.ok(durations.length > 0, "默认/生动缺少状态过渡");
-  for (const ms of durations) {
-    assert.ok(ms >= 120 && ms <= 200, `过渡时长 ${ms}ms 不在 120–200ms 内`);
+  // 三档时长必须收敛成令牌，不允许在 transition 里裸写 ms
+  const press = Number(CSS.match(/--dur-press:\s*(\d+)ms/)[1]);
+  const state = Number(CSS.match(/--dur-state:\s*(\d+)ms/)[1]);
+  const base = Number(CSS.match(/--dur-base:\s*(\d+)ms/)[1]);
+  const slow = Number(CSS.match(/--dur-slow:\s*(\d+)ms/)[1]);
+  assert.ok(press >= 80 && press <= 120, `按压时长 ${press}ms 必须落在 80–120ms`);
+  for (const ms of [state, base]) {
+    assert.ok(ms >= 120 && ms <= 200, `状态时长 ${ms}ms 不在 120–200ms 内`);
+  }
+  assert.ok(slow >= state && slow <= 320, "面板一次性入场不得慢于 320ms");
+
+  assert.doesNotMatch(CSS, /transition:[^;{}]*\d+ms/, "过渡时长必须引用 --dur-* 令牌");
+  const transitions = [...CSS.matchAll(/transition:\s*([^;{}]+);/g)]
+    .map((m) => m[1].trim())
+    .filter((t) => !t.startsWith("none"));
+  assert.ok(transitions.length >= 10, "默认/生动缺少状态过渡");
+  for (const t of transitions) {
+    assert.match(t, /var\(--dur-/, `过渡未走令牌：${t}`);
   }
   assert.match(CSS, /html\[data-motion="on"\]/);
 
@@ -202,6 +216,10 @@ test("仅极简模式命中零动画，默认/生动只允许 120–200ms 状态
   assert.doesNotMatch(CSS, /\bautoplay\b/i);
   assert.doesNotMatch(HTML, /<audio\b/i);
   assert.doesNotMatch(HTML, /\bautoplay\b/i);
+  // 骨架屏必须是静态占位：没有 shimmer / 转圈（注释先剔除，只看真实声明）
+  const noComment = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(noComment, /\.stage-skeleton\s*\{/);
+  assert.doesNotMatch(noComment, /shimmer|spin|rotate\(/i);
 });
 
 /* ---------- 8. 字号与设置页结构 ---------- */
@@ -253,4 +271,113 @@ test("所有预设与明暗主题正文对比度达 AA（≥4.5:1）", () => {
 
 test("键盘焦点环 2px 可见", () => {
   assert.match(CSS, /:focus-visible\s*\{[^}]*outline:\s*2px solid\s+var\(--focus\)/);
+});
+
+/* ---------- 10. 第三轮：令牌阶梯 ---------- */
+test("间距 6 档、字阶 5 档；间距/字号/行高不再出现零散 px", () => {
+  const root = CSS.match(/:root\s*\{([\s\S]*?)\}/)[1];
+  const spaces = [...root.matchAll(/--space-([\d]+)\s*:\s*\d+px/g)].map((m) => m[1]).sort();
+  assert.deepEqual(spaces, ["1", "2", "3", "4", "5", "6"], "间距必须恰好收敛为 6 档");
+  assert.doesNotMatch(CSS, /--space-(8|12)\s*:/, "旧档位 --space-8/12 必须删除");
+  const sizes = [...root.matchAll(/--text-([a-z]+)\s*:/g)].map((m) => m[1]);
+  // 5 档 + subtitle 兼容别名
+  assert.deepEqual(sizes.sort(), ["body", "caption", "display", "label", "subtitle", "title"].sort());
+
+  const noComment = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+  const decls = [];
+  const re = /(?:^|[;{])\s*(padding(?:-top|-right|-bottom|-left)?|margin(?:-top|-right|-bottom|-left)?|gap|row-gap|column-gap|font-size|line-height)\s*:\s*([^;{}]+);/gm;
+  let m = re.exec(noComment);
+  while (m) { decls.push([m[1], m[2].trim()]); m = re.exec(noComment); }
+  assert.ok(decls.length > 40, "扫描不到间距声明，正则失效");
+  for (const [prop, value] of decls) {
+    const cleaned = value.replace(/env\([^)]*\)/g, "").replace(/var\(--[a-z0-9-]+\)/gi, "");
+    assert.doesNotMatch(cleaned, /\d+px/, `${prop}: ${value} 仍含裸 px，必须走令牌`);
+  }
+  // 字号只允许令牌
+  for (const [prop, value] of decls.filter(([p]) => p === "font-size")) {
+    assert.match(value, /var\(--text-|inherit/, `字号未令牌化：${value}`);
+  }
+});
+
+/* ---------- 11. 第三轮：图标统一 ---------- */
+test("自绘 SVG 图标集：24px 网格 / 1.5px 描边，HTML 不再混用 emoji", () => {
+  const Icons = require("../js/icons.js");
+  assert.equal(Icons.GRID, 24);
+  assert.equal(Icons.STROKE, 1.5);
+  assert.ok(Icons.names().length >= 8, "图标集太小");
+  for (const name of Icons.names()) {
+    const svg = Icons.icon(name);
+    assert.match(svg, /viewBox="0 0 24 24"/, `${name} 不是 24 网格`);
+    assert.match(svg, /stroke-width="1\.5"/, `${name} 描边不是 1.5px`);
+    assert.match(svg, /fill="none"/, `${name} 必须线描而非实心`);
+    assert.match(svg, /<path d="M/, `${name} 缺少路径`);
+  }
+  assert.equal(Icons.icon("no-such-icon"), "");
+
+  // HTML 里的 data-icon 必须都在图标集里；静态按钮不再内联第二套 SVG
+  for (const [, name] of HTML.matchAll(/data-icon="([a-z-]+)"/g)) {
+    assert.ok(Icons.names().includes(name), `data-icon="${name}" 不在图标集`);
+  }
+  const inlineSvgs = [...HTML.matchAll(/<svg\b/g)].length;
+  assert.ok(inlineSvgs <= 1, `index.html 只允许空态自绘记号一处内联 SVG，实际 ${inlineSvgs} 处`);
+  assert.doesNotMatch(HTML, /[\u{1F300}-\u{1FAFF}]/u, "不得使用 emoji");
+  assert.doesNotMatch(HTML, /[\u{2600}-\u{27BF}]/u, "不得使用 emoji 符号");
+});
+
+/* ---------- 12. 第三轮：对比度实测表 ---------- */
+test("双主题对比度量化：正文 ≥7:1，其余前景 ≥4.5:1", () => {
+  const BODY_PAIRS = [
+    ["text", "bg"], ["text", "panel"], ["text", "bubble-them"],
+    ["text", "bubble-me"], ["text", "field"],
+  ];
+  const UI_PAIRS = [
+    ["text-2", "bg"], ["text-2", "panel"], ["text-2", "surface-2"],
+    ["text-3", "bg"], ["text-3", "panel"], ["text-3", "surface"],
+    ["text-3", "surface-2"], ["text-3", "field"],
+    ["icon", "bg"], ["icon", "panel"], ["icon-accent", "surface-2"],
+    ["accent-ink", "accent"], ["accent", "accent-soft"],
+    ["crisis", "crisis-soft"], ["toast-text", "toast-bg"],
+  ];
+  const rows = [];
+  for (const [label, vars] of [["暖纸", ROOT_VARS], ["暖炭黑", DARK_VARS]]) {
+    for (const [fg, bg] of BODY_PAIRS) {
+      const r = contrast(vars[fg], vars[bg]);
+      rows.push([label, `--${fg} / --${bg}`, r, 7]);
+      assert.ok(r >= 7, `${label} 正文 --${fg} on --${bg} = ${r.toFixed(2)}:1 < 7`);
+    }
+    for (const [fg, bg] of UI_PAIRS) {
+      const r = contrast(vars[fg], vars[bg]);
+      rows.push([label, `--${fg} / --${bg}`, r, 4.5]);
+      assert.ok(r >= 4.5, `${label} --${fg} on --${bg} = ${r.toFixed(2)}:1 < 4.5`);
+    }
+    // 组件边界线至少要能看见（≥3:1）
+    assert.ok(contrast(vars["line-strong"], vars["bg"]) >= 3);
+  }
+  console.log("\n对比度实测（WCAG 2.x）");
+  console.log("主题\t前景 / 背景\t实测\t门槛");
+  for (const [theme, pair, r, need] of rows) {
+    console.log(`${theme}\t${pair}\t${r.toFixed(2)}:1\t≥${need}`);
+  }
+  console.log(`最小正文 ${Math.min(...rows.filter((x) => x[3] === 7).map((x) => x[2])).toFixed(2)}:1`);
+});
+
+/* ---------- 13. 第三轮：层级与状态 ---------- */
+test("空态/记忆页只有一个主焦点，次级说明收敛；发送态与录制态有明确外观", () => {
+  // 空态：一个标题 + 一句说明 + 静态记号
+  assert.equal([...HTML.matchAll(/class="empty-title"/g)].length, 1);
+  assert.equal([...HTML.matchAll(/class="empty-sub"/g)].length, 1);
+  assert.match(HTML, /class="empty-art"/);
+  // 记忆抽屉：标题唯一，副说明压到一句（不再塞整段隐私说明）
+  const drawer = HTML.match(/<div class="drawer-panel"[\s\S]*?id="memoryChips"/)[0];
+  assert.equal([...drawer.matchAll(/<h2/g)].length, 1, "记忆页只能有一个标题");
+  const sub = drawer.match(/class="drawer-sub">([^<]*)</)[1];
+  assert.ok(sub.length <= 40, `记忆页副说明过长（${sub.length} 字），应弱化`);
+  // 设置页：关于区压缩，隐私说明只留一句
+  const about = HTML.match(/<section class="about">[\s\S]*?<\/section>/)[0];
+  assert.equal([...about.matchAll(/<p/g)].length, 4, "关于区只保留 4 行");
+  assert.doesNotMatch(about, /服务器也可能留一份上下文/);
+  // 发送态 / 录制态
+  assert.match(CSS, /#app:has\(#typingRow:not\(\.hidden\)\)\s*\.send-btn\[disabled\]/);
+  assert.match(CSS, /\.inputbar\[data-recording="true"\]/);
+  assert.match(CSS, /var\(--press-scale\)/);
 });
