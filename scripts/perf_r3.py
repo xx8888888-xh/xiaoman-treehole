@@ -532,7 +532,48 @@ async def _memory_page(browser):
     return ctx, page, session
 
 
-async def _memory_run(browser, rounds, warmup, silence_console):
+async def _ls_diag(page):
+    """持久化面诊断：localStorage/sessionStorage 总字符数 + IDB 行数。
+    堆里若没有对应增长，说明残余不是应用数据（别处）；若有，按 key 定位。"""
+    return await page.evaluate(
+        """async () => {
+            const keys = {};
+            let total = 0;
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                const v = localStorage.getItem(k) || "";
+                keys[k] = v.length;
+                total += k.length + v.length;
+            }
+            const sid = window.API ? API.sessionId() : localStorage.getItem('xiaoman_sid');
+            let rows = null;
+            try { rows = window.ChatStore ? await ChatStore.count(sid) : null; } catch (e) {}
+            keys.__idb = rows;
+            return { lsTotal: total, lsKeys: Object.keys(keys).length,
+                     top: Object.entries(keys).sort((a, b) => b[1] - a[1]).slice(0, 6),
+                     ss: sessionStorage.length };
+        }""")
+
+
+def _top_alloc(profile, limit=12):
+    """把 V8 分配采样（stop 时仍存活的对象）按 selfSize 聚合到顶层调用点。"""
+    aggr = {}
+
+    def walk(node):
+        cf = node.get("callFrame") or {}
+        fn = cf.get("functionName") or "(anonymous)"
+        url = (cf.get("url") or "").split("/")[-1]
+        key = "%s @ %s:%s" % (fn, url or "?", (cf.get("lineNumber", -1) + 1))
+        aggr[key] = aggr.get(key, 0) + (node.get("selfSize") or 0)
+        for c in node.get("children") or []:
+            walk(c)
+
+    walk((profile.get("profile") or {}).get("head") or {})
+    top = sorted(aggr.items(), key=lambda kv: -kv[1])[:limit]
+    return [[k, round(v / 1048576, 3)] for k, v in top]
+
+
+async def _memory_run(browser, rounds, warmup, silence_console, sample_alloc=False):
     """warmup 轮先吸收启动一次性分配，再做 rounds 轮长会话采样。
     silence_console=True：把 [probe] 埋点日志静音——Chromium 控制台缓冲是给安卓
     logcat 用的诊断通道，不属于应用状态（且有容量上限），不能混进"消息数据是否泄漏"。"""
@@ -551,6 +592,14 @@ async def _memory_run(browser, rounds, warmup, silence_console):
     await page.evaluate("() => { try { console.clear(); } catch (e) {} }")
     await asyncio.sleep(0.4)
     s0 = await js_state(page, session)
+    ls0 = await _ls_diag(page)
+    if sample_alloc:
+        # V8 分配采样：只统计"采样窗口内分配且 stop 时仍存活"的对象，用来抓残留持有者
+        try:
+            await session.send("HeapProfiler.startSampling", {"samplingInterval": 32768})
+        except Exception as exc:
+            print("[memory] alloc sampling off：%s" % exc, flush=True)
+            sample_alloc = False
     marks = []
     for i in range(rounds):
         await send_and_reply(page, f"今天有点累，随便聊聊第{i}轮")
@@ -567,6 +616,14 @@ async def _memory_run(browser, rounds, warmup, silence_console):
                           "total": pg.get("total")})
     await asyncio.sleep(1.2)
     s1 = await js_state(page, session)
+    profile_top = None
+    if sample_alloc:
+        try:
+            prof = await session.send("HeapProfiler.stopSampling")
+            profile_top = _top_alloc(prof)
+        except Exception as exc:
+            print("[memory] stopSampling 失败：%s" % exc, flush=True)
+    ls1 = await _ls_diag(page)
     perf = await page.evaluate("window.__perf")
     # 控制台缓冲诊断：清空控制台 + GC 后若堆明显回落，即证明残余增长是日志缓冲
     await page.evaluate("() => { try { console.clear(); } catch (e) {} }")
@@ -578,6 +635,8 @@ async def _memory_run(browser, rounds, warmup, silence_console):
                     imgDecode: window.__perf ? window.__perf.decode : null })""")
     # 翻页自检放在堆取样之后：取回淘汰段会让内存短暂变大，不能污染 heapEnd
     paging = await paging_audit(page, pages=20)
+    idb_rows = await page.evaluate(
+        "async () => { try { return await ChatStore.count(API.sessionId()); } catch (e) { return null; } }")
     await ctx.close()
     return {
         "rounds": rounds,
@@ -589,6 +648,11 @@ async def _memory_run(browser, rounds, warmup, silence_console):
         "marks": marks,
         "afterConsoleClearMB": round(s2["JSHeapUsedSize"] / 1048576, 2),
         "consoleClearFreesMB": round((s1["JSHeapUsedSize"] - s2["JSHeapUsedSize"]) / 1048576, 2),
+        "lsStartChars": ls0.get("lsTotal"), "lsEndChars": ls1.get("lsTotal"),
+        "lsDeltaChars": (ls1.get("lsTotal") or 0) - (ls0.get("lsTotal") or 0),
+        "lsEndTop": ls1.get("top"),
+        "idbRows": idb_rows,
+        "allocTop": profile_top,
         "domNodesStart": s0["domNodes"], "domNodesEnd": s1["domNodes"],
         "pager": s1["pager"],
         "paging": paging,
@@ -602,7 +666,7 @@ async def measure_memory(browser, rounds=200, warmup=40):
     """口径：先 warmup 轮吸收启动一次性分配，再 200 轮长会话。
     - top-level = 控制台静音（应用真实状态），验收用这组
     - consoleOn = 保留 [probe] 日志的对照，用来证明日志缓冲贡献"""
-    quiet = await _memory_run(browser, rounds, warmup, silence_console=True)
+    quiet = await _memory_run(browser, rounds, warmup, silence_console=True, sample_alloc=True)
     loud = await _memory_run(browser, rounds, warmup, silence_console=False)
     out = dict(quiet)
     out["warmup"] = warmup
