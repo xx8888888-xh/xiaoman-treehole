@@ -1918,7 +1918,14 @@ const App = (() => {
     $("memoryBtn").onclick = () => { renderMem(); openPanel($("memoryDrawer"), $("memoryBtn")); };
     $("memoryClose").onclick = () => closePanel($("memoryDrawer"));
     $("memoryDrawer").querySelector(".drawer-mask").onclick = () => closePanel($("memoryDrawer"));
-    $("memoryClear").onclick = () => { localStorage.removeItem(MEM_KEY); if (window.MemoryStore) MemoryStore.clear(); renderMem(); toast("小满失忆了，重新认识一下吧"); };
+    $("memoryClear").onclick = () => {
+      localStorage.removeItem(MEM_KEY);
+      if (window.MemoryStore) MemoryStore.clear();
+      // 会话状态一并清掉：清空记忆=重新认识，别让引擎的冷却/去重/引导节奏留幽灵
+      if (typeof MockEngine !== "undefined" && typeof MockEngine.resetSession === "function") MockEngine.resetSession(SID);
+      renderMem();
+      toast("小满失忆了，重新认识一下吧");
+    };
     // 首次引导的三个快捷入口（空状态内）
     if ($("quickSay")) $("quickSay").onclick = () => { $("textInput").focus(); };
     if ($("quickRemind")) $("quickRemind").onclick = () => {
@@ -2056,6 +2063,9 @@ const App = (() => {
           ? `导入 ${r.imported} 条（跳过重复 ${r.skipped} 条，记忆 ${r.memories} 条`
           : `没有新记录（${r.skipped} 条已存在，记忆 ${r.memories} 条`)
           + (extra.length ? "，" + extra.join("，") : "") + "）";
+        // 导入=会话内容整体换血：清掉引擎的旧节奏（最近回复/冷却/引导），
+        // 否则刷新后还会按导入前的上下文去重或重复问"怎么称呼你"
+        if (typeof MockEngine !== "undefined" && typeof MockEngine.resetSession === "function") MockEngine.resetSession(SID);
         toast("导入完成，马上刷新");
         setTimeout(() => location.reload(), 500);
       } catch (e) {

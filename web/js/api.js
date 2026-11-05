@@ -418,7 +418,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     const t0 = nowMs();
     const out = streamOut("offline", "local", "offline");
     notifyMode("offline");
-    const r = await MockEngine.reply(history);
+    const r = await MockEngine.reply(history, sessionId());
     const text = String((r && r.reply) || "");
     await emitLocalReply(text, handlers, "offline");
     out.ttfb = out.firstToken = nowMs() - t0;
@@ -496,7 +496,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
       const providerReply = extractReplyPrefix(donePayload.content || "") || "";
       if (!acc && !providerReply) {
         // 空回复 → 切回本地离线引擎，mode=mock，UI 明确标注"离线示例模式"
-        const local = await MockEngine.reply(history);
+        const local = await MockEngine.reply(history, sessionId());
         const text = String((local && local.reply) || FALLBACK_REPLY);
         await emitLocalReply(text, handlers, "mock");
         out.mode = "mock";
@@ -608,7 +608,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     out.tokens = out.tokens || raw.length;
     if (!emitted && !raw) {
       // 空回复同样不能标成真模型：切本地引擎 + mode=mock 明确告知
-      const local = await MockEngine.reply(history);
+      const local = await MockEngine.reply(history, sessionId());
       const text = String((local && local.reply) || FALLBACK_REPLY);
       await emitLocalReply(text, handlers, "mock");
       out.mode = "mock";
@@ -762,7 +762,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
   async function chatMock(history) {
     // 安卓 WebView 里没有本地 8902 服务：直接走同进程离线规则引擎
     // （否则每次都要等 15s 超时才发现不可达）
-    if (nativeBridge()) return MockEngine.reply(history);
+    if (nativeBridge()) return MockEngine.reply(history, sessionId());
     const cfg = loadCfg();
     const base = mockBase(cfg);
     let res;
@@ -981,7 +981,7 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     }
     markDegraded("offline");
     notifyMode("offline");
-    return MockEngine.reply(history);
+    return MockEngine.reply(history, sessionId());
   }
 
   async function chat(history, opts) {
@@ -989,12 +989,12 @@ reminders：ta让你定时提醒什么事时，填[{"text":"提醒内容","time"
     // 降级链：自填 key 直连 / 服务端代理 / 安卓原生（需授权）→ mock → 离线引擎
     if (cfg.mode === "offline") {
       notifyMode("offline");
-      return MockEngine.reply(history);
+      return MockEngine.reply(history, sessionId());
     }
     if (cfg.mode === "mock") {
       if (nativeBridge()) {
         notifyMode("offline");
-        return MockEngine.reply(history);
+        return MockEngine.reply(history, sessionId());
       }
       return fallbackMock(history);
     }
