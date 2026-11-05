@@ -25,6 +25,9 @@ EXCLUDED_PREFIX_PATHS = (
     "assets/audio/selftest.",
     # Hiyori 全档纹理（4.12MiB）无任何路径引用，不参与发布物一致性比对
     "assets/models/hiyori/Hiyori.2048/",
+    # 全尺寸基准分层与缩略图运行时不请求（设备按档取图），不进 APK
+    "assets/live2d/original/art/layers/",
+    "assets/live2d/original/art/thumb.png",
 )
 
 
