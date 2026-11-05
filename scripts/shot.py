@@ -21,6 +21,8 @@ require_browser_allowed(__file__)
 
 from playwright.sync_api import sync_playwright
 
+from ci_artifacts import write_result
+
 
 def _load_env():
     """端口/主机集中配置唯一真源：scripts/env.sh（经 bash source 读取）"""
@@ -87,9 +89,13 @@ def run(step):
             page.screenshot(path=os.path.join(SHOTS, "02_typing.png"))
             page.wait_for_timeout(3000)  # 分条送达
             page.screenshot(path=os.path.join(SHOTS, "03_chat.png"))
+            # 用"对方气泡条数增加"判定第二条回复到达：:last-child 会被打字/分隔等兄弟节点干扰
+            n_before = page.locator("#messages .msg-row.them").count()
             page.fill("#textInput", "能不能抱一下，就一下")
             page.click("#sendBtn")
-            page.wait_for_selector("#messages .msg-row.them:last-child", state="attached", timeout=15000)
+            page.wait_for_function(
+                "(n) => document.querySelectorAll('#messages .msg-row.them').length > n",
+                arg=n_before, timeout=15000)
             page.wait_for_timeout(2000)
             page.screenshot(path=os.path.join(SHOTS, "04_intimate.png"))
 
@@ -116,10 +122,12 @@ def run(step):
             print("CONSOLE_ERRORS:")
             for e in errors[:8]:
                 print(" -", e[:180])
-            if STRICT:
-                sys.exit(1)
         else:
             print("NO_CONSOLE_ERRORS")
+        write_result(f"shot_{step}", [("无 console/page 错误", not errors, "; ".join(errors[:3]))],
+                     extra={"step": step, "screenshots": SHOTS})
+        if errors and STRICT:
+            sys.exit(1)
 
     print(f"SHOT_{step}_OK → {SHOTS}/")
 
