@@ -6,7 +6,7 @@
 
 | workflow | 触发 | 内容 | 典型耗时 | 是否用 Docker / 浏览器 |
 |---|---|---|---|---|
-| `ci.yml` | push（main / feat/** / fix/** / zhiqiu/**）、PR→main、手动、被 gates 调用 | Node 22：`npm ci` + `npm test`（基线 181）+ Biome（0 error）；Python 3.12：`compileall` + `build_assets.sh` + `verify_assets.py` + `pytest`（145 passed + 19 subtests） | 3–5 min | 否 |
+| `ci.yml` | push（main / feat/** / fix/** / zhiqiu/**）、PR→main、手动、被 gates 调用 | Node 22：`npm ci` + `npm test`（基线 181）+ Biome（0 error）；Python 3.12：`compileall` + `build_assets.sh` + `verify_assets.py` + `pytest`（145 passed + 19 subtests）；`python-scripts` 矩阵：`test_mock_api`（12/12）+ `test_memory_recall`（152/152，进程内起 mock，不进 Docker） | 3–6 min | 否 |
 | `e2e.yml` | push→main、手动、被 gates 调用 | `docker compose` 起 web 8901 / mock 8902 / tts 8903（`XIAOMAN_TTS_PROVIDER=none` 静音）；Playwright Chromium `--mute-audio`；`test_e2e` 60、`test_feature_loop` 43、`test_live2d_original` 24、`test_raf_budget` 8 | 10–15 min | 是 |
 | `android.yml` | `workflow_dispatch`、tag `v*`、被 gates 调用 | JDK 21 + Android SDK 34/build-tools 34 → `assembleDebug`（默认，不签名；可选 release 未签名）→ 上传 APK + 体积写入 job summary | 5–8 min | 否 |
 | `gates.yml` | 仅 `workflow_dispatch` | 并行复用 ci / e2e / android 三条（一键全套） | 与最慢的 e2e 接近 | 视子流程 |
@@ -35,6 +35,7 @@ Python 脚本统一经 `scripts/env.sh` / `os.environ` 读取；`test_live2d_ori
 |---|---|---|---|
 | Node 单测 / Biome | ✅ | 可选 | 无外部依赖，秒级 |
 | Python pytest / 发布物一致性 | ✅ | 可选 | 纯标准库 |
+| `test_mock_api` / `test_memory_recall` | ✅ | 可选 | 纯 Python + node 离线引擎；只需 mock 8902，ci.yml 用 `python server/mock_api.py` 起进程，不依赖 Docker |
 | 浏览器 E2E（四套） | ✅（main / 手动） | 调试时 | 需要 Docker + Playwright |
 | Gradle 出包 | ✅（按需） | 可选 | 只出 debug 包，分钟数敏感 |
 | 真机 / AVD / MuMu 模拟器 | ❌ | ✅ 必须本地 | 悬浮窗、TTS 发声、厂商 ROM、耗电采样 |
