@@ -143,11 +143,76 @@ const Stats = (() => {
     };
   }
 
+  /**
+   * 删除单条消息时反向扣减（不变量：任何计数都不小于 0）。
+   * 只回退这条消息自己贡献的那一份，别的消息不受影响。
+   */
+  function unbump(text, at) {
+    try {
+      at = (at == null) ? Date.now() : at;
+      const s = load();
+      if (!s || !Object.keys(s).length) return s;
+      s.msgs = Math.max(0, (s.msgs || 0) - 1);
+      if (HAHA_RE.test(text || "")) s.haha = Math.max(0, (s.haha || 0) - 1);
+      const h = new Date(at).getHours();
+      if (h >= NIGHT_H[0] || h < NIGHT_H[1]) s.night = Math.max(0, (s.night || 0) - 1);
+      const dk = dayKey(at);
+      const per = (s.perDay && typeof s.perDay === "object" && !Array.isArray(s.perDay)) ? s.perDay : null;
+      if (per && Number(per[dk]) > 0) {
+        per[dk] = Number(per[dk]) - 1;
+        if (per[dk] <= 0) delete per[dk];
+      }
+      try {
+        const emojis = (String(text || "").match(EMOJI_RE) || []).slice(0, 5);
+        if (emojis.length && s.emoji && typeof s.emoji === "object" && !Array.isArray(s.emoji)) {
+          for (const e of emojis) {
+            if (Number(s.emoji[e]) > 0) s.emoji[e] = Number(s.emoji[e]) - 1;
+            if (s.emoji[e] <= 0) delete s.emoji[e];
+          }
+        }
+      } catch (e2) { /* 老 WebView 不支持 u-flag 正则：静默跳过 */ }
+      save(s);
+      return s;
+    } catch (e) { return load(); }
+  }
+
+  /** 备份用：原样读出土数据（不做视图投影） */
+  function raw() { return load(); }
+
+  /**
+   * 备份还原：逐项取较大值合并（不清零、不翻倍）。
+   * 换机（本机为空）时等价于完整还原；在本机已有数据时导入同一份备份不会重复累加。
+   */
+  function merge(src) {
+    if (!src || typeof src !== "object") return snapshot();
+    const s = load();
+    const num = (a, b) => Math.max(Number(a) || 0, Number(b) || 0);
+    s.msgs = num(s.msgs, src.msgs);
+    s.haha = num(s.haha, src.haha);
+    s.night = num(s.night, src.night);
+    const days = new Set(Array.isArray(s.days) ? s.days.map(String) : []);
+    for (const d of (Array.isArray(src.days) ? src.days : [])) days.add(String(d));
+    s.days = Array.from(days).slice(-DAYS_MAX);
+    const per = Object.assign({}, (s.perDay && !Array.isArray(s.perDay)) ? s.perDay : {});
+    const srcPer = (src.perDay && typeof src.perDay === "object" && !Array.isArray(src.perDay)) ? src.perDay : {};
+    for (const k of Object.keys(srcPer)) per[k] = num(per[k], srcPer[k]);
+    const keys = Object.keys(per).sort().slice(-PER_DAY_MAX);
+    s.perDay = {};
+    for (const k of keys) if (Number(per[k]) > 0) s.perDay[k] = Number(per[k]);
+    const emoji = Object.assign({}, (s.emoji && !Array.isArray(s.emoji)) ? s.emoji : {});
+    const srcEmoji = (src.emoji && typeof src.emoji === "object" && !Array.isArray(src.emoji)) ? src.emoji : {};
+    for (const k of Object.keys(srcEmoji)) emoji[k] = num(emoji[k], srcEmoji[k]);
+    const top = Object.entries(emoji).sort((a, b) => b[1] - a[1]).slice(0, EMOJI_MAX);
+    s.emoji = Object.fromEntries(top);
+    save(s);
+    return snapshot();
+  }
+
   function clear() {
     try { localStorage.removeItem(KEY); } catch (e) { }
   }
 
-  return { bump, snapshot, clear, KEY, dayKey, daily, streak };
+  return { bump, unbump, snapshot, raw, merge, clear, KEY, dayKey, daily, streak };
 })();
 if (typeof module === "object" && module.exports) module.exports = Stats;   // node 单测用
 window.Stats = Stats;   // const 不挂 window，跨模块守卫需显式挂载

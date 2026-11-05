@@ -170,6 +170,68 @@ const ChatStore = (() => {
     return removed;
   }
 
+  /** 按主键删除单条（消息菜单删除用）；返回是否删到 */
+  async function remove(id) {
+    const key = Number(id);
+    if (!Number.isFinite(key)) return false;
+    const db = await open();
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    const existed = await new Promise((resolve, reject) => {
+      const req = store.get(key);
+      req.onsuccess = () => resolve(!!req.result);
+      req.onerror = () => reject(req.error);
+    });
+    if (existed) store.delete(key);
+    await txDone(tx);
+    return existed;
+  }
+
+  /** 就地改一条消息的正文（编辑后重发用）；返回是否改到 */
+  async function update(id, content) {
+    const key = Number(id);
+    if (!Number.isFinite(key)) return false;
+    const db = await open();
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    const ok = await new Promise((resolve, reject) => {
+      const req = store.get(key);
+      req.onsuccess = () => {
+        const rec = req.result;
+        if (!rec) { resolve(false); return; }
+        store.put(Object.assign(rec, { content: String(content == null ? "" : content) }));
+        resolve(true);
+      };
+      req.onerror = () => reject(req.error);
+    });
+    await txDone(tx);
+    return ok;
+  }
+
+  /** 没有主键时（极旧记录）按 sid+时间+原文定位删除 */
+  async function removeMatch(sid, at, content) {
+    const db = await open();
+    const tx = db.transaction(STORE, "readwrite");
+    const index = tx.objectStore(STORE).index("sid_at_id");
+    const range = rangeFor(sid, at == null ? null : Number(at));
+    let removed = 0;
+    await new Promise((resolve, reject) => {
+      const req = index.openCursor(range);
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (!cur || removed) { resolve(); return; }
+        if (cur.value.content === String(content == null ? "" : content)) {
+          cur.delete();
+          removed = 1;
+        }
+        cur.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+    await txDone(tx);
+    return removed > 0;
+  }
+
   async function clear(sid) {
     const db = await open();
     const tx = db.transaction(STORE, "readwrite");
@@ -188,7 +250,7 @@ const ChatStore = (() => {
     await txDone(tx);
   }
 
-  return { open, append, list, listBefore, count, prune, clear, MAX_KEEP };
+  return { open, append, list, listBefore, count, prune, clear, remove, update, removeMatch, MAX_KEEP };
 })();
 
 if (typeof module === "object" && module.exports) module.exports = ChatStore;

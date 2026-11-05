@@ -174,6 +174,53 @@ const Reminders = (() => {
   function cancel(id) { save(load().filter(r => r.id !== id)); }
   function all() { return load().sort((a, b) => a.at - b.at); }
 
+  /** 单条整理：时间戳/文案/完成态白名单化（备份导入用） */
+  function normalize(r) {
+    if (!r || typeof r !== "object") return null;
+    const text = String(r.text == null ? "" : r.text).trim().slice(0, 80);
+    const at = Number(r.at);
+    if (!text || !Number.isFinite(at) || at <= 0) return null;
+    return {
+      id: String(r.id || newId()),
+      text,
+      at,
+      done: !!r.done,
+      doneAt: Number(r.doneAt) || 0,
+      createdAt: Number(r.createdAt) || 0,
+      updatedAt: Number(r.updatedAt) || 0,
+    };
+  }
+
+  /**
+   * 合并导入（按 id 去重，其次按 文案+时刻 去重）：
+   * 同一提醒两边都有时保留 updatedAt/doneAt 更新的那份，不制造重复提醒。
+   */
+  function merge(items) {
+    const list = load();
+    const byId = new Map(list.map(r => [r.id, r]));
+    const byBody = new Map(list.map(r => [`${r.text}\u0000${r.at}`, r]));
+    let added = 0, updated = 0;
+    for (const raw of (items || [])) {
+      const r = normalize(raw);
+      if (!r) continue;
+      const old = byId.get(r.id) || byBody.get(`${r.text}\u0000${r.at}`);
+      if (old) {
+        const newer = (r.updatedAt || 0) >= (old.updatedAt || 0) && (r.doneAt || 0) >= (old.doneAt || 0);
+        if (newer) {
+          Object.assign(old, { text: r.text, at: r.at, done: r.done, doneAt: r.doneAt, updatedAt: r.updatedAt });
+          updated++;
+        }
+        continue;
+      }
+      list.push(r);
+      byId.set(r.id, r);
+      byBody.set(`${r.text}\u0000${r.at}`, r);
+      added++;
+    }
+    if (added || updated) save(list);
+    return { added, updated, total: list.length };
+  }
+
   /** 中文友好显示 */
   function fmt(ts) {
     const d = new Date(ts);
@@ -193,7 +240,7 @@ const Reminders = (() => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
-  return { add, update, due, pending, history, clearDone, cancel, all, parseTime, fmt, fmtFull, markDone, KEY };
+  return { add, update, due, pending, history, clearDone, cancel, all, merge, normalize, parseTime, fmt, fmtFull, markDone, KEY };
 })();
 if (typeof module === "object" && module.exports) module.exports = Reminders;   // node 单测用
 window.Reminders = Reminders;   // const 不挂 window，跨模块守卫需显式挂载
