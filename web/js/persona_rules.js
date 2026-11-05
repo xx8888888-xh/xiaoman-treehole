@@ -4,8 +4,9 @@
  * 真源：server/prompt_core.py
  * 生成：python scripts/gen_persona_rules.py
  * 校验：python scripts/gen_persona_rules.py --check
- * 消费方：web/js/api.js（浏览器内由 document.write 同步注入；
- *         Node 单测用 require）。Android 走 scripts/build_assets.sh 同步 web/。
+ * 消费方：web/js/api.js（index.html 里在本文件之后先加载，api.js 直接读
+ *         window.XMPersonaRules；Node 单测用 require）。
+ *         Android 走 scripts/build_assets.sh 同步 web/。
  * ============================================================ */
 
 (function (root, factory) {

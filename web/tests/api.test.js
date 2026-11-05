@@ -92,3 +92,16 @@ test("buildSystemPrompt 注入记忆与时间不破坏基础提示", () => {
   assert.match(p, /现在时间/);
   assert.ok(p.indexOf(API.SYSTEM_PROMPT) === 0);
 });
+
+test("index.html 在 api.js 之前先加载 persona_rules.js", () => {
+  // 浏览器侧提示词单一源的唯一接法：外链脚本按顺序执行，api.js 解析时
+  // window.XMPersonaRules 必须已就绪（见 api.js 顶部注释）。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const pr = html.indexOf('<script src="js/persona_rules.js"></script>');
+  const api = html.indexOf('<script src="js/api.js"></script>');
+  assert.ok(pr > 0, "index.html 必须显式加载 js/persona_rules.js");
+  assert.ok(api > pr, "persona_rules.js 必须排在 api.js 之前");
+});
+

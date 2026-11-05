@@ -4,7 +4,8 @@
 
 真源只有一处：server/prompt_core.py 的常量。
 本脚本把它派生成 web/js/persona_rules.js（浏览器/Android WebView/Node 共用），
-api.js 通过 require / document.write 注入后引用，不再手写副本。
+api.js 通过 index.html 的外链顺序（persona_rules.js 在前）或 Node 的 require 引用，
+不再手写副本。
 
 用法：
   python scripts/gen_persona_rules.py          # 重新生成
@@ -44,8 +45,9 @@ HEADER = """/* ============================================================
  * 真源：server/prompt_core.py
  * 生成：python scripts/gen_persona_rules.py
  * 校验：python scripts/gen_persona_rules.py --check
- * 消费方：web/js/api.js（浏览器内由 document.write 同步注入；
- *         Node 单测用 require）。Android 走 scripts/build_assets.sh 同步 web/。
+ * 消费方：web/js/api.js（index.html 里在本文件之后先加载，api.js 直接读
+ *         window.XMPersonaRules；Node 单测用 require）。
+ *         Android 走 scripts/build_assets.sh 同步 web/。
  * ============================================================ */
 """
 

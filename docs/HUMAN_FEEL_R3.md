@@ -297,7 +297,7 @@ python scripts/eval_human_feel.py --backend api \
 | 真源 | `server/prompt_core.py` | 唯一手写提示词所在，安全/身份/细则/底线/JSON 全在这里 |
 | 生成器 | `scripts/gen_persona_rules.py` | 把 8 段常量派生为 JS；`--check` 只校验 |
 | Web | `web/js/persona_rules.js` | 生成物（勿手改），UMD：Node `require` / 浏览器 `XMPersonaRules` |
-| Web 调用处 | `web/js/api.js` | 删掉手写副本；Node 走 `require`，浏览器解析期 `document.write` 同步注入（`index.html` 禁改，无法加 script 标签），拿不到就报错，绝不退回旧副本 |
+| Web 调用处 | `web/js/api.js` | 删掉手写副本；Node 走 `require`，浏览器读 `window.XMPersonaRules`（`index.html` 里 `persona_rules.js` 排在 `api.js` 之前，靠外链顺序同步就绪），拿不到就报错，绝不退回旧副本 |
 | Android | `android/app/src/main/assets/www/js/*` | `build_assets.sh` 把 `web/` 整目录同步过去，WebView 加载的就是同一份生成物；不单独维护 |
 
 **同源怎么锁**（`server/tests/test_persona_single_source.py` + `test_prompt_parity.py`）：

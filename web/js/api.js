@@ -83,16 +83,15 @@ const API = (() => {
   //
   // W20 单一源：提示词只在 server/prompt_core.py 维护，经
   // scripts/gen_persona_rules.py 生成 web/js/persona_rules.js；
-  // 本文件不再手写副本。index.html 不在可改范围，浏览器侧在解析期用
-  // document.write 同步注入（插入的脚本会先执行，SYSTEM_PROMPT 随即可用），
-  // Node 单测 / 其它环境走 require。若两边都拿不到，宁可报错也不退回旧副本。
-  let PR = null;
-  if (typeof module !== "undefined" && typeof require === "function") {
+  // 本文件不再手写副本。index.html 里 persona_rules.js 必须先于本文件加载
+  // （外链脚本）；Node 单测 / 其它环境走 require。若两边都拿不到，宁可报错
+  // 也不退回旧副本。
+  // 注意：这里不能用 document.write 注入——document.write 写出的外链脚本不会
+  // 在当前脚本执行期间同步求值，window.XMPersonaRules 仍是 undefined，会导致
+  // 本模块抛错、API 未定义，进而 app.js 顶层 const SID = API.sessionId() 连带崩掉。
+  let PR = (typeof window !== "undefined" && window.XMPersonaRules) || null;
+  if (!PR && typeof module !== "undefined" && typeof require === "function") {
     PR = require("./persona_rules.js");
-  }
-  if (!PR && typeof document !== "undefined" && typeof document.write === "function") {
-    document.write('<script src="js/persona_rules.js"><\/script>');
-    PR = (typeof window !== "undefined") ? window.XMPersonaRules : null;
   }
   if (!PR) throw new Error("persona_rules.js 未加载：提示词必须来自单一源");
   const {
