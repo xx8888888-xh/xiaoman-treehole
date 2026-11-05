@@ -37,3 +37,18 @@
 - 不启动 `server/tts_server.py` / `edge_tts`，不跑会发声的用例；TTS 只校验 HTTP 与文件生成，或标 `SKIP: muted by user`
 - 不在宿主侧起 8901/8902/8903；端到端走 Docker（容器未起时先停下等用户）
 - 浏览器一律 headless，且 `--mute-audio`
+
+## w21 · feat/perf-r3（性能遗留收口 · 第六轮并行任务之四）
+
+基线 `r5-20261105` / `a283342`；worktree `treehole-w21`。
+
+| 项 | 内容 |
+|---|---|
+| 可改 | `web/js/stage.js`、`web/js/perf.js`（新建）、`web/js/chat_pager.js`、`scripts/perf_r3.py`（新建）、`docs/PERF_R3.md`、`.github/workflows/perf.yml`（新建）、本节 |
+| 禁止 | `web/js/app.js`、`web/js/pet.js`、`web/css/**`、`web/index.html`、`server/**`、`android/**`、`.github/workflows/ci.yml`、`package.json`、`assets/**`、`web/js/vendor/**` |
+| 不做 | 本地 headless 浏览器 / AVD / Gradle；浏览器数据一律走云端 `perf.yml`（Playwright Chromium） |
+| 门槛 | `node --test "web/tests/*.test.js"` 串行 ≥222 全绿；每项优化必须有改前/改后同一场景硬数字 |
+
+四项目标：① 加载期 >50ms 长任务最长块 ≤50ms（纹理预解码挪 idle、分批）；② 冷启动→首条消息可发送 ≤1.5s；
+③ 流式逐字与历史窗口重建无 O(n) 全量重排；④ 200 轮后堆不线性上涨、纹理不重复解码。
+
