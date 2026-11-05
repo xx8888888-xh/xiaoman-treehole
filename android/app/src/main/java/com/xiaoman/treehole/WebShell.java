@@ -50,7 +50,7 @@ final class WebShell {
         applyFontScale(web, ctx);
     }
 
-    /** 系统字体缩放 → WebView textZoom（1.3× 系统字号不再被 configChanges 吞掉） */
+    /** 系统字体缩放 → WebView textZoom（系统字号不再被 configChanges 吞掉） */
     static void applyFontScale(WebView web, Context ctx) {
         if (web == null || ctx == null) return;
         float scale = 1f;
@@ -59,7 +59,10 @@ final class WebShell {
             if (c != null) scale = c.fontScale;
         } catch (Exception ignored) { }
         int zoom = (int) Math.round(scale * 100f);
-        zoom = Math.max(85, Math.min(130, zoom));   // 85%–130%：覆盖系统 1.3× 字号，且不撑破布局
+        // 85%–150%：上限从 130 放到 150，系统「特大」1.5× 字号原样生效。
+        // 布局在 1.5× 下仍无横向溢出（气泡 max-width 按百分比收敛、页面纵向滚动），
+        // 证据见 docs/android-battery/R2_SLIM_POWER_REPORT.md 的字号实测。
+        zoom = Math.max(85, Math.min(150, zoom));
         try { web.getSettings().setTextZoom(zoom); } catch (Exception ignored) { }
     }
 

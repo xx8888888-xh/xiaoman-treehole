@@ -247,7 +247,7 @@ public class MainActivity extends Activity {
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         // 活动声明了 orientation|screenSize|uiMode|fontScale 等，页面不重建：
-        // 这里显式让前端重算外观，并把系统字号同步进 textZoom（1.3× 不溢出）
+        // 这里显式让前端重算外观，并把系统字号同步进 textZoom（最大 1.5× 不溢出）
         if (webView != null) {
             WebShell.applyFontScale(webView, this);
             webView.evaluateJavascript("window.__retheme && window.__retheme()", null);
