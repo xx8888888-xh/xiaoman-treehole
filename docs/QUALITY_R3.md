@@ -52,7 +52,7 @@ matrix:
 | `stage.js` | **1** | 20 | 暂缓（error: `lint/suspicious/useIterableCallbackReturn`） |
 | `heartbeat.js` | **3** | 11 | 暂缓（3 个 error） |
 
-- 白名单落在 `web/package.json` 的 `lint` 脚本；`npm run lint` 覆盖 21 个源文件 + `tests/`，
+- 白名单落在 `web/package.json` 的 `lint` 脚本；`npm run lint` 覆盖 20 个源文件 + `tests/`，
   实测 46 个文件 / 0 error / 284 warning / 131 info，退出码 0。
 - warning 不拦闸门（Biome 默认只在 error 时非 0），所以「先纳入无 error 的文件」是安全的。
 - `stage.js` / `heartbeat.js` 需要改源码才能清零 error，本轮文件域禁止动 `web/js/**`，
@@ -107,6 +107,14 @@ git config core.hooksPath .githooks
 - 上传内容：`artifacts/` 全量 —— 截图（`shots/`、`live2d/`、`raf/`）+ 四套件日志 + 关键 JSON。
 - 保留期 7 天（`retention-days: 7`）；`if: always()`，红灯也留档。
 - Job Summary 末尾标注产物名，便于从 run 页面直接找。
+
+## 本轮云端实测（提交 `40d25b2`）
+
+| workflow | run | 触发 | 结论 |
+|---|---|---|---|
+| `ci.yml` | 42018077191 | push `feat/quality-r3` | success（node-tests-and-lint / python-tests / python-scripts×2 全绿） |
+| `e2e.yml` | 42018259928 | workflow_dispatch | success，产物 `e2e-artifacts-40d25b2`（4.38 MB，7 天） |
+| `gates.yml` | 42018318180 | workflow_dispatch | success（ci + e2e + android 全绿） |
 
 ## 维护约定
 
