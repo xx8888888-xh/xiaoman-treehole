@@ -248,6 +248,78 @@ def check_case_expect(result: CaseResult, universal: dict):
 
 
 # ---------------- 后端 ----------------
+class QuotaExhausted(Exception):
+    """某一家后端的配额/鉴权失效，轮换时应切下一家。"""
+
+    def __init__(self, provider: str, detail: str = ""):
+        self.provider = provider
+        self.detail = detail
+        super().__init__("%s: %s" % (provider, detail))
+
+
+class AllProvidersExhausted(Exception):
+    """配置里的后端全部被判死，评测必须停下来，不能把后端失败算成质量分。"""
+
+    def __init__(self, stats: list):
+        self.stats = stats
+        super().__init__("全部后端不可用（%d 家）" % len(stats))
+
+
+DEFAULT_BACKENDS_FILE = ROOT / "scripts" / "backends.local.json"
+EXAMPLE_BACKENDS_FILE = ROOT / "scripts" / "backends.example.json"
+
+
+def load_providers(path=None) -> tuple:
+    """读取多后端配置，返回 (providers, skipped)。
+
+    优先级：--backends-file / HUMAN_FEEL_BACKENDS_FILE →
+    HUMAN_FEEL_BACKENDS（内联 JSON 或文件路径）→ scripts/backends.local.json。
+    key 只从环境变量（key_env）或本地被 gitignore 的配置文件读，
+    仓库里的示例文件永远不含 key。
+    """
+    raw = os.environ.get("HUMAN_FEEL_BACKENDS", "").strip()
+    cfg_path = Path(path or os.environ.get("HUMAN_FEEL_BACKENDS_FILE")
+                    or DEFAULT_BACKENDS_FILE)
+    data = None
+    if raw.startswith("["):
+        data = json.loads(raw)
+    elif raw:
+        cfg_path = Path(raw)
+    if data is None and cfg_path.exists():
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    if data is None:
+        return [], []
+    entries = data.get("backends", data) if isinstance(data, dict) else data
+    providers, skipped = [], []
+    for entry in entries:
+        name = str(entry.get("name") or entry.get("model") or "provider")
+        key = ""
+        if entry.get("key_env"):
+            key = os.environ.get(entry["key_env"], "")
+        if not key and entry.get("key"):
+            key = str(entry["key"])
+        if not key and entry.get("use_default_credential"):
+            try:
+                import credentials
+                key = credentials.api_key()
+            except Exception:
+                key = ""
+        needs_key = entry.get("requires_key", True)
+        if needs_key and not key:
+            skipped.append({"name": name, "reason": "缺少 key（key_env 未设置）"})
+            continue
+        providers.append({
+            "name": name,
+            "base": str(entry.get("base") or "").rstrip("/"),
+            "model": str(entry.get("model") or ""),
+            "key": key,
+            "temperature": entry.get("temperature"),
+            "max_tokens": entry.get("max_tokens"),
+            "retries": entry.get("retries"),
+        })
+    return providers, skipped
+
+
 class MockBackend:
     name = "mock"
 
@@ -286,7 +358,8 @@ class ApiBackend:
     def __init__(self, base: str, model: str, key: str, delay: float = 1.0,
                  timeout: float = 60.0, temperature: float = 0.85,
                  now: str = "周五 22:10", max_tokens: int = 1500,
-                 retries: int = 3, dry_run: bool = False):
+                 retries: int = 3, dry_run: bool = False,
+                 provider_name: str = "", raise_on_quota: bool = False):
         import prompt_core
         import memory_slots
         self.prompt_core = prompt_core
@@ -301,9 +374,12 @@ class ApiBackend:
         self.max_tokens = max_tokens
         self.retries = retries
         self.dry_run = dry_run
+        self.provider_name = provider_name or model or "api"
+        self.raise_on_quota = raise_on_quota
         self.calls = 0
         self.errors = 0
         self.throttled = 0
+        self.last_status = 0
         self.slots = None
         self.sid = ""
 
@@ -355,6 +431,7 @@ class ApiBackend:
                 except Exception:
                     pass
                 last_err = "HTTP %s %s" % (e.code, detail)
+                self.last_status = e.code
                 if e.code in (429, 503, 502):
                     self.throttled += 1
                     time.sleep(min(30, 4 * (attempt + 1)))
@@ -365,6 +442,8 @@ class ApiBackend:
                 time.sleep(min(10, 2 * (attempt + 1)))
         if not raw:
             self.errors += 1
+            if self.raise_on_quota and self.last_status in (401, 402, 403, 429):
+                raise QuotaExhausted(self.provider_name, last_err)
             if reasoning_only:
                 return {"reply": "", "hook": None,
                         "_backend_error": "模型把 max_tokens 用在 reasoning，content 为空"}
@@ -387,6 +466,113 @@ class ApiBackend:
 
     def cleanup(self):
         pass
+
+
+class RotatingBackend:
+    """多免费后端轮换：429/402/401/403 或连续两次空响应就切下一家。
+
+    统计每家被调用多少次、第一次 429 的时间与原因；全部判死后抛
+    AllProvidersExhausted，由 evaluate 中止并把已完成条数写进报告，
+    绝不把“后端挂了”算成“回复不像人”。
+    """
+    name = "rotate"
+
+    def __init__(self, providers: list, delay: float = 1.0, timeout: float = 60.0,
+                 temperature: float = 0.85, now: str = "周五 22:10",
+                 max_tokens: int = 1500, retries: int = 3,
+                 factory=None):
+        if not providers:
+            raise ValueError("轮换后端至少需要一家可用 provider")
+        self.providers = providers
+        self.opts = {"delay": delay, "timeout": timeout, "temperature": temperature,
+                     "now": now, "max_tokens": max_tokens, "retries": retries}
+        self.factory = factory or self._make_api
+        self.idx = 0
+        self.rotations = 0
+        self.consecutive_fail = 0
+        self.case = None
+        self.current = None
+        self.stats = [{"name": p["name"], "model": p.get("model", ""),
+                       "base": p.get("base", ""), "calls": 0, "errors": 0,
+                       "429": 0, "first_429_at": "", "status": "待用",
+                       "reason": ""} for p in providers]
+        self._activate(0)
+
+    def _make_api(self, provider):
+        return ApiBackend(provider["base"], provider["model"], provider["key"],
+                          delay=self.opts["delay"], timeout=self.opts["timeout"],
+                          temperature=(provider.get("temperature")
+                                       if provider.get("temperature") is not None
+                                       else self.opts["temperature"]),
+                          now=self.opts["now"],
+                          max_tokens=(provider.get("max_tokens")
+                                      or self.opts["max_tokens"]),
+                          retries=(provider.get("retries")
+                                   or self.opts["retries"]),
+                          provider_name=provider["name"], raise_on_quota=True)
+
+    def _activate(self, idx):
+        self.idx = idx
+        self.consecutive_fail = 0
+        self.current = self.factory(self.providers[idx])
+        self.stats[idx]["status"] = "在用"
+        if self.case is not None:
+            self.current.reset_case(self.case)
+
+    def _refresh(self):
+        if not self.current:
+            return
+        st = self.stats[self.idx]
+        st["calls"] = getattr(self.current, "calls", 0)
+        st["errors"] = getattr(self.current, "errors", 0)
+        st["429"] = getattr(self.current, "throttled", 0)
+
+    def _switch(self):
+        self._refresh()
+        if self.idx + 1 >= len(self.providers):
+            return False
+        self.rotations += 1
+        self._activate(self.idx + 1)
+        return True
+
+    def reset_case(self, case):
+        self.case = case
+        if self.current:
+            self.current.reset_case(case)
+
+    def chat(self, history, user, case):
+        while True:
+            self._refresh()
+            try:
+                out = self.current.chat(history, user, case)
+            except QuotaExhausted as e:
+                st = self.stats[self.idx]
+                st["status"] = "配额/鉴权失效"
+                st["reason"] = str(e.detail)[:160]
+                if not st["first_429_at"]:
+                    st["first_429_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                self._refresh()
+                st["status"] = "配额/鉴权失效"
+                if not self._switch():
+                    raise AllProvidersExhausted(self.stats)
+                continue
+            if out.get("_backend_error"):
+                self.consecutive_fail += 1
+                if self.consecutive_fail >= 2 and self._switch():
+                    continue
+                return out
+            self.consecutive_fail = 0
+            return out
+
+    def snapshot(self):
+        return self.current.snapshot() if self.current else {}
+
+    def cleanup(self):
+        pass
+
+    def report(self):
+        self._refresh()
+        return {"rotations": self.rotations, "providers": self.stats}
 
 
 def parse_model_json(raw: str) -> dict:
@@ -469,8 +655,15 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
     results = []
     advice_turns = 0
     total_cases = len(cases)
+    aborted = None
     for i, case in enumerate(cases, 1):
-        res, adv = run_case(case, backend, universal)
+        try:
+            res, adv = run_case(case, backend, universal)
+        except AllProvidersExhausted as exc:
+            aborted = {"after_cases": len(results), "providers": exc.stats}
+            print("%s 中止：%s；已完成 %d/%d 条（后端失败不计入质量分）"
+                  % (LOG, exc, len(results), total_cases), flush=True)
+            break
         advice_turns += adv
         results.append(res)
         if not on_case:
@@ -480,7 +673,10 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
         elif on_case:
             on_case(res)
     metrics = compute_metrics(results, advice_turns)
-    return {"results": results, "metrics": metrics, "universal": universal}
+    data = {"results": results, "metrics": metrics, "universal": universal}
+    if aborted:
+        data["aborted"] = aborted
+    return data
 
 
 def compute_metrics(results: list, advice_turns: int) -> dict:
@@ -559,6 +755,7 @@ def summarize(data: dict) -> dict:
                       "reasons": [f["reason"] for f in r.failures]}
                      for r in results if not r.passed],
         "metrics": data["metrics"],
+        "aborted": data.get("aborted"),
     }
 
 
@@ -573,6 +770,25 @@ def render_markdown(summary: dict, backend_name: str, model: str = "",
              "", "| 类别 | 通过/总数 |", "|---|---|"]
     for cat, st in summary["by_category"].items():
         lines.append("| %s | %d/%d |" % (cat, st["passed"], st["total"]))
+    rot = summary.get("rotation")
+    if rot:
+        lines += ["", "| 后端 | 模型 | 调用 | 429 | 首次 429 | 状态 | 原因 |",
+                  "|---|---|---|---|---|---|---|"]
+        for p in rot["providers"]:
+            lines.append("| %s | %s | %d | %d | %s | %s | %s |"
+                         % (p["name"], p["model"] or "—", p["calls"], p["429"],
+                            p["first_429_at"] or "—", p["status"],
+                            (p["reason"] or "—")[:60]))
+        lines.append("")
+        lines.append("轮换 %d 次，实际切了 %d 家；上面每家的调用/429 次数即用量账。"
+                     % (rot["rotations"],
+                        sum(1 for p in rot["providers"] if p["calls"] > 0) - 1
+                        if rot["rotations"] else 0))
+    if summary.get("aborted"):
+        lines += ["", "**评测中止**：完成 %d 条后所有后端被判死（%s），剩余用例未跑，"
+                  "中止原因不折算成质量分。"
+                  % (summary["aborted"]["after_cases"],
+                     "、".join(p["name"] for p in summary["aborted"]["providers"])),]
     lines += ["", "| 反套路指标 | 实测 | 目标 |", "|---|---|---|",
               "| 建议出现率 | %.1f%% | ≤25%% |" % (m["advice_rate"] * 100),
               "| 四字总结式共情 | %.1f%% | 越低越好 |" % (m["summary_empathy_rate"] * 100),
@@ -603,7 +819,8 @@ def render_markdown(summary: dict, backend_name: str, model: str = "",
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="真人感评测（mock / 真实模型）")
-    ap.add_argument("--backend", choices=("mock", "api"), default="mock")
+    ap.add_argument("--backend", choices=("mock", "api", "local"), default="mock",
+                    help="mock/local=本地模板引擎（不计真实分）；api=真实模型")
     ap.add_argument("--cases", default=str(CASES_FILE))
     ap.add_argument("--base", default=os.environ.get("AI_API_BASE") or
                     "https://openrouter.ai/api/v1")
@@ -620,10 +837,38 @@ def main(argv=None) -> int:
     ap.add_argument("--json", default="")
     ap.add_argument("--md", default="")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--all", action="store_true",
+                    help="跑全部场景（默认也是全部；显式覆盖 --limit/--categories）")
+    ap.add_argument("--auto-rotate", action="store_true",
+                    help="按配置在多家免费后端间自动轮换（429/402/401/403 切下一家）")
+    ap.add_argument("--backends-file", default="",
+                    help="多后端配置文件（默认 scripts/backends.local.json 或 HUMAN_FEEL_BACKENDS）")
     args = ap.parse_args(argv)
 
-    if args.backend == "mock":
+    skipped = []
+    if args.all:
+        args.limit = 0
+        args.categories = ""
+
+    if args.auto_rotate:
+        args.backend = "api"
+        providers, skipped = load_providers(args.backends_file or None)
+        if not providers:
+            print("%s 自动轮换没有可用后端：请配置 %s（参考 %s），"
+                  "key 只放环境变量或本地被忽略的配置文件"
+                  % (LOG, DEFAULT_BACKENDS_FILE, EXAMPLE_BACKENDS_FILE),
+                  file=sys.stderr)
+            return 2
+        print("%s 轮换后端：%s；跳过：%s"
+              % (LOG, "、".join(p["name"] for p in providers),
+                 "、".join(s["name"] for s in skipped) or "无"), flush=True)
+        backend = RotatingBackend(providers, delay=args.delay, timeout=args.timeout,
+                                  now=args.now, max_tokens=args.max_tokens,
+                                  retries=args.retries)
+    elif args.backend in ("mock", "local"):
         backend = MockBackend(Path(args.cases))
+        if args.backend == "local":
+            print("%s local = 本地模板引擎，不是真实模型；分数不计入真实分" % LOG)
     else:
         import credentials
         key = os.environ.get("AI_API_KEY") or credentials.api_key()
@@ -651,19 +896,37 @@ def main(argv=None) -> int:
     data = evaluate(Path(args.cases), backend, limit=args.limit, categories=cats,
                     on_case=on_case)
     summary = summarize(data)
-    if args.backend == "api":
+    if isinstance(backend, RotatingBackend):
+        summary["rotation"] = backend.report()
+        summary["backend_calls"] = sum(p["calls"] for p in summary["rotation"]["providers"])
+        summary["backend_errors"] = sum(p["errors"] for p in summary["rotation"]["providers"])
+        summary["backend_throttled"] = sum(p["429"] for p in summary["rotation"]["providers"])
+        summary["backend"] = backend.name
+        summary["model"] = "、".join(p["name"] for p in summary["rotation"]["providers"])
+    elif args.backend == "api":
         summary["backend_calls"] = getattr(backend, "calls", 0)
         summary["backend_errors"] = getattr(backend, "errors", 0)
         summary["backend_throttled"] = getattr(backend, "throttled", 0)
     summary["backend"] = backend.name
-    summary["model"] = args.model if args.backend == "api" else "mock-template"
+    summary["model"] = (summary.get("model") or
+                        (args.model if args.backend == "api" else "mock-template"))
     summary["seconds"] = round(time.time() - started, 1)
-    if args.backend == "api" and summary["backend_errors"]:
-        summary["notes"] = ("后端调用失败 %d 次（限流 %d 次）；失败用例不计入质量分"
-                            % (summary["backend_errors"], summary["backend_throttled"]))
+    if getattr(backend, "name", "") == "rotate" or args.backend == "api":
+        if summary.get("aborted"):
+            summary["notes"] = ("所有免费后端都不可用，评测在完成 %d 条后中止；"
+                                "中断不是质量分，真实分仍为空"
+                                % summary["aborted"]["after_cases"])
+        elif summary.get("backend_errors"):
+            summary["notes"] = ("后端调用失败 %d 次（限流 %d 次）；失败用例不计入质量分"
+                                % (summary["backend_errors"], summary["backend_throttled"]))
+        else:
+            summary["notes"] = ""
     else:
-        summary["notes"] = ("仅 mock 模板引擎，不代表真实模型表现"
-                            if args.backend == "mock" else "")
+        summary["notes"] = ("仅 mock 本地模板引擎，不代表真实模型表现"
+                            if args.backend in ("mock", "local") else "")
+    if skipped:
+        summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
+            "未配置 key 跳过：%s" % "、".join(s["name"] for s in skipped)
 
     md = render_markdown(summary, summary["backend"], summary["model"], summary["notes"])
     print(md)
@@ -675,6 +938,8 @@ def main(argv=None) -> int:
         Path(args.md).write_text(md + "\n", encoding="utf-8")
         print("%s 报告写入 %s" % (LOG, args.md))
 
+    if summary.get("aborted"):
+        return 2
     if summary.get("backend_errors") and summary["passed"] == 0:
         return 2
     if summary["rate"] < args.min_rate:
