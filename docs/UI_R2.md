@@ -77,6 +77,7 @@
 | 对话（底） | 输入框上方叠了 4 条 44px 横幅（错误、排队、语音、离线），像"提示墙"，把对话挤成 2.5 条气泡 | 新增 `.status-stack` 一列：**要你动手**的（错误/排队）留 40px 卡，**知道就好**的（语音/离线）收成 32px 纯文字行（小圆点 + 静音关掉）；错误卡才能占用注意力 | 9.0 |
 | 对话（中/顶） | 舞台长期占 33dvh，历史/对话只剩 340px 可视高度 | `@media (max-width:899px)` 下 `:has(#emptyState.hidden)` 时舞台收至 `clamp(158,23dvh,212)`，多出约 64px；桌面保持全高 | 9.0 |
 | 对话流顶部 | 消息滚到舞台下沿时硬切口 | `#chatScroll` 顶部 12px `mask-image` 渐隐（静态、无 rAF） | 8.8 |
+| 打字指示 | 打字点用 1.8s 无限呼吸，违反"静止零动画"且 Node 测试直接判红 | 去掉 `breathe` 动画，保留静态圆点 + "正在想…" | 8.8 |
 | 设置 | 长下拉文案被截成半行（"…服务端代理，推荐"被箭头压住） | `.field select` 14px + 右侧留 32px 给原生箭头 | 8.8 |
 | 记忆 | 提醒条目"今天 19:33 · 面试前深呼吸三次"被两个 44px 按钮挤成两行 | 行内改/删按钮 34px、间距 6px，单行放下 | 9.0 |
 | 留存钩子 | hook chip 是又一条米色横幅，和状态条混淆 | 改成左侧 2px 短竖线的旁白（透明底，hover 才浮面），与 `.system-tip` 同一语法 | 8.8 |
@@ -87,6 +88,7 @@
 本次只本地跑了与改动直接相关的项（负载纪律：不开模拟器、不跑 Gradle、不跑长压测）：
 
 - `scripts/test_appearance.py`：**22/22**（复跑，含极简零动画、字号 18/16、focus ring、reduce）。
+- `web/` Node 单测：**181/181**（`node --test "tests/*.test.js"`；第一次云端 CI 在 `node:test` 红，原因是 CSS 里残留了 `.bubble.typing` 的 `breathe` 无限呼吸和 toast 入场 keyframes，违反"只允许 modal-in/panel-in"；已删除这两个 keyframes 与对应 `animation`，静态打字点 + 文案表达即可）。
 - 静止 rAF：浅色 **0 次 / 3s**、深色 **0 次 / 3s**（Playwright 注入 rAF 计数，空态页）。
 - 对比度（令牌静态计算 + 渲染后取样，`after/contrast_r2.json`）：正文 16.4/14.41，次级 7.0/7.97，最浅的 `text-3` 在 `surface-2` 上 **5.14 / 5.37**、在 `surface` 上 **5.79 / 5.95**；渲染后旁白状态行 6.38 / 6.81；`line-strong` 交互边界 4.10 / 4.04（非文本 ≥3:1）。
 - 未本地重跑：`test_e2e` 60、`test_paging`、`test_onboarding`、`test_lifeline_ui`、`test_raf_budget` 8、feature_loop 43、live2d 24 —— 这些改动不碰 JS/DOM 结构（只加了一个 `.status-stack` 包裹层，`id` 均保留），交由云端 CI 跑；收尾后已 push `feat/ui-polish-r2`。

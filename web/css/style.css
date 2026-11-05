@@ -261,7 +261,6 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   border-radius: var(--radius-xl);
   overflow: hidden;
   background: transparent;
-  transition: height var(--dur-slow) var(--ease-out);
 }
 /* 一旦有了聊天内容（空态收起），舞台就让位：角色"退到旁边"，把高度还给对话（仅小屏） */
 @media (max-width: 899px) {
@@ -515,8 +514,7 @@ html[data-preset="minimal"] { --bubble-me: var(--surface-2); }
   background: var(--accent);
   flex-shrink: 0;
 }
-html[data-motion="on"] .bubble.typing::before { animation: breathe 1.8s var(--ease-standard) infinite; }
-@keyframes breathe { 0%, 100% { opacity: .35; transform: scale(.86); } 50% { opacity: 1; transform: scale(1); } }
+/* 打字指示不呼吸：静止一个实心点，靠文案"正在想…"表达即可 */
 #typingRow .avatar-mini { display: none; }
 
 /* 留存钩子条 */
@@ -897,9 +895,7 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   line-height: var(--lh-snug);
   text-align: left;
   box-shadow: var(--shadow-2);
-  animation: toast-in var(--dur-base) var(--ease-out);
 }
-@keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(6px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
 /* ---------- 环境旁白：降级 / 语音不可用 ----------
    这类信息"知道就好"，不该和错误卡一样抢眼：去掉整块底与描边，收成一行小字 */
