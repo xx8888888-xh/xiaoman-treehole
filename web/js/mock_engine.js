@@ -173,8 +173,10 @@ const MockEngine = (() => {
       "一个人待着也有一个人的好处，起码外卖不用分||……但要说不想有人陪，那是假的。说吧，我在"
     ],
     insomnia: [
-      "又是累的一天吧||饭还是要吃的，哪怕泡个面。躺下之前把手机放远一点，就远二十厘米，试试",
-      "失眠多久了？是睡不着，还是睡着了老醒||要是老这样，明天抽十分钟晒晒太阳，亲测比咖啡管用"
+      "又是累的一天吧||饭还是要吃的，哪怕泡个面。今晚别撑了，能早就早点躺",
+      "失眠这个我熟，越想睡越清醒||别跟自己较劲，睡不着就躺着听我说会儿",
+      "凌晨的脑子最不听劝||你现在是睡不着，还是不敢闭眼？",
+      "黑眼圈都快熬成勋章了||说说，是心里有事，还是身体在闹"
     ],
     family: ["家里的事最磨人，说不开又躲不掉||……慢慢说，我先听"],
     money:  ["钱的事最具体也最烦人||先别慌，说说是哪一环出问题了，我帮你捋捋"],
@@ -201,6 +203,10 @@ const MockEngine = (() => {
       "嗯……让我猜猜，这事儿对你还挺重要||说说看，我猜得准不准",
     ]
   };
+  // 拒绝建议守卫（与 server/mock_api.py REFUSAL_RE / ADVICE_WORD_RE 同源）：
+  // 用户说"不用给我方案"时，话题池里也不该再把被拒的词推回去
+  const REFUSAL_RE = /(?:不用|不要|不需要|别|少来|少给)(?:给我?|跟我?)?(?:方案|建议|步骤|分析|道理|鸡汤|大道理)|说句人话|说人话|别劝我|不用劝我/;
+  const ADVICE_WORD_RE = /方案|建议|步骤|分析|道理|鸡汤/;
   const HOOKS = {
     work: "对了，你们那个老板，上次说要请你们喝奶茶的事后来兑现了吗",
     love: "你现在……是一个人在家吗",
@@ -269,7 +275,7 @@ const MockEngine = (() => {
   };
   const MEM_AWARE_COOLDOWN = 3;
   let memAwareTs = {};
-  let recentReplies = [];  // P3-1 近轮去重：近 2 轮已用回复（模块级，刷新重置与 onb 同限制）
+  let recentReplies = [];  // P3-1 近轮去重：近 8 轮已用回复（模块级，刷新重置与 onb 同限制）
   /** 用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ [键, 值] 或 null。
    *  同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
    *  prior=当前轮之前的记忆（reply 约定：history 末尾即当前轮）。
@@ -445,15 +451,27 @@ const MockEngine = (() => {
       const awarePool = (MEM_AWARE_POOL[aware[0]] || []).map(t => t.split("{v}").join(aware[1]));
       if (awarePool.length) pool = awarePool;  // topic 保持原值（lastTopic/EMO_MAP 不受影响）
     }
-    // P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行
-    let msg = null;
-    for (let i = 0; i < pool.length; i++) {
-      const cand = pick(pool);
-      if (!recentReplies.slice(-2).includes(cand)) { msg = cand; break; }
+    // 用户明确拒绝建议/方案时，回声池与话题池都先滤掉被拒的词（与服务端同规则）
+    if (REFUSAL_RE.test(userText)) {
+      const offAdvice = arr => arr.filter(t => !ADVICE_WORD_RE.test(t));
+      pool = offAdvice(pool);
+      if (!pool.length) pool = offAdvice(TOPIC.generic);
+      if (!pool.length) pool = TOPIC.generic;
     }
-    if (msg === null) msg = pick(pool);
+    // P3-1 近轮去重升级（与服务端 _pick 同算法）：先算"可用候选"再随机，
+    // 而不是随机撞次数——撞大运会随机漏掉池内某些模板（句长/开头方差被动塌陷）
+    const prevOpen = recentReplies.length ? recentReplies[recentReplies.length - 1].slice(0, 4) : "";
+    const availPick = (avoid, avoidOpen) => {
+      const cands = pool.filter(c => !avoid.includes(c)
+        && !(avoidOpen && c.length >= 4 && c.slice(0, 4) === prevOpen));
+      return cands.length ? pick(cands) : null;
+    };
+    let msg = availPick(recentReplies, true)
+      || availPick(recentReplies.slice(-2), true)
+      || availPick(recentReplies.slice(-1), false)
+      || pick(pool);
     recentReplies.push(msg);
-    if (recentReplies.length > 4) recentReplies.shift();
+    if (recentReplies.length > 8) recentReplies.shift();  // 与服务端同容量（8 轮）
     if (msg.startsWith("@CTX|")) {
       const neg = ["work", "love", "family", "money"].includes(lastTopic);
       msg = neg ? msg.slice(5)
