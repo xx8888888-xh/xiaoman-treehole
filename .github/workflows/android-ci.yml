@@ -205,27 +205,15 @@ jobs:
             # Screenshot: home screen
             adb exec-out screencap -p > emulator_01_home.png
 
-            # Tap input field (coordinates for pixel_4 profile, fallback to percentage)
-            adb shell input tap 140 615
-            sleep 1
-
-            # Input text using %s for spaces
-            adb shell input text "jin%s tian%s hao%s lei%s a"
-            sleep 1
-
-            # Tap send button（先收软键盘防遮挡——zhiqiu 实测修复）
-            adb shell input keyevent 111
-            sleep 1
-            adb shell input tap 296 615
-            sleep 8
-
-            # Verify reply appeared via uiautomator dump
-            adb shell uiautomator dump /sdcard/window_dump.xml
-            adb pull /sdcard/window_dump.xml ./window_dump.xml
-            grep -q "小满\|xiaoman\|回复\|reply" ./window_dump.xml || { echo "WARN: Expected reply text not found in UI dump"; }
-
-            # Screenshot: chat
-            adb exec-out screencap -p > emulator_02_chat.png
+            # ---- 主界面聊天冒烟（P0 修复）----
+            # 旧脚本 `tap 140 615` / `tap 296 615` 是照截图猜的坐标，实测打在舞台空白区：
+            # textInput 一直空、sendBtn 一直 disabled、消息根本没发出去，而且没有任何断言，
+            # 流水线照样"绿"，等于什么都没验。现在坐标从 WebView DOM 真实盒子动态取，
+            # 并且硬断言：textInput 非空 / sendBtn 不再 disabled / #messages 出现新气泡 /
+            # logcat 有 [probe] msg me + msg them。任一条不成立直接 exit 1。
+            pip3 install --quiet --user requests websockets 2>/dev/null || pip3 install --quiet requests websockets || true
+            python3 -c "import websockets, requests; print('cdp deps ok')" || { echo "ERROR: requests/websockets unavailable"; exit 1; }
+            python3 scripts/emulator_chat_check.py || { echo "ERROR: main chat check failed"; exit 1; }
 
             # Poke Live2D
             adb shell input tap 160 220

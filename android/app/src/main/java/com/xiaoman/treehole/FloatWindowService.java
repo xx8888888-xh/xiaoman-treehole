@@ -211,6 +211,8 @@ public class FloatWindowService extends Service {
         web.setWebViewClient(new PetWebClient(this));
         web.setWebChromeClient(new ProbeChromeClient());
         web.addJavascriptInterface(new PetBridge(this), "AndroidPet");
+        // 浮窗两条 WebView 与主界面共用同一个 AndroidTTS 注入入口（以前这里漏了 → 浮窗永远没声）
+        WebShell.attachAndroidTts(web, new AndroidTtsBridge(this));
         web.setOnTouchListener(new PetDragListener(this));
 
         petParams = new WindowManager.LayoutParams(
@@ -714,6 +716,8 @@ public class FloatWindowService extends Service {
         panelWeb.setWebViewClient(new AssetWebClient(this));
         panelWeb.setWebChromeClient(new ProbeChromeClient());
         panelWeb.addJavascriptInterface(new NetBridge(panelWeb), "AndroidNet");
+        // 迷你窗是 index.html?float=1：同样要 window.AndroidTTS，否则回复只有字没有声
+        WebShell.attachAndroidTts(panelWeb, new AndroidTtsBridge(this));
         panelWeb.loadUrl(MainActivity.BASE_URL + "?float=1");
         panelWeb.setBackgroundColor(Color.parseColor("#FFF9F2"));
         LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(
