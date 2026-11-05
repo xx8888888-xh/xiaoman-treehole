@@ -572,6 +572,7 @@
       "expect_any": [
         "张三"
       ],
+      "expect_scope": "any",
       "max_advice_turns": 0,
       "memory_values": [
         "张三"
