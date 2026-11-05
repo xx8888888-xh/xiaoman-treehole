@@ -7,6 +7,7 @@ android/.gradle/
 # 本地环境与密钥（严禁入库）
 upload/
 *.local
+*.local.json
 *.env
 .env
 *_token*

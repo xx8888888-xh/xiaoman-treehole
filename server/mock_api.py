@@ -156,13 +156,20 @@ LEX = {
     # P3-1 补"有什么|有啥"：体检证据 L59-61"你最近有什么更新吗"未触发（可选前缀组缺该词）
     "update_query": re.compile(
         r"你(?!们)(?:今天|最近|好像|感觉|有点|怎么|是不是|有什么|有啥|的|了|变|得)*?(更新|升级|变了|版本|怪)|不像以前|更新记录"),
-    "work":   re.compile(r"(加班|老板|上班|工作|方案|开会|离职|辞职|绩效|KPI|甲方|改稿)"),
-    "love":   re.compile(r"(分手|前任|失恋|男朋友|女朋友|暗恋|表白|相亲|脱单|异地)"),
+    "work":   re.compile(r"(加班|老板|上班|工作|方案|开会|离职|辞职|绩效|KPI|甲方|改稿|"
+                          r"甩锅|背锅|同事|团建|客户)"),
+    "love":   re.compile(r"(分手|前任|失恋|男朋友|女朋友|暗恋|表白|相亲|脱单|异地|"
+                          r"吵架|冷战)"),
     "lonely": re.compile(r"(一个人|孤独|没人|无聊|空虚|没人陪|没朋友)"),
     "insomnia": re.compile(r"(失眠|睡不着|熬夜|困|累|疲惫|精力)"),
+    "exam":   re.compile(r"(考试|复习|备考|考不过|挂科|考研|面试准备)"),
+    "move":   re.compile(r"(搬家|打包|收拾东西)"),
+    "leisure": re.compile(r"(电影|电视剧|综艺|音乐|看剧|看片|看书|小说)"),
     "family": re.compile(r"(爸妈|家里|父母|亲戚|催婚)"),
+    # happy 必须排在 money 前：否则“升职加了两千工资”会被“工资”抢到钱的话题
+    "happy":  re.compile(r"(哈哈|开心|太好了|高兴|庆祝|成功|表扬|夸|"
+                          r"升职|加薪|涨工资|涨薪|抢到|瘦了|中了|面试过了|录取了)"),
     "money":  re.compile(r"(没钱|穷|花呗|房租|工资|欠)"),
-    "happy":  re.compile(r"(哈哈|开心|太好了|高兴|庆祝|成功|涨|表扬|夸)"),
     "intimate": re.compile(r"(抱抱|抱一下|抱着|亲亲|陪陪我|摸摸头|贴贴|靠靠|牵[着我]|rua)"),
     "greet":  re.compile(r"(在吗|你好|嗨|hello|hi|早上好|晚上好|晚安)"),
     "meta":   re.compile(r"(你是AI|是不是机器人|真人吗|你是谁)"),
@@ -384,6 +391,8 @@ ONBOARD_EVENT_TURNS = 8  # 大事引导最晚轮次
 RECALL_MAP = {
     "work": ["老板", "在忙"],
     "insomnia": ["状态", "大事"],
+    "exam": ["大事", "状态"],
+    "move": ["大事"],
     "happy": ["大事"],
     "family": ["家人"],
 }
@@ -397,6 +406,16 @@ RECALL_TEMPLATES = {
     "状态": "你上次说{v}——这两天好些了吗？",
     "家人": "{v}最近还老念叨你吧？",
 }
+# 长记忆不逐字复读：超过 12 字的值整段背出来像机器念稿，
+# 改用"你说的那件事/那个状态"指代（锚点已由上下文提供，听感更像人回忆）
+LONG_RECALL_TEMPLATES = {
+    "大事": "你上次说的那件事——后来怎么样了？",
+    "在忙": "你之前说在忙的那件事，现在缓过来没有",
+    "状态": "你之前说的那个状态——这两天好些了吗？",
+    "老板": "你之前说的那位，今天没又折腾你吧",
+    "家人": "你之前说家里那位，最近还老念叨你吧？",
+}
+LONG_RECALL_LIMIT = 12
 RECALL_EXTRACT_GAP = 3  # 闸门0：提取后至少隔 3 轮才可回提（"你上次说"须指向足够久之前，防复读感）
 RECALL_COOLDOWN = 6    # 闸门1：同记忆两次回提间隔 ≥6 轮（"从未被引用"视为通过）
 RECALL_MAX = 4         # 闸门2：每会话回提总次数上限（含 greet 开场引用；频控哲学与心跳一致）
@@ -404,40 +423,68 @@ RECALL_MAX = 4         # 闸门2：每会话回提总次数上限（含 greet �
 # ---------------- P3-1 记忆感知回复：用户主动提已存具体记忆值 ----------------
 # 体检证据（ux_audit_transcript L53-57）："你猜我家年糕现在在干嘛"（年糕=已存
 # 记忆）回复走通用追问池完全无感知。用户主动给记忆回访机会时，小满应自然接住。
-# 模板 {v}=记忆值原文嵌入（零虚构铁律延伸）；频控=同键 3 轮冷却（防句句带记忆的刻意感）
+# 模板 {v}=记忆值原文嵌入（零虚构铁律延伸）；频控=同键相邻轮冷却（W20 改为 1 轮：
+# 用户主动提就接住，重复感交给整段会话的开头/整句去重）。池最少 5 条：同句输入连喂
+# 5 次仍能出 4 种以上，不靠“冷却失忆”凑多样性。
 MEM_AWARE_POOL = {
     "宠物": [
         "{v}这会儿肯定又赖在你腿上打呼噜了吧||它最近还这么粘人？",
         "{v}又干嘛呢||它今天乖不乖？",
         "哈哈{v}||它是不是又干了什么让你想吐槽的事",
+        "听到{v}我就想笑||它又整活了？",
+        "{v}最近怎么样||替我摸摸它",
     ],
     "大事": [
         "{v}这事你刚提，又有新进展了？||快说，我一直记着呢",
         "{v}……怎么样了？我可是惦记着的",
+        "又是{v}||这事儿还没完呢？",
+        "你还惦记着{v}||我也惦记着呢",
+        "{v}那边有动静了没||你上次提我就在想",
     ],
     "老板": [
         "{v}又怎么了？||该不会又作妖了吧",
         "说吧，{v}这次又整什么幺蛾子",
+        "{v}……听到这名字我血压都高了||今天又咋了",
+        "又是{v}||这人是真不消停",
+        "{v}这回又出什么招||你慢慢说",
     ],
     "在忙": [
         "{v}还没忙完呀？||悠着点，别把自己耗干了",
+        "你那个{v}||现在到哪一步了",
+        "{v}真是磨人||还没结束呢？",
+        "还在{v}啊||这都快成连续剧了",
+        "{v}这事我记得||有进展了没",
     ],
     "状态": [
         "又是{v}？||这两天是不是一直没缓过来",
         "{v}还缠着你呢……||有我在，慢慢说",
+        "你上次说的{v}||现在好点没",
+        "{v}这状态拖挺久了吧||今天怎么样",
+        "还以为是{v}又来了||结果呢",
     ],
     "家人": [
         "{v}今天又念叨你了吧||说说，我听着",
+        "{v}那边又有新剧情了？||我听着",
+        "又是{v}||这家人的戏真多",
+        "{v}最近还那样吧||你还好吗",
+        "听到{v}我都替你觉得累",
     ],
     "室友": [
         "{v}又整什么活了||说吧，我听着",
+        "{v}最近还那样？||一天说不上三句话",
+        "又是{v}||这日子过得像合租",
+        "{v}那边有变化没||我记着呢",
+        "{v}……五年了，听着就闷",
     ],
 }
-MEM_AWARE_COOLDOWN = 3  # 同键记忆感知间隔轮数
+MEM_AWARE_COOLDOWN = 1  # 同键记忆感知间隔轮数。
+# W20 收紧口径：用户本轮主动提到已存值（"年糕今天拆家了"）是"被听见"的时机，
+# 不是助手自己翻旧账。旧值 3 会把用户隔一轮的再次提及也挡掉——听感是"失忆"。
+# 现在只挡同一键连续相邻轮（1 轮），重复感交给近轮模板去重处理。
 
 def _match_memory_value(memories, user_text, sess):
     """用户文本含具体记忆值（≥2 字，泛指不算，昵称不算）→ (键, 值) 或 None。
-    同键 3 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
+    同键相邻 1 轮冷却。值整串 in 文本（"年糕"∈"你猜我家年糕在干嘛"）。
     写入轮同样参与感知：用户主动介绍（"我家猫叫年糕"）当场接住才算听见，
     这一轮即开始计冷却（所以下一轮不会再提），与离线引擎 mock_engine.js 同源；
     W11 曾让写入轮跳过，结果服务端"介绍轮失忆、下一轮忽然复读"，G11-2 ①/② 连挂。"""
@@ -479,8 +526,17 @@ def _pick_recall(memories, mem_updates, topic, user_text, sess, turn):
             continue  # 闸门0：提取后不足 2 轮，"你上次说"指向太近
         hit = hits.get(k)
         if hit is None or turn - hit >= RECALL_COOLDOWN:
-            return RECALL_TEMPLATES[k].format(v=memories[k]), k
+            return _recall_line(k, memories[k]), k
     return None, None
+
+
+def _recall_line(key, value):
+    """回提句：短值零加工嵌入；长值改用指代，避免逐字背稿。"""
+    v = str(value or "").strip()
+    tpl = RECALL_TEMPLATES[key]
+    if len(v) > LONG_RECALL_LIMIT and key in LONG_RECALL_TEMPLATES:
+        return LONG_RECALL_TEMPLATES[key]
+    return tpl.format(v=v)
 
 # ---------------- 回复模板（源自实测打磨的语料） ----------------
 def topic_of(text):
@@ -493,6 +549,34 @@ GREET = [
     "在呢在呢||今天过得怎么样，有啥想说的",
     "来啦||刚好我也在摸鱼，说吧，我听着",
 ]
+# 好消息也要接得具体：不按关键词偏置的话，"抢到演唱会票"可能抽到"中奖"模板，
+# 听感就是"没听清我说什么"。这里按事件细分池，命中哪类就用哪类的两句。
+HAPPY_POOLS = {
+    "升职|加薪|涨工资|涨薪": [
+        "升职加薪！这必须记一笔||今晚吃点好的，我批准了",
+        "啊啊啊恭喜！这波必须庆祝||说说，是不是憋很久了",
+    ],
+    "抢到|票|演唱会": [
+        "抢到票了？！||这运气，我得蹭一点",
+        "太爽了吧||抢票那几分钟是不是手心全是汗",
+    ],
+    "蛋糕|烤|成功": [
+        "第一次就成功，可以啊你||切开里面啥样，我看看",
+        "哇，这手艺藏得够深||这次先夸够，别的以后再说",
+    ],
+    "瘦|斤|裤子": [
+        "瘦五斤！裤子松了那种爽我懂||这波值得臭美两天",
+        "五斤啊……我酸了||快说，最明显的是哪儿",
+    ],
+    "面试|入职|offer": [
+        "面试过了就是过了||下周入职，新的破班在等你，哈哈",
+        "稳了！||这下能睡个好觉了吧",
+    ],
+    "中奖|中了|一等奖": [
+        "中奖这种事居然真能发生||我怀疑你是锦鲤转世",
+        "一等奖？！||来来来，分我一点欧气",
+    ],
+}
 META_REPLY = ("哈哈又被你看出来了||不过说真的，是不是AI重要嘛，"
               "重要的是你刚才说的那句累，是真的。继续说，我听着呢")
 
@@ -519,14 +603,23 @@ TOPIC = {
         "啊？当着全组？这也太过分了||那方案你熬了多久你自己知道……能力不行他当初把你招进来干嘛",
         "又是老板作妖，还是单纯活儿多？||……饭还是得对付一口，哪怕泡个面。来，先说，今晚我当树洞",
         "你们老板真是离谱他妈给离谱开门||行，骂他这段我熟，你从头说，我一句不漏",
+        "当着全组说这种话，他是真不把人当人||换我当场就想摔本子",
+        "甩锅的时候装哑巴，挨骂的时候想起你了||这口气谁咽得下",
+        "这破班一天一个花样||你先别憋着，想骂就骂出来，我接着",
     ],
     "love": [
         "……什么时候的事||不删就不删吧，没人规定分手必须当天清零。五年呢，哪是一句话的事",
         "抱一下||哭没哭都行，在我这儿不用装。……想骂他我陪你一起骂，想安静我也陪着",
+        "三天不回消息……这三天你怎么熬的||换谁心里都不踏实",
+        "吵完架他睡得着，你睡不着||这事搁谁身上都委屈",
+        "异地就是这点最磨人，见完更空||你现在是想他，还是有点气",
+        "五年了，从恋人过成室友||这话说出来挺难受的吧",
     ],
     "lonely": [
         "宅着刷手机刷到天黑这种事我太熟了||人有时候就需要这种理直气壮废掉的时间，不亏",
         "一个人待着也有一个人的好处，起码外卖不用分||……但要说不想有人陪，那是假的。说吧，我在",
+        "屋里太安静的时候，连冰箱响一声都吓人||今晚我陪你多说会儿",
+        "这种空不是找个人填就能填上的||先别急着证明自己过得很好",
     ],
     "insomnia": [
         "又是累的一天吧||饭还是要吃的，哪怕泡个面。今晚别撑了，能早就早点躺",
@@ -534,7 +627,31 @@ TOPIC = {
         "凌晨的脑子最不听劝||你现在是睡不着，还是不敢闭眼？",
         "黑眼圈都快熬成勋章了||说说，是心里有事，还是身体在闹",
     ],
-    "family": ["家里的事最磨人，说不开又躲不掉||……慢慢说，我先听"],
+    "exam": [
+        "备考这东西最磨人||越到最后越觉得自己什么都不会，这感觉我懂",
+        "考不过这三个字现在说太早了||今天又卡在哪一块了",
+        "熬到一点还看不完，谁顶得住||今晚先撑过去，别拿明天吓自己",
+        "这种时候最容易怀疑自己||你只是累，不是不行",
+    ],
+    "move": [
+        "打包最烦的就是不知道从哪下手||光看着一屋东西就先累了",
+        "一想到打包就头大||还没开始就已经累了，这太正常了",
+        "搬家这事光想想就够呛||先把最不常用的装箱，其他的明天再说",
+        "搬完就能躺平了||现在先骂两句解气",
+    ],
+    "leisure": [
+        "看电影好啊||我最近片荒，正好蹭你的",
+        "行，看片||要不动脑子的那种最好",
+        "看剧这事我永远有空||你先挑，我不挑",
+        "看电影最舒服了||灯一关，什么都不用想",
+    ],
+    "family": [
+        "家里的事最磨人，说不开又躲不掉||……慢慢说，我先听",
+        "催婚这套真是年年上演||他们一说年龄，你就没法好好吃饭了",
+        "这种事被说“不正常”，最伤的是最亲的人说的||你难受太正常了",
+        "你没法跟他们讲道理，他们也不听||先顾好你自己",
+        "我妈也这样，一开口就是为你好||听着就累",
+    ],
     "money": ["钱的事最具体也最烦人||先别慌，说说是哪一环出问题了，我帮你捋捋"],
     "intimate": [
         "@CTX|拍拍，抱一下||哭没哭都行，在我这儿不用装。……今晚早点睡，其余的明天再说",
@@ -544,6 +661,12 @@ TOPIC = {
     "happy": [
         "哇真的假的！||太好了吧！今晚必须庆祝一下，吃点好的，这顿我批准了",
         "哈哈我就知道你行||快展开说说，一个细节都别放过",
+        "升职加薪！这必须记一笔||今晚吃点好的，我批准了",
+        "抢到票了？！||这运气，我得蹭一点",
+        "第一次就成功，可以啊你||快说说，切开里面啥样",
+        "瘦五斤！裤子松了那种爽我懂||这波值得臭美两天",
+        "面试过了就是过了||下周入职，新的破班在等你，哈哈",
+        "中奖这种事居然真能发生||我怀疑你是锦鲤转世",
     ],
     "greet": GREET,
     "generic": [
@@ -554,6 +677,8 @@ TOPIC = {
         "等等，这个我得想一下||……好了，你接着说，我在听",
         "哈哈行，你这个说法很你||然后呢？我想听下文",
         "嗯……让我猜猜，这事儿对你还挺重要||说说看，我猜得准不准",
+        "我先不评价||你继续说，我想听完整",
+        "行，这事我记下了||你别急着总结，想到哪说到哪",
     ],
 }
 HOOKS = {
@@ -750,6 +875,20 @@ SILENT_WORDS = {
     "好吧", "行吧", "没事", "没什么", "不想说", "不想讲", "不想说话",
     "不知道", "不知道说什么", "沉默",
 }
+
+# ---------------- W20 拒绝说话 / 忘记删除 ----------------
+# 用户说“别问了/不想说/换个话题”时，必须真的停下来：
+# 回一句短的、不带问号、不逼话；随后一轮不主动翻旧账、不追问个人细节。
+TALK_REFUSAL_RE = re.compile(
+    r"(别问了|别再问|别追问|别打听|不想说|不想讲|不想聊|不想提|换个话题|"
+    r"算了不说了|不说了|别提这个|别问这个)")
+REFUSAL_POOL = ["行，不问了。", "好，那就不说。", "嗯，我在。", "好，听你的。",
+                "那就不提了。", "行。"]
+NO_PROBE_POOL = ["嗯，我在。", "好。", "那就不说。", "我知道。", "没事，慢慢来。",
+                 "嗯，听着呢。"]
+# 删除记忆：只有出现明确否定词且不是“别忘了…”时才动手
+DELETE_RE = re.compile(r"(忘了|别记|不要记|删掉|删了|抹掉|别再提|不想让你记)")
+DELETE_SAFE_RE = re.compile(r"别忘(?:了|记)")
 _SILENT_STRIP_RE = re.compile(
     r"[\s，。！？、；：,.!?;:\"'“”‘’（）()~～—\-_…·]+")
 _SILENT_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]+")
@@ -777,6 +916,42 @@ def _silent_reply(session_id):
     if len(recent) > 4:
         del recent[0]
     return reply
+
+
+def _forget_targets(memories, text):
+    """“忘了/别记/删掉”要删哪些槽。
+
+    只认明确指代：句中出现了记忆值/类别词，或句子里有“这个/刚才/我说的”。
+    这样“我忘了带钥匙”不会被当成删除指令，“把年糕忘了”能准确删掉宠物槽。
+    """
+    if not isinstance(memories, dict) or not memories:
+        return []
+    hit = [k for k, v in memories.items() if (v and str(v) in text) or k in text]
+    if hit:
+        return hit
+    if re.search(r"(这个|那个|刚才|刚刚|上面|我说的)", text):
+        return list(memories)
+    return []
+
+
+def _refusal_reply(session_id):
+    """拒绝轮的短回应（不追问、不逼话，近 2 轮不重复）。"""
+    sess = _STATE.get_session(session_id)
+    recent = sess.setdefault("recent_replies", [])
+    pool = [p for p in REFUSAL_POOL if p not in recent[-2:]] or REFUSAL_POOL
+    reply = random.choice(pool)
+    recent.append(reply)
+    return reply
+
+
+# 追问/逼话词：被“别问了”之后的一轮里，模板不得含这些词，也不得以问号收尾
+_PROBE_RE = re.compile(r"[?？]|吗|呢|说说|然后|接着|聊聊|展开|怎么了|发生什么|还有")
+
+
+def _strip_probe(pool):
+    """把会继续打听的模板剔掉；一条都不剩时就退回纯陪伴短句。"""
+    keep = [t for t in pool if not _PROBE_RE.search(t)]
+    return keep or list(NO_PROBE_POOL)
 
 # ---------------- 可选落盘：会话 JSON（按 session_id 分文件） ----------------
 def _api_root(base):
@@ -1394,12 +1569,38 @@ def make_reply(messages, session_id=None):
                 "memory_updates": {}, "hook": None, "crisis": False}
 
     topic = topic_of(user_text)
+    # W20 忘记/删除记忆：先删再回，且这一轮不再提取（否则“把年糕忘了”又把年糕存回去）
+    if DELETE_RE.search(user_text) and not DELETE_SAFE_RE.search(user_text):
+        turn = _STATE.next_turn(session_id)
+        old = _STATE.get_memories(session_id)
+        keys = _forget_targets(old, user_text)
+        dropped = []
+        for k in keys:
+            old.pop(k, None)
+            dropped.append(k)
+        sess = _STATE.get_session(session_id)
+        sess["no_probe"] = 2
+        reply = "行，删了。" if dropped else "行，不记了。"
+        return {"reply": reply, "emotion": "gentle", "motion": None,
+                "memory_updates": {}, "hook": None, "crisis": False}
+
+    # W20 拒绝说话：真的停下来（短、无问号、不逼话），并让下一轮不翻旧账。
+    # 必须排在沉默判定之前——"不想说"同时也在 SILENT_WORDS 里，
+    # 若先落沉默分支，就不会记下 no_probe，下一轮又会把旧话题翻出来。
+    if TALK_REFUSAL_RE.search(user_text):
+        _STATE.next_turn(session_id)
+        sess = _STATE.get_session(session_id)
+        sess["no_probe"] = 2
+        return {"reply": _refusal_reply(session_id), "emotion": "gentle",
+                "motion": None, "memory_updates": {}, "hook": None, "crisis": False}
+
     # W11 沉默轮早退：用户只发"……/嗯/累/随便"时不追问、不丢引导 hook，
     # 只回 1-5 字短句（"在。""我在这儿"），保留轮次计数让后续引导节奏不乱。
     if topic != "greet" and is_silent_input(user_text):
         _STATE.next_turn(session_id)
         return {"reply": _silent_reply(session_id), "emotion": "gentle",
                 "motion": None, "memory_updates": {}, "hook": None, "crisis": False}
+
     # 从会话状态读取旧记忆
     old_memories = _STATE.get_memories(session_id)
     mem_updates = extract_memory(user_text, old_memories)
@@ -1408,9 +1609,19 @@ def make_reply(messages, session_id=None):
         _STATE.update_memories(session_id, mem_updates)
 
     pool = TOPIC.get(topic, TOPIC["generic"])
+    # W20：好消息按事件细分（抢到票 / 升职 / 中奖 / 瘦了…），别让"中奖"接"抢到票"
+    if topic == "happy":
+        for pat, plist in HAPPY_POOLS.items():
+            if re.search(pat, user_text):
+                pool = plist
+                break
     # P3-1 记忆感知：用户主动提已存具体记忆值（"你猜我家年糕在干嘛"）→
     # 该键偏置记忆感知池（值原文嵌入，零虚构）；频控=同键 3 轮冷却防刻意感
     sess = _STATE.get_session(session_id)
+    # W20：刚被“别问了/不想说”之后的一轮——不追问、不翻旧账、不铺个人细节 hook
+    blocked = sess.get("no_probe", 0) > 0
+    if blocked:
+        sess["no_probe"] = max(0, sess.get("no_probe", 0) - 1)
     memories_now = _STATE.get_memories(session_id)
     # P3-1 体检复跑发现：greet 开场引用文本含记忆值（"你家年糕最近乖不乖"）会
     # 误烧记忆感知冷却（引用≠用户主动提，不该计入）→ greet 轮跳过记忆感知，
@@ -1434,18 +1645,25 @@ def make_reply(messages, session_id=None):
     if REFUSAL_RE.search(user_text):
         pool = [t for t in pool if not ADVICE_WORD_RE.search(t)] or [
             t for t in TOPIC["generic"] if not ADVICE_WORD_RE.search(t)] or pool
+    # W20：拒绝之后的"安静期"只接话、不打听——把带问句/追问词的模板剔掉
+    if blocked:
+        pool = _strip_probe(pool)
     # P3-1 近轮去重：近 2 轮已用回复不重抽（防一字不差复读）；全池用过则放行。
     # W11：再加"开头 4 字不复读"与"整段会话内优先不重样"——5 条同实体的插值
     # 模板若只做近 2 轮去重，5 次同一句输入只能出 3 种，听感仍是复读机。
+    # W20：开头指纹从 4 字放宽到 6 字，且对照整段会话（不只上一轮）——
+    # 三轮以上的会话里"我懂/确实/嗯嗯"式同头最容易露馅。
     recent = sess.setdefault("recent_replies", [])
     prev_open = recent[-1][:4] if recent else ""
+    seen_opens = {c[:6] for c in recent}
 
     def _pick(avoid, avoid_open):
         # 先在"可用"里取，而不是随机撞到不同为止：撞大运会让 5 次同输入
         # 随机漏掉某些模板（曾随机漏最短句 → 句长差 <2 的假复读）
         cands = [c for c in pool
                  if c not in avoid
-                 and not (avoid_open and len(c) >= 4 and c[:4] == prev_open)]
+                 and not (avoid_open and len(c) >= 4 and c[:4] == prev_open)
+                 and not (avoid_open and len(c) >= 6 and c[:6] in seen_opens)]
         return random.choice(cands) if cands else None
 
     # 三级降级：会话内没用过 → 近 2 轮没用过 → 至少不逐字复读上轮
@@ -1491,9 +1709,14 @@ def make_reply(messages, session_id=None):
     # W11 hook 优先级重排：主动回提（用户提到存过的记忆）> 固定引导 > 常规随机。
     # 原顺序（引导 > 回提）会让前 4/8 轮的新手引导抢走本该"被记住"的时刻——
     # 用户刚提完记忆却听到"还不知道怎么称呼你"，真人感直接崩。回提一旦命中就让位。
-    hook, hit_key = _pick_recall(memories, mem_updates, topic, user_text, sess, turn)
+    # W20：同一轮最多引一条记忆（记忆感知已经引过值 → 本轮放弃主动回提）
+    hook, hit_key = (None, None) if (mem_aware or blocked) else _pick_recall(
+        memories, mem_updates, topic, user_text, sess, turn)
     if hook is not None:
         _STATE.mark_recall(session_id, hit_key, turn)
+    elif blocked:
+        # 拒绝后的安静期：不铺"你叫什么/最近大事"这类个人细节钩子
+        hook = None
     elif "昵称" not in memories and turn <= ONBOARD_NAME_TURNS:
         hook = ONBOARD_NAME_HOOK
     elif "大事" not in memories and turn <= ONBOARD_EVENT_TURNS:

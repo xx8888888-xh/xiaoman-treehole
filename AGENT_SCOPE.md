@@ -37,6 +37,19 @@
 - 约束：本地只跑轻量命令且串行（CPU ≤40%），禁止 headless 浏览器 / AVD / Gradle；云端跑不绿不许 skip。
 - 交付：小步提交，推送 `feat/quality-r3`。
 
+## w20 · feat/human-feel-r3（真人感第三轮）
+
+- worktree：`treehole-w20`；基线 `r5-20261105` / `a283342`；分支 `feat/human-feel-r3`
+- 可改：`server/prompt_core.py`、`server/mock_api.py`、`server/memory_slots.py`、
+  `server/tests/**`、`scripts/eval_*`、`docs/HUMAN_FEEL_R3.md`、本文件
+- 禁止：`web/**`、`android/**`、`.github/**`、`package.json`、`assets/**`
+- 验证：`pytest server/tests -q`（串行；基线 153 passed + 19 subtests 只许增不许降）；
+  `scripts/eval_human_feel.py` 出表：mock 与真实模型分开记分，失败要写“为什么不像人”；
+  禁止本地起浏览器 / AVD / Gradle，单会话 CPU 峰值 ≤40%
+- 目标：真实模型回归（客户号 `w20-real`）、反套路指标（建议 ≤25%、重复开头 ≤8%）、
+  拒绝说话落地、长期记忆自然度、提示词去重（安全三条逐字保留）
+- 提交前缀 `w20:`；允许推 `feat/human-feel-r3` 远端分支，不合并主干
+
 ## 提交规范（四路通用）
 - 小步提交，前缀 `w1:` / `w2:` / `w3:` / `w4:`
 - 每个小块独立可测（`node --test` / `pytest` 通过即提交）

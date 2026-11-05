@@ -60,6 +60,23 @@ test("system prompt 含长度与跑题硬约束", () => {
   assert.match(API.SYSTEM_PROMPT, /30 个字/);
 });
 
+test("system prompt 带真人感硬约束与长期记忆槽（W20 客户端同步）", () => {
+  assert.match(API.SYSTEM_PROMPT, /【真人感硬约束/);
+  assert.match(API.SYSTEM_PROMPT, /默认不给建议/);
+  assert.match(API.SYSTEM_PROMPT, /允许说不知道/);
+  assert.match(API.SYSTEM_PROMPT, /允许不好笑/);
+  assert.match(API.SYSTEM_PROMPT, /拒绝要落地/);
+  assert.match(API.SYSTEM_PROMPT, /记忆像人回忆/);
+  assert.match(API.SYSTEM_PROMPT, /【长期记忆槽的用法】/);
+  assert.match(API.SYSTEM_PROMPT, /忘了\/别记\/删掉这个/);
+  assert.equal(API.HUMAN_FEEL_RULES, require("../js/persona_rules.js").HUMAN_FEEL_RULES);
+});
+
+test("心跳提示词仍带安全三条", () => {
+  assert.ok(API.HEARTBEAT_PROMPT.indexOf(API.SAFETY_RULES) === 0);
+  assert.match(API.HEARTBEAT_PROMPT, /12356/);
+});
+
 test("strictJson 追加输出约束", () => {
   const p = API.buildSystemPrompt({ strictJson: true });
   assert.match(p, /只输出一行合法 JSON/);
