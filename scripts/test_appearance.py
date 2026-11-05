@@ -87,7 +87,10 @@ async def open_settings(pg):
 async def set_preset(pg, name):
     await open_settings(pg)
     await pg.click(f'#apPresets [data-preset="{name}"]')
-    await pg.wait_for_timeout(150)
+    # 图标/文字的状态过渡是 160ms；等 150ms 会正好卡在过渡未结束时采样，
+    # document.getAnimations() 会把还在跑的 4 条 transition 也算进去，
+    # 让「无循环装饰动画」这条偶发假红。留出余量等过渡彻底结束再断言。
+    await pg.wait_for_timeout(300)
     await pg.click("#settingsClose")
 
 
