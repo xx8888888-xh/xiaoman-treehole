@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-11-05 · 数据完整性收口 w16（feat/data-completeness，起点 r3-20261105 `0a86007`）
+
+> 背景：上一轮会话因宿主机意外断电被取消，本条为**续做**而非重来：先 `git status` 保住工作区成果（4 个提交），再补文档与推送。负载纪律：本地只跑与改动相关的短测试，完整闸门交云端 Actions。
+
+### 四项收口
+1. **备份/导出漏项**：`backup.js` schema 升 v3，新增 `reminders` / `stats` / `server`（服务端状态 + 落盘历史 + w11 记忆槽）；导入按 id 及「文案+时刻」去重、统计逐项取大（换机=完整还原，重复导入不翻倍），v2 老备份仍可读。服务端新增 `GET /api/session/export`、`POST /api/session/import`（白名单化：sid 校验、消息上限 200、状态字段类型过滤）。
+2. **单条消息删/改**：服务端 `POST /api/message/delete|update` 改历史的同时清掉「由该消息产生」的 memories 与记忆槽（编辑时仍保留新文案里还存在的记忆）；前端悬停「⋯」/触屏长按 450ms 出菜单，**全部动态生成、未碰 `web/index.html`**；删用户消息级联清掉其回复，统计逐项回退、记忆引用同步，五处状态一致。
+3. **统计清空入口**：小本本底部按钮 + 5 秒二次确认，清后 `Stats.clear()` 与界面同帧归零。
+4. **biome 覆盖面**：`web/package.json` lint 白名单加入 `errors.js` / `app.js` / `chat_pager.js` / `pet.js`，**0 error**（`pet.js` 仅加白名单未改源码，只有 warning 级建议）。
+
+### 验证（本地实跑）
+- `pytest server/tests` → **153 passed + 19 subtests**（新增 `test_session_io.py` 8 项：round-trip / 白名单清洗 / 200 上限 / 删改同步记忆与槽）
+- `node --test tests/*.test.js` → **192/192**（新增 `backup_roundtrip.test.js` 6 项 + store/reminders/stats 5 项）
+- `biome check`（新白名单）→ **0 error**
+- `scripts/test_roundtrip.py` → **22/22**：导出→清空（CDP 抹 localStorage+IDB，服务端同步清空）→导入，提醒 id/文案/时刻/完成态、统计 6 个键、服务端 memories/slots/state/历史逐项一致
+- `scripts/test_msg_edit.py` → **26/26**：动态菜单、二次确认防误删、删后计数回退/记忆清空/无幽灵节点、编辑重发清旧回复且不重复计数、统计清空前后端同步
+- 未在本地跑（交云端）：`test_e2e.py` 60、`test_feature_loop.py` 43、`test_live2d_original.py` 24、`test_raf_budget.py` 8、`verify_assets.py`
+
+**触及**：`server/mock_api.py`、`server/tests/test_session_io.py`、`web/js/{api,backup,store,reminders,stats,app,chat_pager}.js`、`web/package.json`、`web/tests/{backup_roundtrip,idb_stub,reminders,stats,store}.test.js`、`scripts/{test_roundtrip,test_msg_edit}.py`、`docs/{FEATURE_MATRIX,DEVLOG}.md`
+
+---
+
 ## 2026-11-05 · 第三轮合并 r3（w10/w11/w12/w13 → feat/containerize-and-config）
 
 > 背景：宿主机硬断电重启（Kernel-Power 41）后重新拉起三容器栈（web/mock/tts 均 healthy，TTS `provider=none` 全程静音）。基线 `61384a0`，先建 `backup/pre-r3-20261105` 分支 + `backup-pre-r3-20261105` tag。四个分支按序合并，**每合一个跑全套闸门，全绿才进下一个**；四次合并均无冲突（ort 自动合并，无整文件覆盖）。

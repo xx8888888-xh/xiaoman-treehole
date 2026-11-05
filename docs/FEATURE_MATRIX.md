@@ -65,7 +65,7 @@
 | 22 | 提醒持久化 | README 数据说明 | ✅ | localStorage `xiaoman_reminders_v1`；node 单测 | — |
 | 23 | 重复提醒节流（心跳 25% / 10min 静默） | ANALYSIS P1-2 | ✅ | `heartbeat.js`；本轮回归 | — |
 | 24 | 主动问候开关 | 用户诉求「新元素可关闭」 | 🧩 | `cfg.heartbeatOn` 逻辑存在，**设置页无入口** | 🔧 设置页「陪伴方式」开关；node 断言 tick 真的停/发 |
-| 25 | 提醒的备份/导出 | 数据处置权 | 🟡 | 备份只含消息/记忆/危机，不含提醒 | ⏸ 遗留（见 §4） |
+| 25 | 提醒的备份/导出 | 数据处置权 | 🟡 | 备份只含消息/记忆/危机，不含提醒 | ✅ w16：备份 v3 纳入提醒（id/文案/时刻/完成态），round-trip 逐项核对 |
 
 ### 2.4 统计 / 打卡
 
@@ -77,7 +77,7 @@
 | 29 | 日期边界正确 | 同上 | 🟡 | `days` 用 `toDateString`，但无按天计数；跨零点没有单测 | 🔧 `dayKey()` 本地 `YYYY-MM-DD`（不用 UTC `toISOString`）+ 23:59/00:01 单测 |
 | 30 | 连续打卡 | 「打卡/统计」诉求 | ❌ | 无 | 🔧 `streak()`：今天没开口时从昨天算，不清零 |
 | 31 | 跨会话保留 | 用户诉求 | ✅ | localStorage；本轮刷新回归断言 | ✅ 已证 |
-| 32 | 清空统计入口 | 数据处置权 | 🟡 | `Stats.clear()` 存在，无 UI | ⏸ 遗留（P2，与备份一起做） |
+| 32 | 清空统计入口 | 数据处置权 | 🟡 | `Stats.clear()` 存在，无 UI | ✅ w16：小本本底部「清空」+ 5 秒二次确认，清后 localStorage/界面同步归零 |
 
 ### 2.5 首次使用 / 可用性 / 错误边界
 
@@ -98,7 +98,8 @@
 | 40 | 悬浮窗 / 桌宠（Android） | README FAQ | ✅ | 属 `android/**` 与 `float_mode.js`，按约束不改；另一会话负责 |
 | 41 | 危机识别分级 / 热线 / 记录导出 | README | ✅ | `risk.js` 禁止改；e2e ⑦n 全过 |
 | 42 | 友谊卡片 / 关系里程碑 / 时间线 | README | ✅ | — |
-| 43 | 备份导出/导入（消息/记忆/危机） | README | ✅ | 不含提醒/统计 → 见遗留 |
+| 43 | 备份导出/导入（消息/记忆/危机/提醒/统计/服务端会话） | README | ✅ | ✅ w16 schema v3：新增提醒、小本本、服务端会话（状态+落盘历史+w11 记忆槽）；v2 老备份仍可导入 |
+| 44 | 单条消息删除 / 编辑后重发 | 用户诉求（数据处置权） | ❌ | 原来只能整库清空 | ✅ w16：悬停「⋯」/长按菜单（动态 DOM）；删除五处同步（本机库/内存/分页/统计/记忆+槽/服务端），删用户消息级联清其回复；编辑就地改文案后重发 |
 
 ## 3. 本轮「开关 → 行为」证据
 
@@ -115,11 +116,10 @@
 
 | 项 | 原因 / 影响 | 建议 |
 |---|---|---|
-| 提醒 & 统计未进备份 JSON | `backup.js` 只导出消息/记忆/危机；本轮文件域允许但涉及导入合并语义，改动面大于「功能落实」 | P2 单独做：按 id/时间去重合并，schema 升 v3 |
-| 单条消息删除 / 编辑 | README 未承诺，做在 IndexedDB + UI 上会牵动 `ChatPager` 与风险审计口径 | P3，等产品确认 |
-| 统计清空入口 | 有 `Stats.clear()` 无 UI；避免误清打卡数据 | 与备份一起做 |
 | Android APK 重打包 / 真机有声 | 约束禁止改 `android/**`，且全局静音 | 主合并后由打包流程验证 |
 | 中危第三句热线文案 | ANALYSIS §16 待产品决策，非代码缺失 | 等产品确认 |
+
+> w16 已收口：提醒/统计/服务端记忆槽进备份（#25/#43）、单条消息删除与编辑重发（#44）、统计清空入口（#32）。
 
 ## 5. 本轮验证结果
 
@@ -135,3 +135,14 @@
 
 > 运行环境：静态站与 mock/TTS 起在 **9021/9022/9023**（避开共享 8901-8903），
 > TTS `provider=none`、Playwright `headless + --mute-audio`，全程静音。
+
+### 5.1 w16 数据完整性收口轮（2026-11-05，分支 `feat/data-completeness`）
+
+| 门槛 | 结果 | 跑在哪 |
+|---|---|---|
+| `pytest server/tests` | **153 passed + 19 subtests**（含新增 `test_session_io.py` 8 项） | 本地 |
+| `node --test tests/*.test.js` | **192/192 PASS**（基线 181 + 新增 11：backup_roundtrip 6、store 1、reminders 2、stats 2） | 本地 |
+| `biome check`（白名单加 errors/app/chat_pager/pet） | **0 error**（仅 warning/info；`pet.js` 只改 `package.json` 白名单，未动源码） | 本地 |
+| `scripts/test_roundtrip.py`（新增） | **22/22 PASS**：导出→清空→导入，提醒时刻/统计计数/服务端记忆槽/历史逐项一致 | 本地 |
+| `scripts/test_msg_edit.py`（新增） | **26/26 PASS**：菜单/二次确认删除/级联清回复/编辑重发/统计清空 | 本地 |
+| `scripts/test_e2e.py` 60、`test_feature_loop.py` 43、`test_live2d_original.py` 24、`test_raf_budget.py` 8、`verify_assets.py` | 本地未跑（负载纪律：交给云端 Actions，push 分支后 `gh run list/watch` 查看） | 云端 CI |
