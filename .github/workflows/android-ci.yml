@@ -215,6 +215,12 @@ jobs:
             python3 -c "import websockets, requests; print('cdp deps ok')" || { echo "ERROR: requests/websockets unavailable"; exit 1; }
             python3 scripts/emulator_chat_check.py || { echo "ERROR: main chat check failed"; exit 1; }
 
+            # ---- NoisyGuard 注册（ADB/dumpsys 级证据，不靠 JVM 单测）----
+            # TtsController 构造时就 registerReceiver(ACTION_AUDIO_BECOMING_NOISY)；
+            # 这里从 dumpsys 的 Registered Receivers 里核实它确实挂在本进程上，
+            # 再用 logcat [probe] noisy-receiver registered 交叉印证。
+            python3 scripts/emulator_noisy_check.py || { echo "ERROR: NoisyGuard registration check failed"; exit 1; }
+
             # Poke Live2D
             adb shell input tap 160 220
             sleep 3
@@ -246,6 +252,7 @@ jobs:
           path: |
             window_dump.xml
             float_dumpsys.txt
+            noisy_dumpsys.txt
           if-no-files-found: ignore
           retention-days: 7
 
