@@ -618,6 +618,8 @@ const App = (() => {
     }
   }
   window.__ttsHint = () => XMConfig.describeTts(API.loadCfg().tts, ttsAvail());
+  // E2E 探针：一轮对话是否彻底结束（sendBtn 在输入框清空后天然 disabled，不能作为完成信号）
+  window.__isBusy = () => busy;
 
   // ---------- 降级提示（安静、可关闭） ----------
   // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。

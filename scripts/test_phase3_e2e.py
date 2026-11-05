@@ -126,9 +126,10 @@ def main():
             page.fill("#textInput", text)
             page.click("#sendBtn")
             wait_for_reply(page, baseline)
-            # 等本轮彻底结束（sendBtn 恢复可用），避免把上一轮残留气泡当成本轮回复
+            # 等本轮彻底结束（__isBusy 探针转 false）。
+            # 不能用 sendBtn.disabled：提交后输入框被清空，按钮按设计保持 disabled
             page.wait_for_function(
-                "() => !document.getElementById('sendBtn').disabled", timeout=120000
+                "() => window.__isBusy && window.__isBusy() === false", timeout=120000
             )
             page.wait_for_timeout(1200)
             bubbles = page.eval_on_selector_all(
