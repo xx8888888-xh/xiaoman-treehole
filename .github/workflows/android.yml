@@ -48,13 +48,20 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install SDK packages
+        # ubuntu-latest 自带 ANDROID_HOME=/usr/local/lib/android/sdk 与 cmdline-tools；
+        # 不用 android-actions/setup-android@v3：新版 cmdline-tools 16 已无 "tools" 包，
+        # 该 action 会执行 `sdkmanager tools` 直接失败。
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -1)
+          [ -n "$sdkmanager" ] || { echo "未找到 sdkmanager（ANDROID_HOME=$ANDROID_HOME）"; exit 1; }
+          yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - name: Sync web assets into APK assets
         run: bash scripts/build_assets.sh
