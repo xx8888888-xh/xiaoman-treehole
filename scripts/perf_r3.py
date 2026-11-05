@@ -243,6 +243,7 @@ async def measure_load_once(browser, throttle=1):
         "dclMs": dcl, "bindMs": bind, "mountMs": mount,
         "inputReadyMs": input_ready, "readyToSendMs": ready_to_send,
         "firstSendMs": first_send,
+        "greetDeferred": any("greet deferred user-first" in c for c in console),
         "greetSkipped": any("greet skipped user-first" in c for c in console),
         "greetPlayed": any("greet played" in c for c in console),
         "long": lt_summary(perf["longTasks"]),

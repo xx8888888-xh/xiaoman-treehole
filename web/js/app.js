@@ -352,7 +352,8 @@ const App = (() => {
   const SID = API.sessionId();   // 浏览器侧与服务端落盘共用同一个 session id
   let busy = false;
   let sending = false;       // 发送互斥锁：防止 greet/心跳/poke/hook 与用户发送并发
-  let userInitiated = false; // 用户是否已先开口：开场白因此让位（不插队、不挡首条消息）
+  let userInitiated = false; // 用户是否已先开口：开场白因此延后到首轮回复之后（不插队、不挡首条消息）
+  let pendingGreet = null;   // 用户先开口时暂存的开场白，首轮回复收尾后补播（不丢、不乱序）
   let sendQueue = [];        // 等待发送的消息队列
   let lockDepth = 0;         // 发送锁重入深度（同一调用链嵌套获取时直接放行，避免自锁）
   let idleTimers = [];
@@ -1545,6 +1546,12 @@ const App = (() => {
       }
     });
     busy = false; syncComposer();
+    // 用户先开口被延后的开场白：等这一轮回复收尾后再补，排在用户消息/回复之后，不丢不乱序
+    if (pendingGreet) {
+      const g = pendingGreet;
+      pendingGreet = null;
+      playGreet(g.reply, g.toldNew, g.monthNew);
+    }
     armIdle();
   }
 
@@ -1754,10 +1761,18 @@ const App = (() => {
   // ---------- 开场 ----------
   const GREET_KEY = "xiaoman_greet_at";       // 上次开场时间
   const GREET_TAIL_KEY = "xiaoman_greet_tail"; // 上次开场的末条文案（用于内容去重）
+  // 开场真正播出：幂等标记只在这里落盘（被延后/跳过都不会误消费，下次仍会开场）
+  function playGreet(reply, toldNew, monthNew) {
+    try {
+      if (toldNew) localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
+      if (monthNew) localStorage.setItem(MONTH_DONE_KEY, monthNew);
+      localStorage.setItem(GREET_KEY, String(Date.now()));
+      localStorage.setItem(GREET_TAIL_KEY, reply.split("||").pop());
+    } catch (e) {}
+    console.log("[probe] greet played ms=" + Math.round(performance.now()));
+    sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
+  }
   function greet() {
-    // 用户已经先开口：这一次不再插"刚见到你"的开场，省掉开场白占用的发送锁，
-    // 首条消息立刻落地。幂等标记也不写，下次冷启动用户没先说话时仍会照常开场。
-    if (userInitiated) { console.log("[probe] greet skipped user-first"); return; }
     let lastGreet = 0, tail = "";
     try {
       lastGreet = Number(localStorage.getItem(GREET_KEY) || 0) || 0;
@@ -1824,19 +1839,20 @@ const App = (() => {
       }
     } catch (e) { /* 数据层异常不挡开场 */ }
     setTimeout(() => {
-      // 900ms 开场窗口内用户先发了消息：同样跳过这一次（幂等标记留到下次真正开场时写）
+      // 900ms 开场窗口内用户先发了消息：不插队，也不丢。
+      // 用户那轮还没收尾（busy/sending）→ 记下来，等回复结束后补播；
+      // 已经收尾了 → 现在就补，仍排在用户消息/回复之后。
       if (userInitiated) {
-        console.log("[probe] greet skipped user-first");
+        if (busy || sending) {
+          pendingGreet = { reply, toldNew, monthNew };
+          console.log("[probe] greet deferred user-first");
+        } else {
+          console.log("[probe] greet played-after-reply");
+          playGreet(reply, toldNew, monthNew);
+        }
         return;
       }
-      try {
-        if (toldNew) localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
-        if (monthNew) localStorage.setItem(MONTH_DONE_KEY, monthNew);
-        localStorage.setItem(GREET_KEY, String(Date.now()));
-        localStorage.setItem(GREET_TAIL_KEY, reply.split("||").pop());
-      } catch (e) {}
-      console.log("[probe] greet played ms=" + Math.round(performance.now()));
-      sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
+      playGreet(reply, toldNew, monthNew);
     }, 900);
   }
 
