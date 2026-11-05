@@ -45,7 +45,7 @@
 | 点击后回 `mode=full`，0.8s rAF ≥30 | **PASS** |
 | `visibilitychange → hidden`：2s 内 rAF = 0、无定时器 | **PASS** |
 | 恢复可见：0.6s 内 rAF ≥20 | **PASS** |
-| `scripts/test_raf_budget.py`（`--seconds 20` 本地快速档） | **8/8 PASS**（云端跑 60s 全档） |
+| `scripts/test_raf_budget.py --seconds 60`（全档） | **8/8 PASS**：A 静止 0.00/s、B 对话 52.79/s、C hidden/恢复、D pagehide、E 桌宠 60/s + 收起 0/s |
 
 截图：`docs/android-battery/shots/raf/pet_idle_r2.png`（隐身静止时的桌宠，模型完整、无裁切硬边）。
 
@@ -165,7 +165,7 @@ python scripts/verify_assets.py
 | 闸门 | 状态 |
 |---|---|
 | pet 静止分档冒烟（自建 7 项） | **7/7 PASS**（本地） |
-| `test_raf_budget.py` | **8/8 PASS**（本地 `--seconds 20`；`--seconds 60` 交云端） |
+| `test_raf_budget.py --seconds 60` | **8/8 PASS**（本地全档） |
 | `test_live2d_original.py` | **24/24 PASS**（改动前后各一次，本地） |
 | `verify_assets.py` | **PASS**（本地，WSL 重建后） |
 | node `live2d_assets.test.js` | **7/7 PASS**（本地） |
