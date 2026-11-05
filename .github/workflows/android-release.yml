@@ -1,0 +1,157 @@
+name: android-release
+
+# 小满树洞 0.6.0 · Release 出包（签名只在云端做）
+# 触发：手动 / 打 v* tag。
+# 与 android.yml（日常 debug 出包）分开：本文件只负责 release，避免改动既有流水线。
+#
+# 需要的仓库 Secrets（Settings → Secrets and variables → Actions）：
+#   ANDROID_KEYSTORE_B64        base64 -w0 的 release keystore（单行）
+#   ANDROID_KEYSTORE_PASSWORD   store 密码
+#   ANDROID_KEY_ALIAS           key alias（示例 xiaoman）
+#   ANDROID_KEY_PASSWORD        key 密码
+# 生成脚本：bash scripts/gen_release_keystore.sh（产物只写在仓库外 ~/.secrets）
+#
+# 未配置 secrets 时：仍会产出 unsigned APK 作为「可复现构建」证据，摘要里明确标
+#   signed=NO，并在 job summary 打警告；不会静默假装已签名。
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.workers.max=4 -Dorg.gradle.jvmargs=-Xmx2g"
+  ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+  ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+  ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+  ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: /opt/hostedtoolcache/android-sdk
+          key: android-sdk-${{ runner.os }}-${{ hashFiles('android/gradle.properties') }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-
+
+      - name: Ensure Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: Check signing secrets
+        id: signing
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] \
+             && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "签名材料齐全：将产出 signed release APK"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未配置签名 secrets，本次只产出 unsigned APK（不可用于正式分发）"
+          fi
+
+      - name: Decode keystore
+        if: steps.signing.outputs.present == 'true'
+        run: |
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          test -s "$RUNNER_TEMP/release.keystore" || { echo "keystore 解码为空"; exit 1; }
+
+      - name: Sync web assets into android assets/www
+        run: bash scripts/build_assets.sh
+
+      - name: Build Release APK
+        run: (cd android && ./gradlew assembleRelease --no-daemon)
+
+      - name: Collect APK
+        id: collect
+        run: |
+          set -e
+          OUT=android/app/build/outputs/apk/release
+          APK=$(ls "$OUT"/app-release.apk 2>/dev/null || true)
+          SIGNED=yes
+          if [ -z "$APK" ]; then
+            APK=$(ls "$OUT"/app-release-unsigned.apk 2>/dev/null || true)
+            SIGNED=no
+          fi
+          [ -n "$APK" ] || { echo "未找到 release APK"; ls -la "$OUT" || true; exit 1; }
+          mkdir -p dist
+          NAME="xiaoman-treehole-0.6.0-${SIGNED}.apk"
+          cp "$APK" "dist/$NAME"
+          echo "apk=dist/$NAME" >> "$GITHUB_OUTPUT"
+          echo "signed=$SIGNED" >> "$GITHUB_OUTPUT"
+          ls -l "dist/$NAME"
+
+      - name: Verify signature (signed only)
+        if: steps.collect.outputs.signed == 'yes'
+        run: |
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          "$BT/apksigner" verify --verbose --print-certs "${{ steps.collect.outputs.apk }}" \
+            | tee dist/verify.txt
+          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" dist/verify.txt
+          "$BT/zipalign" -c -v 4 "${{ steps.collect.outputs.apk }}" | tail -3 | tee -a dist/verify.txt
+
+      - name: Badging + size + sha256
+        run: |
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          APK="${{ steps.collect.outputs.apk }}"
+          "$BT/aapt2" dump badging "$APK" | head -3 | tee dist/badging.txt
+          SIZE=$(stat -c%s "$APK")
+          SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          {
+            echo "apk=$APK"
+            echo "signed=${{ steps.collect.outputs.signed }}"
+            echo "size_bytes=$SIZE"
+            echo "size_mb=$(awk "BEGIN {printf \"%.2f\", $SIZE/1048576}")"
+            echo "sha256=$SHA"
+          } | tee dist/RELEASE_INFO.txt
+          C=$(grep -i "certificate SHA-256" dist/verify.txt | head -1 || true)
+          {
+            echo "### android-release 0.6.0"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 签名 | ${{ steps.collect.outputs.signed }} |"
+            echo "| 体积 | ${SIZE} 字节 / $(awk "BEGIN {printf \"%.2f\", $SIZE/1048576}") MB |"
+            echo "| SHA-256 | \`$SHA\` |"
+            echo "| 证书 | ${C:-n/a} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaoman-treehole-release-0.6.0
+          path: |
+            dist/*.apk
+            dist/RELEASE_INFO.txt
+            dist/verify.txt
+            dist/badging.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
