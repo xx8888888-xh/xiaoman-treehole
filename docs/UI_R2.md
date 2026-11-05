@@ -1,7 +1,7 @@
 # UI 精修第二轮 · 设计规则与落地对照（w15）
 
 > 基线：tag `r3-20261105`（w6 视觉改造已合入）。本轮只做"精修"，不换设计语言。
-> 文件域：`web/css/**`、`web/index.html`、`web/js/tween.js`、`docs/ui-*`、`docs/ui-shots-r2/**`。
+> 文件域：`web/css/**`、`web/index.html`、`web/js/tween.js`、`docs/ui-*`、`docs/ui-shots-r2/**`；第三轮（第六节）追加 `web/js/app.js`、`web/js/chat_pager.js`、`web/js/time_divider.js` 与对应测试。
 > 前后截图：`docs/ui-shots-r2/before/` 与 `docs/ui-shots-r2/after/`（390×844 / 1440×900）。
 
 ## 一、调研结论（2024–2026 陪伴 / 心理类产品）
@@ -53,7 +53,7 @@
 
 1. **流式增量的文字过渡**：`app.js` 直接 `bubble.textContent = 累积文本`，每次替换都会重建文本节点，CSS 无法只对新增字符做淡入。建议：给流式气泡加 `.is-streaming`，用 `requestAnimationFrame` 之外的 CSS（例如外层 `opacity` 从 .86→1、300ms）或在末尾插入 `span.stream-tail` 只对尾巴做 120ms 淡入。**不改也能用，但"逐字出现"的顺滑度差一档**。
 2. **消息入场动画**：`chat_pager.js` 在窗口未满时整窗重建（`replaceChildren`），任何 `.msg-row` 入场动画都会在每次追加时对全部行重播。建议给"新增行"打 `data-fresh="1"`，只对该行做 200ms 上浮 6px + 淡入。
-3. **时间分隔行**：现在只有分页提示（`.window-tip`）。建议在连续消息间隔 >30 分钟时插入 `.time-divider`（复用 `.window-tip` 样式），文案"今天 14:20 / 昨天 / 10月28日"。
+3. **时间分隔行**：现在只有分页提示（`.window-tip`）。建议在连续消息间隔 >30 分钟时插入 `.time-divider`（复用 `.window-tip` 样式），文案"今天 14:20 / 昨天 / 10月28日"。**（已落地，见第六节；实际阈值取 5 分钟）**
 4. **滚动锚点**：`chat_pager` 已做"贴底才自动跟随"，但用户手动上翻后没有"回到底部"浮钮。建议加 `.jump-bottom`（44px 圆钮，`position:absolute` 于输入栏上方，`is-scrolled` 时显示），点击滚到底。
 5. **加载骨架**：聊天没有骨架屏（首页直接渲染空态）。如需"历史加载中"占位，建议在 `chat_pager` 的 loader 状态给 `.window-tip` 加 `.is-loading`，用三条 shimmer 线（CSS 动画，`prefers-reduced-motion` 关闭）。
 6. **`web/js/tween.js` 未新增**：本次没有任何 JS 侧动画需要统一曲线，单独建文件会成为死代码；统一曲线已放在 CSS 令牌 `--ease-out / --ease-standard`。若后续做流式淡入，再在该文件里导出 `tween(el, {duration, easing})` 给 `app.js` 用。
@@ -96,5 +96,44 @@
 
 新增取舍（仍受文件域限制，需改 `app.js` / `chat_pager.js`）：
 
-8. **状态行出现时不会重新贴底**：错误/旁白条在滚动容器外，出现时 `chatScroll` 高度变小，最后一条会被顶出视口半行。建议 `chat_pager` 在 `ResizeObserver` 里若 `isNearBottom()` 则补一次 `scrollToBottom`；本次只能靠 CSS 让状态区尽量矮（约 64–200px）。
-9. **时间分隔仍然缺位**：见"三-3"，历史里昨天与今天的消息连在一起，没有"昨天 / 今天 14:20"的锚点。这是本轮最影响"聊天像真事"的一处，必须等 JS 侧改动。
+8. **状态行出现时不会重新贴底**：错误/旁白条在滚动容器外，出现时 `chatScroll` 高度变小，最后一条会被顶出视口半行。建议 `chat_pager` 在 `ResizeObserver` 里若 `isNearBottom()` 则补一次 `scrollToBottom`；本次只能靠 CSS 让状态区尽量矮（约 64–200px）。**（已在第六节补上）**
+9. **时间分隔仍然缺位**：见"三-3"，历史里昨天与今天的消息连在一起，没有"昨天 / 今天 14:20"的锚点。这是本轮最影响"聊天像真事"的一处，必须等 JS 侧改动。**（已在第六节补上）**
+
+## 六、第三轮补做：时间分隔 + 状态条贴底（2026-11-05）
+
+`app.js` / `chat_pager.js` 交回后，补上第五节被文件域卡住的两项。本轮按硬约束**不再启动本地 headless 浏览器**，验证改为 node 断言；`after/` 沿用上一轮 22 张截图（时间分隔与贴底是行内间距 / 滚动行为，node 断言比截图更能防回归）。
+
+### 6.1 消息时间分隔（`web/js/time_divider.js` + `app.js` / `chat_pager.js`）
+
+| 条件 | 分隔条 |
+|---|---|
+| 会话第一条（没有上一条） | 不出 |
+| 同一天、间隔 < 5 分钟（含同一分钟） | 不出（连续几句读成一段） |
+| 同一天、间隔 ≥ 5 分钟 | 只给时刻 `14:20` |
+| 跨天 | `今天 14:20` / `昨天 09:05` / `11月3日 08:12` / `2025年12月3日 08:12` |
+| 时间戳缺失 / 非数字 / 倒退 | 不出（宁缺勿错） |
+
+- 每行按 `(上一条时间, 本条时间)` 现算，包成 `.msg-unit > .msg-divider`（`role="separator"`）；窗口重建、滑动、翻页、语音标记重渲染都是幂等的，不重复插入、不错位。
+- 分页边界：`ChatPager.prevStamp(i)` 从绝对下标向前找最近一条带 `at` 的记录，窗口首行因此能拿到窗口外的前一条 —— 同一天 5 分钟内合并，跨天带"今天 / 昨天"。
+- 实时消息的时间戳在 `addMsg` 落到 `rec.at`，`pushHistory` 复用它：内存历史 / IndexedDB / 分隔条三处一致（否则删除、编辑按时间戳定位会失配）。
+- 视觉：`--text-caption`（12.5px，与系统旁白同一档）+ `--text-3`（浅/深在 `--bg` 上 6.4 / 6.2:1）+ 两侧 `--line-soft` 发丝线，无动画。
+
+### 6.2 状态条出现 / 收起后重新贴底（`chat_pager.js` + `app.js`）
+
+- `ChatPager.followBottom()`：仅 `pinned === true` 时把 `scrollTop` 拉到 `scrollHeight`，用 `behavior:"instant"` 绕开 CSS `scroll-behavior:smooth`，避免高度变化瞬间还在缓动、最后一条被顶出半行。
+- `app.js` 在 `ChatPager.mount` 后对 `#statusStack` 挂 `ResizeObserver`，高度变化 ≥1px 才触发（出现、收起都算）。
+- 用户主动上滑时 `onScroll` 置 `pinned=false`，`followBottom()` 直接返回 false，不抢滚动位置；滚回底部后 `pinned` 恢复，跟随能力自动回来。
+
+### 6.3 本轮数字
+
+- `web/` Node 单测：**222/222**（基线 205 + 新增 17：时间分隔纯规则 7 条；落位 / 翻页边界 / 贴底 / 上滑不打断 10 条）。
+- Biome（`npm run lint`）：**0 error**（197 条既有 warning，未新增 error）。
+- `tests/appearance.test.js`：**14/14**（结构 / 令牌级）；浏览器版 `scripts/test_appearance.py` 属 e2e 类，按本轮硬约束不在本地跑，交由云端覆盖。
+- 本轮本地浏览器：**未启动（0 次 / 0 秒）**。
+- 截图：沿用 `after/` 22 张，未新增（硬约束；新增行为已由 node 断言覆盖）。
+
+### 6.4 仍留的取舍
+
+- 回到底部浮钮（第三节-4）未做：`pinned=false` 时只有底栏"N 条新消息"提示；需要新增 HTML 节点与显隐状态，改动面大于本轮两项。
+- 加载骨架（第三节-5）未做：分页占位条已能表达"正在翻出…"，但没有 shimmer。
+- 流式逐字过渡（第三节-1/2）未做：`bubble.textContent` 整段替换，入场动画会在整窗重建时重播，需先给新增行打 `data-fresh`。
