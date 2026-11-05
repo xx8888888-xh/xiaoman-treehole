@@ -15,6 +15,10 @@ import subprocess
 import sys
 import time
 
+from browser_guard import require_browser_allowed
+
+require_browser_allowed(__file__)
+
 from playwright.sync_api import sync_playwright
 
 

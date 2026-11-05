@@ -8,6 +8,10 @@
 """
 import asyncio, json, os, sys, time
 
+from browser_guard import require_browser_allowed
+
+require_browser_allowed(__file__)
+
 BASE = "http://127.0.0.1:8901"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOTS = os.path.join(ROOT, "docs", "shots", "ux_audit")
