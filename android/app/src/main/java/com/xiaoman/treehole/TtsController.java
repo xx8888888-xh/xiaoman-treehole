@@ -55,6 +55,7 @@ final class TtsController {
     private final Context app;
     private final AudioManager audio;
     private final AudioFocusPolicy policy = new AudioFocusPolicy();
+    private final NoisyGuard noisyGuard = new NoisyGuard(policy);
     /** 需要 __ttsEnded 回调的页面（主界面 + 迷你窗）；WeakReference 防止泄漏 */
     private final List<WeakReference<WebView>> pages = new ArrayList<>();
 
@@ -67,7 +68,6 @@ final class TtsController {
     /** 当前这一句的 utteranceId：只有它的完成回调才算"这一轮读完了" */
     private String currentId;
     private boolean focusHeld = false;
-    private boolean noisyRegistered = false;
 
     private TtsController(Context app) {
         this.app = app;
@@ -314,7 +314,7 @@ final class TtsController {
                     || !AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
                 return;
             }
-            if (policy.onBecomingNoisy() == AudioFocusPolicy.Action.STOP) {
+            if (noisyGuard.onBecomingNoisy() == AudioFocusPolicy.Action.STOP) {
                 // 只停，不恢复：恢复朗读必须等用户下一次手势
                 Log.d(TAG, "[probe] audio-becoming-noisy → stop");
                 stopReading("becoming-noisy");
@@ -323,8 +323,7 @@ final class TtsController {
     };
 
     private void registerNoisyReceiver() {
-        if (noisyRegistered) return;
-        try {
+        boolean ok = noisyGuard.register(() -> {
             IntentFilter f = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
             if (Build.VERSION.SDK_INT >= 33) {
                 // 系统广播仍可送达 NOT_EXPORTED；不给第三方 App 伪造"拔耳机"的机会
@@ -332,10 +331,11 @@ final class TtsController {
             } else {
                 app.registerReceiver(noisyReceiver, f);
             }
-            noisyRegistered = true;
+        });
+        if (ok) {
             Log.d(TAG, "[probe] noisy-receiver registered");
-        } catch (Exception e) {
-            Log.w(TAG, "noisy receiver register failed: " + e.getMessage());
+        } else {
+            Log.w(TAG, "noisy receiver register failed");
         }
     }
 }
