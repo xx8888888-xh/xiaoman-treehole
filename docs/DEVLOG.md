@@ -49,11 +49,23 @@
 
 **验证**：`node --test tests/*.test.js` **197/197**（基线 192 + 新增 5）；`pytest server/tests` **153 passed + 19 subtests**；`biome check js/mock_engine.js tests/mock_engine.test.js` **0 error**。
 
-**仍存在的分叉（未在本轮对齐）**：
-1. **W11 轻量模板插值（回声）只在服务端**：离线没有 `extract_detail` 与 5 组详情模板（食物/身体/天气/时段/动作），同一句「今天中午吃了关东煮」在线答「关东煮？听着就馋了…」、离线落 generic「好耶||不对，先问一句…」。（宠物名例外：离线靠记忆感知池也能接住"橘猫"，与在线结构相同、模板不同。）移植=把抽取器+5 组模板搬到前端，属新功能而非对齐，且会改写离线大多数回复，需产品确认后再做。
-2. **状态作用域**：离线 `recentReplies`/`memAwareTs`/召回计数是模块级（多会话共享、刷新即清），服务端按 session 落盘。对齐需把 `reply(history)` 扩成 `reply(history, sid)` 并改 `app.js` 与 `stream.test.js` 的契约，超出"顺手"范围。
+**仍存在的分叉（补丁 II 时点）**：
+1. ~~W11 轻量模板插值（回声）只在服务端~~ → **补丁 III 已移植**（见下）。
+2. ~~状态作用域：离线状态为模块级~~ → **补丁 III 已按 sid 隔离**（见下）。
 3. **关系里程碑/月度回放**：离线有 `greetAnnex()`（依赖 localStorage），服务端本就没有用户级本地状态，属设计差异而非 bug。
-4. 服务端 `extract_detail` 的拒绝守卫在离线无对应实现（离线根本没有详情抽取）。
+4. ~~服务端 `extract_detail` 的拒绝守卫在离线无对应实现~~ → **补丁 III 已同源**。
+
+### 补丁（追补 III）：详情回声移植 + 会话状态隔离
+
+| 对齐项 | 改动 |
+|---|---|
+| 详情回声 | 服务端 `extract_detail` 与模板池（食物/身体/天气/时段/工作物/地点 + 宠物动作/追问）逐字搬到 `mock_engine.js`；同一句「今天中午吃了关东煮」两端都答「…听着就馋了…」；裸「X点」（三点头/一点点）不抽，保守落回话题池 |
+| 回声守卫 | 优先级 `greet 跳过 > 记忆感知 > 详情回声 > 话题池`；用户拒绝建议时 `extract_detail` 直接返回 null，回声不夹带被拒词；抽不出实体落回 generic |
+| 细节去重 | 回声句进入 `recentReplies`，连续两轮不复读且首 4 字不撞；宠物名等记忆值仍走记忆感知池，不被详情池抢走 |
+| 会话隔离 | 契约扩为 `reply(history, sid)`；`recentReplies`/`memAwareTs`/召回计数/引导节奏/上轮话题全部按 sid 存，`localStorage` 键 `xiaoman_engine_state::<sid>`，刷新按会话恢复；`resetSession(sid)` 清内存+持久化键；`sid` 缺省退默认会话，老调用方不崩 |
+| 调用点 | `api.js` 统一传 `sessionId()`；`app.js` 清空记忆、导入备份后 `resetSession(SID)`，不留幽灵 |
+
+**验证**：`node --test` **205/205**（基线 197 + 新增 8）；`pytest server/tests` **153 passed + 19 subtests**；`biome` **0 error**。新增用例见 [mock_engine.test.js](file:///D:/我的/编程/vibe%20coding%20tools/treehole-w16/web/tests/mock_engine.test.js)：详情命中、连续两轮不复读、拒绝让位、记忆池优先、两会话不串味、刷新恢复、删除清理、无 sid 可用。
 
 
 
