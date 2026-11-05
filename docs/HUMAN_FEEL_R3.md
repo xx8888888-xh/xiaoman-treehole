@@ -92,7 +92,9 @@ OpenRouter 第 1 次即 429（账户当日免费池用尽）→ 自动切 pollin
 > 模型（dots）：`团子要是看见估计得当场表演一个原地晕倒。那只猫有人管吗，还是蹲门口蹭饭的？`
 
 结论：评测器对真实后端可用（HTTP/解析/记忆回灌链路已验证），免费额度只够跑 9 条。
-**报告不把 mock 的 100% 当作真实分，也不把付费那 70 条算进来。** 配额更多时加 `--max-requests` 重跑即可补齐覆盖率。
+**报告不把 mock 的 100% 当作真实分，也不把付费那 70 条算进来。** 配额更多时加 `--max-requests` 重跑即可补齐覆盖率；
+本轮已加 `--resume` 断点续跑（13.7）：明天配额恢复后先按要求跑一次产出 `case_stats`，
+之后每次跳过已通过用例接着跑剩余条数（旧的 9 条样本 JSON 没有逐条统计，第一次会被重跑约 7 分钟）。
 
 ## 4. 反套路指标（mock 112 条 / 212 轮 + 真实 9 条 / 17 轮）
 
@@ -135,8 +137,9 @@ OpenRouter 第 1 次即 429（账户当日免费池用尽）→ 自动切 pollin
 > 模型（pollinations）：`团子都想来一口啊||好像是被香味迷住了！`
 
 判定失败原因：`未体现期望内容（期望其一：猫/关东煮/盯）`。
-不像人的点：接住了“团子+香味”，但没接住“蹲窗台盯半小时”这个具体动作，
-更像泛泛搭话；朋友会先笑它“盯了半小时是有多馋”。
+归到「记忆/细节没接住」这一类，并且这是**模型侧**问题：它接住了“团子+香味”，
+但漏掉“蹲窗台盯半小时”这个具体细节/上轮动作——本地模板引擎的 112 条全过，这条不是模板的锅。
+不像人的点：朋友会先笑“盯半小时是有多馋”，而不是泛泛说“被香味迷住了”。
 这是 9 条里的 1 条，真实样本通过 8/9。
 
 ### 5.3 本轮从失败修到通过的 6 个反例（原文可核验）
@@ -237,11 +240,11 @@ OpenRouter 第 1 次即 429（账户当日免费池用尽）→ 自动切 pollin
 
 ```
 python -m pytest server/tests -q
-184 passed, 19 subtests passed in 8.27s
+189 passed, 19 subtests passed in 8.92s
 ```
 
-基线 153 passed + 19 subtests，本轮净增 31 项，无降级、无放宽断言。
-串行执行，未起浏览器/AVD/Gradle；mock 评测 0.2s，pytest 8.3s。
+基线 153 passed + 19 subtests，本轮净增 36 项，无降级、无放宽断言。
+串行执行，未起浏览器/AVD/Gradle；mock 评测 0.2s，pytest 8.9s。
 
 ## 9. 尚存差距（必须说清）
 
@@ -265,6 +268,11 @@ python -m pytest server/tests -q
 ```bash
 # 免费白名单 + 多后端轮换 + 每家请求上限（只跑免费模型）
 python scripts/eval_human_feel.py --all --auto-rotate --max-requests 60 \
+  --json docs/eval_real_w20.json --md docs/eval_real_w20.md
+
+# 配额恢复后断点续跑：跳过已通过用例，与历史结果合并进同一份 JSON/报告
+python scripts/eval_human_feel.py --all --auto-rotate --resume \
+  --max-requests 240 \
   --json docs/eval_real_w20.json --md docs/eval_real_w20.md
 ```
 
@@ -307,6 +315,9 @@ python scripts/eval_human_feel.py --backend api \
 
 实测：`bash scripts/build_assets.sh` 同步 69 文件 / 1.4MB，`ASSET_VERIFY PASS`；
 `node --test web/tests/api.test.js` 224 项全过（新增真人感/记忆槽/心跳安全断言）。
+
+断言数字：**12 个关键词 × 2 端 = 24 条包含断言**、**8 段 × 2 端逐字相等**、
+生成物与生成器逐字相等 1 条、`api.js` 禁手写副本 3 条；Android 副本存在时 2 条逐字相等。
 
 ## 12. lean profile 边界
 
@@ -411,3 +422,33 @@ python scripts/eval_human_feel.py --all --auto-rotate --max-requests 20
 - 唯一失败 `daily-01`（原文见 5.2）。
 
 即：真实合规样本 9 条、覆盖率 8%。不追加、不夸大；付费那 70 条继续作废。
+
+### 13.7 断点续跑（`--resume`）
+
+每次运行都会把**逐条统计**写进 `--json`（`case_stats` / `passed_ids` / `failed_ids`）：
+每条只存 id、类别、通过与否、轮数、建议数、开头重复、记忆回溯与失败原因，不存正文。
+
+```bash
+python scripts/eval_human_feel.py --all --auto-rotate --resume \
+  --max-requests 240 --json docs/eval_real_w20.json --md docs/eval_real_w20.md
+```
+
+- 只跳过 `passed_ids` 里的用例；**失败用例会重跑**，重跑结果覆盖旧记录；
+- 合并按用例 id 去重，历史结果 + 新结果一起算指标与通过率，不会重复计数；
+- 报告头写清覆盖率：`完成 N/112（x%）= 续跑带入 a + 本次新跑 b，剩余 c 条未跑`；
+  不会因为续跑就把“9 条样本”写成“112 条通过”；
+- 旧版 JSON（没有 `case_stats`）会提示“没有逐条统计”并从第 1 条开始，不假装续跑
+  （本轮 13.6 那份 9 条 JSON 就是旧格式，明天第一次续跑会重跑这 9 条，之后再跳过）；
+- 锁死用例（`ResumeTest`，5 项）：跳过已通过、合并去重不重复计数、覆盖率如实、
+  `--resume` 缺 JSON 返回 2、旧格式降级提示；另有 1 项校验
+  `metrics_from_stats` 与 `compute_metrics` 口径完全一致。
+
+**一天跑完 112 条需要多少免费额度**（实测折算）：
+
+- 9 条用掉 20 次请求（含 3 次重试）→ 约 **2.2 次/条**，112 条 ≈ **250 次请求**；
+- OpenRouter 免费池 **50 次/账号/天**（本轮 429 原文 `free-models-per-day`）
+  → 需要 **5 个账号的免费 key**（250 ÷ 50），串行约 20–60 分钟；
+- pollinations 匿名池 **1 次/45 秒/IP ≈ 1920 次/天**，**不需要额外 key**，
+  但要跑约 **3.2 小时**（250 × 46s），且 `--max-requests` 要放到 240 以上；
+- 折中：2 个 OpenRouter 免费 key（100 次）+ pollinations 续跑剩余 150 次 ≈ 2 小时，
+  且任一家随时可能 429，`--resume` 可跨天接着跑，不会重跑已通过的。
