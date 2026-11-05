@@ -1,0 +1,187 @@
+name: perf
+
+# 第六轮性能收口（w21）：只采样、不设门槛。改前/改后同一脚本同一 runner 出硬数字。
+# 触发：feat/perf-r3 push（改前基线 commit 与改后 commit 各跑一次）/ 手动。
+# 服务：本 worktree 的 web/ 静态站（8911）+ server/mock_api.py（8912，AI_MODE=mock）；
+#       不起 TTS（provider=none，全程静音），不复用 8901-8903。
+# 浏览器：Playwright Chromium headless + --mute-audio；本地不跑（browser_guard 硬闸门）。
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [feat/perf-r3]
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "只跑某几项（load,stream,micro,memory；留空=全跑）"
+        required: false
+        default: ""
+      tag:
+        description: "样本标签（before / after）"
+        required: false
+        default: ""
+      baseline:
+        description: "改前基线：临时还原旧 app.js（1=是）"
+        required: false
+        default: ""
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AI_MODE: mock
+  XIAOMAN_HOST: 127.0.0.1
+  XIAOMAN_WEB_PORT: "8911"
+  XIAOMAN_MOCK_PORT: "8912"
+  XIAOMAN_TTS_PROVIDER: none
+  PYTHONUNBUFFERED: "1"
+  PLAYWRIGHT_VERSION: "1.63.0"
+
+jobs:
+  perf:
+    name: perf-r3
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore baseline app.js
+        if: inputs.baseline == '1'
+        run: |
+          # ① 改前基线：同一份采样脚本，只把 app.js 换回开场白非惰性版本
+          git show f0f19f2:web/js/app.js > web/js/app.js
+          git diff --stat
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ env.PLAYWRIGHT_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "playwright==${PLAYWRIGHT_VERSION}"
+          python -m playwright install --with-deps chromium
+
+      - name: Start web + mock
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/perf data/sessions data/tts
+          nohup python -m http.server 8911 --bind 127.0.0.1 --directory web > artifacts/web.log 2>&1 &
+          nohup python server/mock_api.py > artifacts/mock.log 2>&1 &
+          for i in $(seq 1 60); do
+            ok=1
+            curl -sf "http://127.0.0.1:8911/index.html" >/dev/null || ok=0
+            curl -sf "http://127.0.0.1:8912/health" >/dev/null || ok=0
+            if [ "$ok" = "1" ]; then echo "services ready after $((i * 2))s"; exit 0; fi
+            sleep 2
+          done
+          echo "services not ready"; tail -40 artifacts/*.log; exit 1
+
+      - name: Measure
+        run: |
+          set -euo pipefail
+          python scripts/perf_r3.py \
+            --out artifacts/perf/r3.json \
+            --only "${{ inputs.only }}" \
+            --tag "${{ inputs.tag }}"
+
+      - name: Summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          p = "artifacts/perf/r3.json"
+          if not os.path.exists(p):
+              print("no result file"); raise SystemExit(0)
+          d = json.load(open(p, encoding="utf-8"))
+          print("tag:", d.get("tag"), "sha:", d.get("runner", {}).get("GITHUB_SHA"))
+          load = (d.get("load") or {}).get("median")
+          if load:
+              print("load median:", json.dumps(load, ensure_ascii=False))
+              print("load median LCP=%sms FCP=%s firstSend=%sms inputReady=%sms longMax=%sms over50=%s selfcheck=%sms drawSlowest=%sms"
+                    % (load["lcp"], load["fcp"], load["firstSendMs"], load["inputReadyMs"],
+                       load["longMax"], load["longOver50"], load["longTaskSelfCheckMs"],
+                       load["drawSlowestMs"]))
+              thr = (d.get("load") or {}).get("throttled") or {}
+              tm = thr.get("median")
+              if tm:
+                  print("load@%sx median LCP=%sms firstSend=%sms inputReady=%sms longMax=%sms over50=%s over50Max=%sms drawSlowest=%sms"
+                        % (thr.get("rate"), tm["lcp"], tm["firstSendMs"], tm["inputReadyMs"],
+                           tm["longMax"], tm["longOver50"], tm["longOver50Max"], tm["drawSlowestMs"]))
+              gr = (d.get("load") or {}).get("greet") or {}
+              if gr:
+                  print("greet@%sx landed=%sms done=%sms played=%s skipped=%s records=%s"
+                        % (gr.get("throttle"), gr.get("greetLandedMs"), gr.get("greetDoneMs"),
+                           gr.get("played"), gr.get("skipped"), gr.get("records")))
+          st = d.get("stream") or {}
+          if st:
+              print("stream small:", json.dumps(st["small"]["long"], ensure_ascii=False))
+              print("stream large:", json.dumps(st["large"]["long"], ensure_ascii=False))
+              print("stream ratio script=%s reply=%s" % (st.get("ratioScript"), st.get("ratioReplyMs")))
+          mi = d.get("micro") or {}
+          if mi:
+              print("micro push300=%sms (%sus/条) olderAvg=%sms olderMax=%sms"
+                    % (mi["push"]["push300MinMs"], mi["push"]["perPushUs"],
+                       mi["olderAvgMs"], mi["olderMaxMs"]))
+          me = d.get("memory") or {}
+          if me:
+              print("memory heap %s→%sMB growth=%s warmup=%s marks=%s dom=%s→%s longMax=%s"
+                    % (me["heapStartMB"], me["heapEndMB"], me["heapGrowthMB"],
+                       me.get("warmup"), me["heapPer40MB"],
+                       me["domNodesStart"], me["domNodesEnd"], me["longMax"]))
+              co = me.get("consoleOn") or {}
+              if co:
+                  print("memory consoleOn heap %s→%sMB growth=%s marks=%s clearFrees=%sMB"
+                        % (co.get("heapStartMB"), co.get("heapEndMB"), co.get("heapGrowthMB"),
+                           co.get("heapPer40MB"), co.get("consoleClearFreesMB")))
+              print("memory ls delta=%s chars (start %s → end %s) idbRows=%s"
+                    % (me.get("lsDeltaChars"), me.get("lsStartChars"), me.get("lsEndChars"),
+                       me.get("idbRows")))
+              if me.get("allocTop"):
+                  print("memory allocTop:", json.dumps(me["allocTop"], ensure_ascii=False))
+              if me.get("phase2GrowthMB") is not None:
+                  print("memory phase2 growth=%s marks=%s (第二段 200 轮，检验是否收敛)"
+                        % (me.get("phase2GrowthMB"), me.get("phase2Per40MB")))
+              cold = me.get("cold") or {}
+              if cold:
+                  print("memory cold(warmup40) heap %s→%sMB growth=%s marks=%s idbRows=%s"
+                        % (cold.get("heapStartMB"), cold.get("heapEndMB"),
+                           cold.get("heapGrowthMB"), cold.get("heapPer40MB"),
+                           cold.get("idbRows")))
+              ns = me.get("noStore") or {}
+              if ns:
+                  print("memory noStore heap %s→%sMB growth=%s marks=%s"
+                        % (ns.get("heapStartMB"), ns.get("heapEndMB"),
+                           ns.get("heapGrowthMB"), ns.get("heapPer40MB")))
+                  print("memory noStore allocTop:", json.dumps(ns.get("allocTop"), ensure_ascii=False))
+              pg = me.get("paging") or {}
+              if pg:
+                  print("paging moves=%s calls=%s stepOk=%s overlapOk=%s fetchKeepsWindow=%s dupInPage=%s firstRepeat=%s idsPresent=%s totalStable=%s before=%s after=%s"
+                        % (pg["moves"], pg["calls"], pg["stepOk"], pg["overlapOk"],
+                           pg["fetchKeepsWindow"], pg["dupInPage"], pg["firstRepeat"],
+                           pg["idsPresent"], pg["totalStable"], pg["before"], pg["after"]))
+                  print("memory marks:", json.dumps(me.get("marks"), ensure_ascii=False))
+          PY
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-r3-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

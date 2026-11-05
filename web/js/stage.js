@@ -41,6 +41,10 @@ const Stage = (() => {
   const ART_W = 1235;
   const ART_H = 2841;
   const GPU_BUDGET = 12 * 1024 * 1024;   // 首屏：解码纹理 + 画布后备缓冲 ≤12MB
+  // 纹理预解码：每批 3 张，批间让出一个空闲帧（idle timeout 90ms 兜底）。
+  // 目的：把 74ms 的「首帧 drawImage 同步解码」拆成多个小片，最长块 ≤50ms。
+  const DECODE_BATCH = 3;
+  const DECODE_IDLE_TIMEOUT = 90;
   // manifest.tiers 的 decoded（RGBA 解码字节），选档是纯函数，故在此固化同源常量
   const TIERS = {
     s050: { scale: 0.5, decoded: 5001068 },
@@ -82,16 +86,16 @@ const Stage = (() => {
   /** 模型清单地址（档位由引擎按 manifest.tiers 换 art/tiers/<key>/layers 前缀） */
   function modelUrl(tier) {
     // 档位只影响纹理前缀，清单本身与档位无关；保留参数便于探针打印与单测断言
-    return MODEL_BASE + "manifest.json" + (tier ? "?tier=" + encodeURIComponent(tier) : "");
+    return `${MODEL_BASE}manifest.json${tier ? `?tier=${encodeURIComponent(tier)}` : ""}`;
   }
 
   function currentTier(container) {
-    const native = !!(window.AndroidTTS && window.AndroidTTS.available);
+    const native = !!(window.AndroidTTS?.available);
     return pickTier({
       width: container ? container.clientWidth : 0,
       height: container ? container.clientHeight : 0,
       dpr: window.devicePixelRatio || 1,
-      memory: navigator && navigator.deviceMemory,
+      memory: navigator?.deviceMemory,
       native,
       force: window.__texTier
     });
@@ -118,7 +122,7 @@ const Stage = (() => {
       const s = document.createElement("script");
       s.src = src;
       s.onload = () => resolve();
-      s.onerror = () => reject(new Error("加载失败: " + src));
+      s.onerror = () => reject(new Error(`加载失败: ${src}`));
       document.head.appendChild(s);
     });
   }
@@ -136,10 +140,55 @@ const Stage = (() => {
 
   const FALLBACK_TEXT = "小满在打盹…（画面没能加载出来，聊天功能不受影响）";
 
+  /* ---------- 纹理预解码（加载期长任务收口）----------
+   * puppet.load() 只 await 了 Image.onload（字节到达），真正的像素解码发生在
+   * 第一次 drawImage 时同步执行——12 层一次画完就是那个 74ms 长任务。
+   * 这里在首帧之前用 requestIdleCallback 分批调用 img.decode()：解码在空闲帧里
+   * 完成（异步、可被浏览器调度到 worker），首帧只剩 drawImage 的合成，不再触发
+   * 同步解码。批大小 3 保证单批工作量有界；不支持 decode() 的老 WebView 直接跳过，
+   * 保持原行为。 */
+  function nowMs() {
+    return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  }
+
+  function idleSlice() {
+    return new Promise((resolve) => {
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(() => resolve(), { timeout: DECODE_IDLE_TIMEOUT });
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  async function prewarmTextures(p) {
+    const images = Object.keys((p?.images) || {}).map(k => p.images[k]).filter(Boolean);
+    if (!images.length || typeof images[0].decode !== "function") return null;
+    const t0 = nowMs();
+    const stats = { images: images.length, batches: 0, decoded: 0, failed: 0, decodeMs: 0, wallMs: 0 };
+    for (let i = 0; i < images.length; i += DECODE_BATCH) {
+      await idleSlice();
+      const batch = images.slice(i, i + DECODE_BATCH);
+      const d0 = nowMs();
+      const ok = await Promise.all(batch.map(img => img.decode().then(
+        () => true, () => { stats.failed += 1; return false; })));
+      stats.decodeMs += nowMs() - d0;
+      stats.decoded += ok.filter(Boolean).length;
+      stats.batches += 1;
+    }
+    stats.decodeMs = Math.round(stats.decodeMs);
+    stats.wallMs = Math.round(nowMs() - t0);
+    stats.bytes = images.reduce((n, im) => n + (im.naturalWidth || 0) * (im.naturalHeight || 0) * 4, 0);
+    if (typeof window !== "undefined") window.__stageDecode = stats;
+    console.log("[probe] tex-decode images=" + stats.images + " batches=" + stats.batches
+      + " failed=" + stats.failed + " wall=" + stats.wallMs + "ms");
+    return stats;
+  }
+
   /** 清空占位/失败层：重试与成功加载时都先走这里，避免叠加两套提示 */
   function clearStageNotes(container) {
     container.classList.remove("is-fallback");
-    container.querySelectorAll(".stage-note, .stage-fallback").forEach(el => el.remove());
+    container.querySelectorAll(".stage-note, .stage-fallback").forEach((el) => { el.remove(); });
   }
 
   function showNote(container) {
@@ -184,7 +233,7 @@ const Stage = (() => {
     if (next === "hidden" && canvas) canvas.style.visibility = "hidden";
     if (next === "hidden" && host) showFallback(host, detail);
     else if (host) clearStageNotes(host);
-    console.log("[probe] stage-mode=" + next);
+    console.log(`[probe] stage-mode=${next}`);
   }
 
   /* ---------- 视线：参数目标（引擎按 τ=0.42s 做滞后跟随） ---------- */
@@ -222,19 +271,19 @@ const Stage = (() => {
 
   function sharedTicker() {
     const P = typeof window !== "undefined" ? window.PIXI : null;
-    return P && P.Ticker && P.Ticker.shared ? P.Ticker.shared : null;
+    return P?.Ticker?.shared ? P.Ticker.shared : null;
   }
 
   function stopSharedTicker() {
     const t = sharedTicker();
     if (!t) return;
-    try { t.autoStart = false; t.stop(); } catch (e) { /* 忽略 */ }
+    try { t.autoStart = false; t.stop(); } catch (_e) { /* 忽略 */ }
   }
 
   function startSharedTicker() {
     const t = sharedTicker();
     if (!t) return;
-    try { t.autoStart = true; t.start(); } catch (e) { /* 忽略 */ }
+    try { t.autoStart = true; t.start(); } catch (_e) { /* 忽略 */ }
   }
 
   function pauseForEnv(why) {
@@ -246,7 +295,7 @@ const Stage = (() => {
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = null;
     if (puppet && mode === "layers") renderOnce();   // 定格在暂停瞬间的最后一帧
-    console.log("[probe] stage-pause=" + why);
+    console.log(`[probe] stage-pause=${why}`);
   }
 
   function resumeForEnv(why) {
@@ -255,14 +304,14 @@ const Stage = (() => {
     if (!puppet || mode !== "layers") { renderOnce(); return; }
     if (motionEnabled) {
       puppet.setAutoIdle(true);
-      try { puppet.fit(); } catch (e) { /* 布局尺寸可能刚恢复，fit 失败不阻断 */ }
+      try { puppet.fit(); } catch (_e) { /* 布局尺寸可能刚恢复，fit 失败不阻断 */ }
       startSharedTicker();
       startWander();
       startLoop();
     } else {
       freezeFrame();
     }
-    console.log("[probe] stage-resume=" + why);
+    console.log(`[probe] stage-resume=${why}`);
   }
 
   function onVisibility() {
@@ -272,7 +321,7 @@ const Stage = (() => {
 
   function onBlur() { pauseForEnv("blur"); }
   function onFocus() { resumeForEnv("focus"); }
-  function onPageHide(e) { if (!e || !e.persisted) destroy(); }
+  function onPageHide(e) { if (!e?.persisted) destroy(); }
 
   function bindEnv() {
     if (envBound || typeof document === "undefined") return;
@@ -320,7 +369,7 @@ const Stage = (() => {
 
   function renderOnce() {
     if (!puppet) return;
-    try { puppet.fit(); puppet.render(); } catch (e) { /* 单帧失败不阻断 */ }
+    try { puppet.fit(); puppet.render(); } catch (_e) { /* 单帧失败不阻断 */ }
   }
 
   /** 零动画：停循环、冻结到同一帧；只保留一次延时补帧（纹理解码后）随后清零 */
@@ -366,7 +415,7 @@ const Stage = (() => {
 
     activeTier = currentTier(container);
     window.__stageTier = activeTier;   // 探针：E2E 读取实际纹理档位
-    console.log("[probe] tex-tier=" + activeTier);
+    console.log(`[probe] tex-tier=${activeTier}`);
 
     try {
       puppet = new LayeredPuppet(canvas, window.PUPPET_MANIFEST, {
@@ -374,8 +423,10 @@ const Stage = (() => {
         tier: activeTier,
       });
       await puppet.load();       // 纹理失败时引擎自行进入 static/silhouette/hidden
+      // 首帧前把像素解码分批放到空闲帧（见 prewarmTextures 注释）
+      if (puppet.mode === "layers") await prewarmTextures(puppet);
     } catch (e) {
-      await enterFallback((e && e.message) || "引擎初始化失败");
+      await enterFallback((e?.message) || "引擎初始化失败");
       return;
     }
 
@@ -383,7 +434,7 @@ const Stage = (() => {
       // 引擎内部已按契约降级：这里只负责停帧、探针与提示
       setMode(puppet.mode, "纹理加载失败，已降级");
       renderOnce();
-      try { puppet.stop(); } catch (e) { /* 未启动 */ }
+      try { puppet.stop(); } catch (_e) { /* 未启动 */ }
       bindResize();
       return;
     }
@@ -422,7 +473,7 @@ const Stage = (() => {
   /** 画布内部尺寸按可视高度与 DPR（上限 1600），与引擎 fit 同一口径 */
   function sizeCanvas() {
     const scale = Math.min(2, window.devicePixelRatio || 1);
-    const cssH = (canvas && canvas.clientHeight) || (host && host.clientHeight) || 320;
+    const cssH = (canvas?.clientHeight) || (host?.clientHeight) || 320;
     const h = Math.max(240, Math.min(1600, Math.round(cssH * scale)));
     const w = Math.max(120, Math.round(h * ART_W / ART_H));
     canvas.width = w;
@@ -433,7 +484,9 @@ const Stage = (() => {
   function drawImageToCanvas(relPath) {
     return new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => {
+      // 兜底大图（full.png）同样先异步解码再画，避免 onload 里同步解码卡一帧
+      img.onload = async () => {
+        try { if (typeof img.decode === "function") await img.decode(); } catch (_e) { /* 解码失败仍可绘制 */ }
         fallbackImg = img;
         resolve(paintFallback());
       };
@@ -451,7 +504,7 @@ const Stage = (() => {
       ctx.clearRect(0, 0, w, h);
       ctx.drawImage(fallbackImg, 0, 0, w, h);
       return true;
-    } catch (e) { return false; }
+    } catch (_e) { return false; }
   }
 
   function bindResize() {
@@ -478,7 +531,7 @@ const Stage = (() => {
     if (!canvas) return;
     canvas.addEventListener("click", (e) => {
       // 挂件模式下点挂件 = 展开（widget.js 在 capture 阶段已拦截，不会到这里）
-      if (host && host.classList.contains("stage-focus")) return;
+      if (host?.classList.contains("stage-focus")) return;
       const r = host.getBoundingClientRect();
       const ratio = r.height ? (e.clientY - r.top) / r.height : 0.4;
       const head = ratio < 0.55;
@@ -573,14 +626,14 @@ const Stage = (() => {
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = null;
     if (resizeObs) {
-      try { resizeObs.disconnect(); } catch (e) { /* 忽略 */ }
+      try { resizeObs.disconnect(); } catch (_e) { /* 忽略 */ }
       resizeObs = null;
     }
     if (puppet) {
-      try { puppet.stop(); } catch (e) { /* 忽略 */ }   // 引擎自带的 rAF（若曾启动）
+      try { puppet.stop(); } catch (_e) { /* 忽略 */ }   // 引擎自带的 rAF（若曾启动）
       puppet = null;
     }
-    if (canvas && canvas.parentElement) canvas.parentElement.removeChild(canvas);
+    if (canvas?.parentElement) canvas.parentElement.removeChild(canvas);
     canvas = null;
     pausedByEnv = false;
     mode = "idle";
@@ -600,7 +653,7 @@ const Stage = (() => {
   function focusHead() {
     if (!host || !puppet) return;
     host.classList.add("stage-focus");
-    try { puppet.fit(); } catch (e) { /* 忽略 */ }
+    try { puppet.fit(); } catch (_e) { /* 忽略 */ }
     renderOnce();
   }
 
@@ -608,7 +661,7 @@ const Stage = (() => {
   function restoreView() {
     if (!host || !puppet) return;
     host.classList.remove("stage-focus");
-    try { puppet.fit(); } catch (e) { /* 忽略 */ }
+    try { puppet.fit(); } catch (_e) { /* 忽略 */ }
     renderOnce();
   }
 
@@ -629,7 +682,7 @@ const Stage = (() => {
 
   /** 纯函数：TTS 包络 level → 口型目标（<0=无音频 → 静止；零动画连呼吸都停） */
   function lipFor(level, motion) {
-    if (typeof level !== "number" || !isFinite(level) || level <= 0) return 0;
+    if (typeof level !== "number" || !Number.isFinite(level) || level <= 0) return 0;
     if (!motion) return 0;
     return Math.min(1, 0.04 + Math.min(1, level) * 0.55);
   }

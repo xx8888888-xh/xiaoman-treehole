@@ -72,3 +72,17 @@
 - 目标：字号/间距令牌化（4–6 档）、单一主焦点、微交互 80–120ms 按压、统一 24px/1.5px 描边图标、双主题对比度脚本量化、空态/骨架静态占位。
 - 本地只跑轻量校验：`node --test "tests/*.test.js"`（串行，基线 222 不降）、`node --test tests/appearance.test.js`、令牌/对比度扫描（断言在 `appearance.test.js` 内）。
 - **不在本地起 headless 浏览器 / Playwright / AVD / Gradle**；截图一律走 `ui-shots.yml` 云端 artifact。
+
+## w21 · feat/perf-r3（性能遗留收口 · 第六轮并行任务之四）
+
+基线 `r5-20261105` / `a283342`；worktree `treehole-w21`。
+
+| 项 | 内容 |
+|---|---|
+| 可改 | `web/js/stage.js`、`web/js/perf.js`（新建）、`web/js/chat_pager.js`、`scripts/perf_r3.py`（新建）、`docs/PERF_R3.md`、`.github/workflows/perf.yml`（新建）、本节 |
+| 禁止 | `web/js/app.js`、`web/js/pet.js`、`web/css/**`、`web/index.html`、`server/**`、`android/**`、`.github/workflows/ci.yml`、`package.json`、`assets/**`、`web/js/vendor/**` |
+| 不做 | 本地 headless 浏览器 / AVD / Gradle；浏览器数据一律走云端 `perf.yml`（Playwright Chromium） |
+| 门槛 | `node --test "web/tests/*.test.js"` 串行 ≥222 全绿；每项优化必须有改前/改后同一场景硬数字 |
+
+四项目标：① 加载期 >50ms 长任务最长块 ≤50ms（纹理预解码挪 idle、分批）；② 冷启动→首条消息可发送 ≤1.5s；
+③ 流式逐字与历史窗口重建无 O(n) 全量重排；④ 200 轮后堆不线性上涨、纹理不重复解码。

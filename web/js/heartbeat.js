@@ -30,7 +30,7 @@ const Heartbeat = (() => {
   let pushFn = null, historyFn = null;
 
   function state() {
-    try { return JSON.parse(localStorage.getItem(STATE_KEY)) || {}; } catch (e) { return {}; }
+    try { return JSON.parse(localStorage.getItem(STATE_KEY)) || {}; } catch (_e) { return {}; }
   }
   function setState(patch) {
     const s = { ...state(), ...patch };
@@ -82,7 +82,7 @@ const Heartbeat = (() => {
     const lastAsked = s.lastAsked || {};
     const out = [];
     for (const m of list) {
-      const key = (m.tags && m.tags[0]) || String(m.text).split("：")[0];
+      const key = (m.tags?.[0]) || String(m.text).split("：")[0];
       const isPinKey = HB_KEYS.includes(key);
       const excluded = EXCLUDE_KEYS.includes(key) ||
         (m.kind === "pin" && !isPinKey) ||
@@ -115,21 +115,21 @@ const Heartbeat = (() => {
 
   const MEM_REFS = {
     "大事": [
-      (v, t) => `你上次说${v}——准备得怎么样啦，我不催，就是惦记`,
+      (v, _t) => `你上次说${v}——准备得怎么样啦，我不催，就是惦记`,
       (v, t) => `${t.ageTag}你说的${v}，现在到哪一步了`,
       (v, t) => `一直记着${t.ageTag}你说的${v}——后来怎么样了`,
     ],
     "宠物": [
-      (v, t) => `你家的${v}今天乖不乖，拆家了没`,
-      (v, t) => `你家${v}最近有没有闹腾`,
+      (v, _t) => `你家的${v}今天乖不乖，拆家了没`,
+      (v, _t) => `你家${v}最近有没有闹腾`,
     ],
     "老板": [
-      (v, t) => `${v}这周没又折腾你吧`,
-      (v, t) => `${v}最近心情怎么样，你别撞枪口上`,
+      (v, _t) => `${v}这周没又折腾你吧`,
+      (v, _t) => `${v}最近心情怎么样，你别撞枪口上`,
     ],
     "在忙": [
       (v, t) => `${t.ageTag}你说在${v}，现在缓过来点了没`,
-      (v, t) => `${v}那边还顺利吗，有事随时说`,
+      (v, _t) => `${v}那边还顺利吗，有事随时说`,
     ],
     "fact": [
       (v, t) => `${t.ageTag}你说的"${v}"——这事后来怎么样了`,
@@ -238,7 +238,7 @@ const Heartbeat = (() => {
       const s = state();
       const lastAsked = s.lastAsked || {};
       for (const m of window.MemoryStore.all()) {
-        const key = (m.tags && m.tags[0]) || String(m.text).split("：")[0];
+        const key = (m.tags?.[0]) || String(m.text).split("：")[0];
         const tpl = MEMSEE_TPL[key];
         if (!tpl) continue;
         const v = memValue(String(m.text)).trim();
@@ -297,11 +297,11 @@ const Heartbeat = (() => {
     else if (h >= 17 && h < 23) cat = (day === 5) ? "weekend" : "evening";
     else if (h >= 23 || h < 6) cat = "late";
     const entries = [];
-    POOL[cat].forEach((tpl, i) => entries.push({ id: `pool:${cat}:${i}`, tpl, w: 3 }));
+    POOL[cat].forEach((tpl, i) => { entries.push({ id: `pool:${cat}:${i}`, tpl, w: 3 }); });
     POOL.generic.forEach((tpl, i) => { if (cat !== "generic") entries.push({ id: `pool:generic:${i}`, tpl, w: 2 }); });
     for (const c of POOL_FALLBACK_CATS) {
       if (c === cat || c === "generic") continue;
-      POOL[c].forEach((tpl, i) => entries.push({ id: `pool:${c}:${i}`, tpl, w: 1 }));
+      POOL[c].forEach((tpl, i) => { entries.push({ id: `pool:${c}:${i}`, tpl, w: 1 }); });
     }
     return entries;
   }
@@ -327,10 +327,12 @@ const Heartbeat = (() => {
         const v = pick.key === "fact" ? pick.value.slice(0, 30) : pick.value;
         // 组合绑定：ref × opener 全枚举，过滤 7 天内已用
         const combos = [];
-        refs.forEach((rf, ri) => MEM_OPENERS.forEach((op, oi) => {
-          const id = `mem:${pick.key}:${ri}:${oi}:${pick.m.id}`;
-          if (!used.has(id)) combos.push({ rf, op, id });
-        }));
+        refs.forEach((rf, ri) => {
+          MEM_OPENERS.forEach((op, oi) => {
+            const id = `mem:${pick.key}:${ri}:${oi}:${pick.m.id}`;
+            if (!used.has(id)) combos.push({ rf, op, id });
+          });
+        });
         if (combos.length) {
           const c = combos[Math.floor(rnd() * combos.length)];
           const ctx = { ...t, ageTag: ageTagOf(pick.m.ts, now.getTime()) };
@@ -389,14 +391,14 @@ const Heartbeat = (() => {
     const cfg = API.loadCfg();
     // auto 模式（默认无 mode）只要配了 key 也走模型；只有显式 local 才跳过
     if (cfg.apiKey && cfg.mode !== "local") {
-      const hist = (historyFn && historyFn(4)) || [];
+      const hist = (historyFn?.(4)) || [];
       const mem = window.MemoryStore ? heartbeatContext(new Date()) : "";
       try {
         const r = await API.chat(
           [...hist, { role: "user", content: "（时间过去了一会儿，你随手给ta发条微信）" }],
           { heartbeat: true, memSection: mem, now: new Date() }
         );
-        if (r && r.reply) return r;
+        if (r?.reply) return r;
       } catch (e) { console.warn("heartbeat api 降级:", e.message); }
     }
     return offlineGenerate(Math.random, new Date());
