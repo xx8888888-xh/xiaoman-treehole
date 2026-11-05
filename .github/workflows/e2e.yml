@@ -304,7 +304,7 @@ jobs:
             test_appearance) run test_appearance python scripts/test_appearance.py ;;
             test_lifeline_ui) run test_lifeline_ui python scripts/test_lifeline_ui.py ;;
             test_onboarding) run test_onboarding python scripts/test_onboarding.py ;;
-            test_paging) run test_paging python scripts/test_paging.py ;;
+            test_paging) run test_paging env XIAOMAN_PAGING_USE_COMPOSE=1 python scripts/test_paging.py ;;
             test_phase3_e2e) run test_phase3_e2e python scripts/test_phase3_e2e.py ;;
             test_stream_e2e) run test_stream_e2e python scripts/test_stream_e2e.py ;;
             ui_tour) run ui_tour python scripts/ui_tour.py ;;

@@ -29,6 +29,12 @@ from ci_artifacts import shots_dir, write_result
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("XIAOMAN_PAGING_PORT", "8919"))
+# CI 用 compose 的 web（8901）而非自建 8919：python http.server 对 .wasm/.moc3/.png 的
+# Content-Type 不可靠，Live2D 纹理档位读不到（tier=None、字节 0）。本地默认仍自建静态服务。
+USE_COMPOSE = os.environ.get("XIAOMAN_PAGING_USE_COMPOSE") == "1"
+_HOST = os.environ.get("XIAOMAN_HOST", "127.0.0.1")
+_WEB_PORT = int(os.environ.get("XIAOMAN_WEB_PORT", "8901"))
+BASE_URL = f"http://{_HOST}:{_WEB_PORT}" if USE_COMPOSE else f"http://127.0.0.1:{PORT}"
 
 results = []
 
@@ -142,7 +148,7 @@ async def paging_and_fps(browser):
     await ctx.add_init_script("window.__texTier = '1024';")
     page = await ctx.new_page()
     page.on("pageerror", lambda e: print("  [pageerror]", e))
-    await page.goto(f"http://127.0.0.1:{PORT}/index.html", wait_until="domcontentloaded")
+    await page.goto(f"{BASE_URL}/index.html", wait_until="domcontentloaded")
     await page.wait_for_function("() => window.ChatPager && window.ChatStore")
     seeded = await seed_history(page, 300)
     print(f"[PAGING] seeded sid={seeded['sid']} count={seeded['total']}")
@@ -287,7 +293,7 @@ async def tex_bytes(browser, tier):
     page = await ctx.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
-    await page.goto(f"http://127.0.0.1:{PORT}/index.html", wait_until="domcontentloaded")
+    await page.goto(f"{BASE_URL}/index.html", wait_until="domcontentloaded")
     try:
         # 先等真实纹理上传完（1x1 白图会提前满足 >0，不能作为就绪信号）
         floor = 8000000 if tier == "1024" else 30000000
@@ -337,8 +343,12 @@ async def vive(browser):
 
 
 async def main():
-    srv = start_server()
-    print(f"[SERVER] http://127.0.0.1:{PORT} -> {WEB}")
+    srv = None
+    if USE_COMPOSE:
+        print(f"[SERVER] compose web -> {BASE_URL}")
+    else:
+        srv = start_server()
+        print(f"[SERVER] http://127.0.0.1:{PORT} -> {WEB}")
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
             headless=True,
@@ -354,14 +364,15 @@ async def main():
             await vive(browser)
         finally:
             await browser.close()
-    srv.shutdown()
+    if srv:
+        srv.shutdown()
 
     fails = [r for r in results if not r[1]]
     print(f"\nSUMMARY pass={len(results) - len(fails)}/{len(results)}")
     if fails:
         for name, _ok, detail in fails:
             print(f"  FAIL {name} · {detail}")
-    write_result("test_paging", results, extra={"paging_port": PORT})
+    write_result("test_paging", results, extra={"base_url": BASE_URL})
     return 1 if fails else 0
 
 
