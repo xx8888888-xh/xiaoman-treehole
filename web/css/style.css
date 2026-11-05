@@ -758,9 +758,9 @@ html[data-preset="minimal"] { --bubble-me: var(--surface-2); }
 .drawer-head h2 { font-size: var(--text-title); line-height: var(--lh-tight); font-weight: var(--w-semibold); letter-spacing: .01em; }
 .drawer-head .icon-btn { width: var(--tap); height: var(--tap); border-radius: var(--radius-sm); color: var(--text-2); }
 .drawer-sub { margin-bottom: var(--space-3); font-size: var(--text-caption); line-height: var(--lh-body); color: var(--text-2); text-align: left; }
-#reminderList { margin-top: var(--space-5); }
+#reminderList { margin-top: var(--space-4); }
 #reminderList .drawer-sub { margin-bottom: var(--space-2); }
-#statsBox { margin-top: var(--space-5); }
+#statsBox { margin-top: var(--space-4); }
 
 .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); min-height: var(--tap); }
 .chip {
@@ -1081,8 +1081,8 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
 
 /* ---------- 记忆抽屉空态 ---------- */
 .drawer-empty {
-  margin: var(--space-1) 0 var(--space-4);
-  padding: var(--space-3) var(--space-4);
+  margin: var(--space-1) 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -1168,8 +1168,8 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   text-align: left;
 }
 .empty-art {
-  width: var(--avatar);
-  height: var(--avatar);
+  width: var(--tap-sm);
+  height: var(--tap-sm);
   margin-bottom: var(--space-2);
   color: var(--line-strong);
   stroke: currentColor;

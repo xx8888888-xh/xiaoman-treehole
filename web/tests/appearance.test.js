@@ -374,8 +374,16 @@ test("空态/记忆页只有一个主焦点，次级说明收敛；发送态与�
   assert.ok(sub.length <= 40, `记忆页副说明过长（${sub.length} 字），应弱化`);
   // 设置页：关于区压缩，隐私说明只留一句
   const about = HTML.match(/<section class="about">[\s\S]*?<\/section>/)[0];
-  assert.equal([...about.matchAll(/<p/g)].length, 4, "关于区只保留 4 行");
+  assert.equal([...about.matchAll(/<p/g)].length, 5, "关于区只保留 5 行");
   assert.doesNotMatch(about, /服务器也可能留一份上下文/);
+  // 版本号唯一：全站只有一个 v0.6.0 文本节点，升级只改这一处
+  assert.equal([...HTML.matchAll(/0\.6\.0/g)].length, 1, "版本号必须只有一个定义点");
+  assert.match(about, /id="aboutVersion">v0\.6\.0</);
+  // 更新说明只写已落地的事实，不写占位话术
+  assert.match(about, /备份 v3 可完整还原/);
+  assert.match(about, /消息可删可改/);
+  assert.match(about, /5\.94 MiB 降到 0\.98 MiB/);
+  assert.doesNotMatch(HTML, /即将支持|敬请期待|即将上线/);
   // 发送态 / 录制态
   assert.match(CSS, /#app:has\(#typingRow:not\(\.hidden\)\)\s*\.send-btn\[disabled\]/);
   assert.match(CSS, /\.inputbar\[data-recording="true"\]/);
