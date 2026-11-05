@@ -153,8 +153,15 @@ jobs:
                        me.get("idbRows")))
               if me.get("allocTop"):
                   print("memory allocTop:", json.dumps(me["allocTop"], ensure_ascii=False))
-              print("memory phase2 growth=%s marks=%s (第二段 200 轮，检验是否收敛)"
-                    % (me.get("phase2GrowthMB"), me.get("phase2Per40MB")))
+              if me.get("phase2GrowthMB") is not None:
+                  print("memory phase2 growth=%s marks=%s (第二段 200 轮，检验是否收敛)"
+                        % (me.get("phase2GrowthMB"), me.get("phase2Per40MB")))
+              cold = me.get("cold") or {}
+              if cold:
+                  print("memory cold(warmup40) heap %s→%sMB growth=%s marks=%s idbRows=%s"
+                        % (cold.get("heapStartMB"), cold.get("heapEndMB"),
+                           cold.get("heapGrowthMB"), cold.get("heapPer40MB"),
+                           cold.get("idbRows")))
               ns = me.get("noStore") or {}
               if ns:
                   print("memory noStore heap %s→%sMB growth=%s marks=%s"

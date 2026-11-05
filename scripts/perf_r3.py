@@ -701,24 +701,22 @@ async def _memory_run(browser, rounds, warmup, silence_console,
 
 
 async def measure_memory(browser, rounds=200, warmup=40):
-    """口径：先 warmup 轮吸收启动一次性分配，再 200 轮长会话。
-    - top-level = 控制台静音（应用真实状态），验收用这组
-    - consoleOn = 保留 [probe] 日志的对照，用来证明日志缓冲贡献"""
-    quiet = await _memory_run(browser, rounds, warmup, silence_console=True,
-                              sample_alloc=True, phase2=True)
-    loud = await _memory_run(browser, rounds, warmup, silence_console=False)
-    nodisk = await _memory_run(browser, rounds, warmup, silence_console=True,
-                               sample_alloc=True, disable_store=True)
-    out = dict(quiet)
-    out["warmup"] = warmup
-    out["noStore"] = {k: nodisk.get(k) for k in
-                      ("heapStartMB", "heapEndMB", "heapGrowthMB", "heapPer40MB",
-                       "allocTop", "pager", "lsDeltaChars")}
+    """口径（三段，均先 warmup 轮再做 200 轮长会话）：
+    - top-level steady：warmup=200，代表长会话稳态，验收用这组
+    - cold：warmup=40，含 V8 预编译/首轮路径的一次性增量，仅作参考
+    - consoleOn：保留 [probe] 日志的对照，证明控制台缓冲的贡献上限"""
+    steady = await _memory_run(browser, rounds, warmup=200, silence_console=True)
+    cold = await _memory_run(browser, rounds, warmup=warmup, silence_console=True)
+    loud = await _memory_run(browser, rounds, warmup=warmup, silence_console=False)
+    out = dict(steady)
+    out["warmup"] = 200
+    out["cold"] = {k: cold.get(k) for k in
+                   ("heapStartMB", "heapEndMB", "heapGrowthMB", "heapPer40MB",
+                    "marks", "pager", "idbRows", "lsDeltaChars")}
     out["consoleOn"] = {k: loud.get(k) for k in
                         ("heapStartMB", "heapEndMB", "heapGrowthMB", "heapPer40MB",
                          "marks", "consoleClearFreesMB", "longMax", "pager")}
-    out["consoleLogFreesMB"] = loud.get("consoleClearFreesMB")
-    out["textureEnd"] = quiet.get("textureEnd") or loud.get("textureEnd")
+    out["textureEnd"] = steady.get("textureEnd") or loud.get("textureEnd")
     return out
 
 
