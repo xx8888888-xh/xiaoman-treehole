@@ -34,6 +34,14 @@ on:
         description: "只跑 idle/background 耗电段（true 时跳过浮窗探针）"
         required: false
         default: "false"
+      battery_only:
+        description: "只跑 30 分钟电池三段实测（待机/前台/后台；跳过 idle 与浮窗）"
+        required: false
+        default: "false"
+      battery_minutes:
+        description: "电池实测每段分钟数（默认 30）"
+        required: false
+        default: "30"
 
 concurrency:
   group: avd-r4-${{ github.ref }}
@@ -101,7 +109,7 @@ jobs:
   avd-probe:
     runs-on: ubuntu-latest
     needs: build-apk
-    timeout-minutes: 40
+    timeout-minutes: 160
     steps:
       - uses: actions/checkout@v4
 
@@ -145,9 +153,11 @@ jobs:
             for i in 1 2 3; do adb shell pidof com.xiaoman.treehole && { echo "process alive (attempt $i)"; break; }; echo "attempt $i: relaunching"; adb shell am start -n com.xiaoman.treehole/.MainActivity || true; sleep 10; done
             adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found after 3 attempts — crash evidence follows"; adb logcat -d | rg -i "xiaoman|FATAL|AndroidRuntime|lowmemorykiller" | tail -100 || adb logcat -d | tail -200 || true; exit 1; }
             mkdir -p artifacts/avd
-            IDLE="${{ inputs.idle_seconds }}"; BG="${{ inputs.bg_seconds }}"; if [ "${{ inputs.float_only }}" != "true" ]; then python3 scripts/emulator_power_r4.py --idle-seconds "${IDLE:-60}" --bg-seconds "${BG:-300}" --out artifacts/avd/power_r4.json || echo 1 > /tmp/r4_power_failed; fi
-            ROUNDS="${{ inputs.float_rounds }}"; if [ "${{ inputs.power_only }}" != "true" ] && [ -f scripts/emulator_float_r4.py ]; then python3 scripts/emulator_float_r4.py --rounds "${ROUNDS:-5}" --out artifacts/avd/float_r4.json || echo 1 > /tmp/r4_float_failed; fi
+            IDLE="${{ inputs.idle_seconds }}"; BG="${{ inputs.bg_seconds }}"; if [ "${{ inputs.float_only }}" != "true" ] && [ "${{ inputs.battery_only }}" != "true" ]; then python3 scripts/emulator_power_r4.py --idle-seconds "${IDLE:-60}" --bg-seconds "${BG:-300}" --out artifacts/avd/power_r4.json || echo 1 > /tmp/r4_power_failed; fi
+            ROUNDS="${{ inputs.float_rounds }}"; if [ "${{ inputs.power_only }}" != "true" ] && [ "${{ inputs.battery_only }}" != "true" ] && [ -f scripts/emulator_float_r4.py ]; then python3 scripts/emulator_float_r4.py --rounds "${ROUNDS:-5}" --out artifacts/avd/float_r4.json || echo 1 > /tmp/r4_float_failed; fi
+            BM="${{ inputs.battery_minutes }}"; if [ "${{ inputs.battery_only }}" = "true" ]; then python3 scripts/emulator_battery_r4.py --minutes "${BM:-30}" --out artifacts/avd/battery_r4.json || echo 1 > /tmp/r4_battery_failed; fi
             [ ! -f /tmp/r4_power_failed ] || { echo "ERROR: power r4 判据未全部成立（见 artifacts/avd/power_r4.json 与 power_r4_*.txt）"; exit 1; }
+            [ ! -f /tmp/r4_battery_failed ] || { echo "ERROR: battery r4 采集失败（见 artifacts/avd/battery_r4.json）"; exit 1; }
             if [ -f /tmp/r4_float_failed ]; then echo "WARN: emulator_float_r4.py 非零退出（不影响本 job 的耗电判据）"; fi
 
       - name: Upload power artifacts
@@ -187,11 +197,24 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Baseline may only tighten
+        run: |
+          set -uo pipefail
+          PREV=$(mktemp)
+          if git show origin/main:docs/perf_baseline_r6.json > "$PREV" 2>/dev/null; then
+            python scripts/perf_gate.py --baseline docs/perf_baseline_r6.json \
+              --verify-monotonic-against "$PREV"
+          else
+            echo "BASELINE: SKIP (origin/main 尚无该基线文件)"
+          fi
 
       - name: Unit test gate rules
         run: python scripts/test_perf_gate.py
@@ -207,16 +230,19 @@ jobs:
           set -uo pipefail
           FLOAT=$(find gate-artifacts -name float_r4.json 2>/dev/null | head -1)
           POWER=$(find gate-artifacts -name power_r4.json 2>/dev/null | head -1)
-          if [ -z "$FLOAT" ] && [ -z "$POWER" ]; then
-            echo "GATE: SKIP (avd-probe 未上传 float/power json，无法比对基线)"
+          BATTERY=$(find gate-artifacts -name battery_r4.json 2>/dev/null | head -1)
+          if [ -z "$FLOAT" ] && [ -z "$POWER" ] && [ -z "$BATTERY" ]; then
+            echo "GATE: SKIP (avd-probe 未上传 float/power/battery json，无法比对基线)"
             exit 0
           fi
           REQ="float,power"
           if [ "${{ inputs.float_only }}" = "true" ]; then REQ="float"; fi
           if [ "${{ inputs.power_only }}" = "true" ]; then REQ="power"; fi
+          if [ "${{ inputs.battery_only }}" = "true" ]; then REQ="battery"; fi
           ARGS=()
           if [ -n "$FLOAT" ]; then ARGS+=(--float "$FLOAT"); fi
           if [ -n "$POWER" ]; then ARGS+=(--power "$POWER"); fi
+          if [ -n "$BATTERY" ]; then ARGS+=(--battery "$BATTERY"); fi
           python scripts/perf_gate.py "${ARGS[@]}" --require-sections "$REQ" \
             --json-out gate-artifacts/avd_gate.json | tee gate-artifacts/avd_gate.txt
 

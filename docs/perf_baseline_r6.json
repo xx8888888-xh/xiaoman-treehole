@@ -6,15 +6,16 @@
     "sections": {
       "float": "scripts/emulator_float_r4.py 产物 float_r4.json（AVD 浮窗探针）",
       "power": "scripts/emulator_power_r4.py 产物 power_r4.json（AVD 耗电探针）",
-      "firstsend": "scripts/perf_r4.py 产物 r6.json（Playwright 1x / CPU 4x）"
+      "firstsend": "scripts/perf_r4.py 产物 r6.json（Playwright 1x / CPU 4x）",
+      "battery": "scripts/emulator_battery_r4.py 产物 battery_r4.json（AVD 30 分钟绝对量三段实测：待机/前台/后台）"
     },
     "metricFields": {
       "id": "脚本内提取器名；改 id 必须同步改 perf_gate.py",
-      "section": "float | power | firstsend；缺该段数据时记为 SKIP（除非 --require-sections 要求）",
+      "section": "float | power | firstsend | battery；缺该段数据时记为 SKIP（除非 --require-sections 要求）",
       "rule.type": "max | min | range | near | bool",
       "rule.value": "阈值。所有值来自 docs/PERF_R6.md；未为让门变绿而放宽",
-      "r6": "R6 实测值（run 42269769325 / 42273924909 / 42274326628），仅供对照",
-      "unit": "px | ratio | per_sec | ms | pct | count",
+      "r6": "R6 实测值（run 42269769325 / 42273924909 / 42274326628），仅供对照；battery 段的实测值在首次 30 分钟 run 后回填",
+      "unit": "px | ratio | per_sec | ms | pct | count | mAh | bytes",
       "note": "为什么是这个阈值"
     },
     "classes": {
@@ -233,6 +234,110 @@
       "r6": 638,
       "unit": "ms",
       "note": "R6 已定分布判据：最差 <=700ms；不退回单点 425ms"
+    },
+    {
+      "id": "battery.standby_mah_30m",
+      "section": "battery",
+      "rule": {"type": "max", "value": 1.0},
+      "r6": null,
+      "unit": "mAh",
+      "note": "同设备纯待机（App force-stop + 灭屏）30 分钟整机模型上限；首次 run 后按实测收紧"
+    },
+    {
+      "id": "battery.foreground_uid_mah_30m",
+      "section": "battery",
+      "rule": {"type": "max", "value": 0.2},
+      "r6": null,
+      "unit": "mAh",
+      "note": "前台浮窗 30 分钟本 uid 的电源模型估算；只作同一模型回归信号（AVD 无真实电表）"
+    },
+    {
+      "id": "battery.foreground_device_mah_over_standby",
+      "section": "battery",
+      "rule": {"type": "max", "value": 5.0},
+      "r6": null,
+      "unit": "mAh",
+      "note": "前台整机模型 - 纯待机；亮屏本身占大头，给 App 前台的绝对成本上限"
+    },
+    {
+      "id": "battery.foreground_cpu_ms",
+      "section": "battery",
+      "rule": {"type": "max", "value": 900000.0},
+      "r6": null,
+      "unit": "ms",
+      "note": "前台 30 分钟 App 进程 CPU 时间（/proc ticks），主判据之一；超过 15 分钟 CPU 即判红"
+    },
+    {
+      "id": "battery.foreground_wakeups",
+      "section": "battery",
+      "rule": {"type": "max", "value": 30.0},
+      "r6": null,
+      "unit": "count",
+      "note": "前台 30 分钟 Wakeup alarm + Job 次数；空闲应用不应频繁自唤醒"
+    },
+    {
+      "id": "battery.foreground_net_bytes",
+      "section": "battery",
+      "rule": {"type": "max", "value": 1048576.0},
+      "r6": null,
+      "unit": "bytes",
+      "note": "前台 30 分钟整机 Cellular+Wifi 收发；前台静止不应有持续网络"
+    },
+    {
+      "id": "battery.background_uid_mah_30m",
+      "section": "battery",
+      "rule": {"type": "max", "value": 0.05},
+      "r6": null,
+      "unit": "mAh",
+      "note": "后台 30 分钟本 uid 电源模型估算；后台应接近 0"
+    },
+    {
+      "id": "battery.background_device_mah_over_standby",
+      "section": "battery",
+      "rule": {"type": "max", "value": 0.2},
+      "r6": null,
+      "unit": "mAh",
+      "note": "后台整机模型 - 纯待机：即『不高于对照基线 + 固定余量 0.2mAh/30min』"
+    },
+    {
+      "id": "battery.background_cpu_ms",
+      "section": "battery",
+      "rule": {"type": "max", "value": 5000.0},
+      "r6": null,
+      "unit": "ms",
+      "note": "后台 30 分钟 App 进程 CPU 上限；5 秒即 0.28% 单核，超过视为偷偷跑活"
+    },
+    {
+      "id": "battery.background_wakeups",
+      "section": "battery",
+      "rule": {"type": "max", "value": 10.0},
+      "r6": null,
+      "unit": "count",
+      "note": "后台 30 分钟 Wakeup alarm + Job；0 帧结论必须同时有低唤醒次数"
+    },
+    {
+      "id": "battery.background_wakeups_over_standby",
+      "section": "battery",
+      "rule": {"type": "max", "value": 5.0},
+      "r6": null,
+      "unit": "count",
+      "note": "后台唤醒 - 纯待机唤醒：App 带来的额外唤醒，固定余量 5 次/30min"
+    },
+    {
+      "id": "battery.background_net_bytes_over_standby",
+      "section": "battery",
+      "rule": {"type": "max", "value": 65536.0},
+      "r6": null,
+      "unit": "bytes",
+      "note": "后台网络 - 纯待机网络：固定余量 64KB/30min，抓后台偷偷请求"
+    },
+    {
+      "id": "battery.background_frames_30m",
+      "section": "battery",
+      "rule": {"type": "max", "value": 10.0},
+      "r6": null,
+      "unit": "count",
+      "note": "把 R6『后台 5 分钟 0 帧』扩到 30 分钟：隐藏期真实 rAF 帧数 <=10"
     }
   ]
 }
