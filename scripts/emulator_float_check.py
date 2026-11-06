@@ -460,6 +460,135 @@ def pixel_evidence(pframe, base):
         print(f"[FLOAT-PROBE] {line}", flush=True)
 
 
+# 页面侧只做“记录”：在 document 捕获阶段挂 pointerdown/pointerup（与 pet.js
+# onDown/onUp 同一入口），记录 performance.now() 时间戳，用于证明两枪真到页面、
+# 且间隔落在 120–200ms。不影响产品逻辑，也不参与任何断言。
+TAP_HOOK_JS = """(function(){
+  if (!window.__tapHook) {
+    window.__tapHook = true;
+    window.__tapProbe = [];
+    ["pointerdown","pointerup"].forEach(function(t){
+      document.addEventListener(t, function(e){
+        window.__tapProbe.push({type:t, ts:performance.now(),
+          x:(e.clientX||0), y:(e.clientY||0), p:(e.pointerType||"")});
+      }, true);
+    });
+  }
+  window.__tapProbe.length = 0;
+  return true;
+})()"""
+
+
+def pet_double_tap_cdp(target_gap_ms=150):
+    """CDP Input.dispatchTouchEvent 连发两枪（目标间隔 150ms，远小于产品 DOUBLE_MS=380）。
+    返回 dict：mode / inject_gap_ms（宿主侧两枪 touchStart 间隔）/
+    now_before、now_after（注入前后页面 performance.now()）/
+    page_downs（页面捕获到的 pointerdown 记录）/ page_gap_ms / err。
+    只替换注入方式，不改任何断言或阈值。"""
+    from android_cdp import Cdp
+    res = {"mode": "cdp-touch", "inject_gap_ms": None, "now_before": None,
+           "now_after": None, "page_downs": [], "page_gap_ms": None, "err": None}
+    cdp = Cdp(PET_CDP_PORT)
+    try:
+        cdp.attach(url_filter="pet.html", timeout=30)
+        cdp.eval(TAP_HOOK_JS, timeout=15)
+        geo = cdp.eval("({w:innerWidth,h:innerHeight,before:performance.now()})", timeout=10) or {}
+        x = (geo.get("w") or 140) / 2.0
+        y = (geo.get("h") or 180) / 2.0
+        res["now_before"] = geo.get("before")
+        t0 = time.monotonic()
+        cdp.touch_tap(x, y)
+        wait = target_gap_ms / 1000.0 - (time.monotonic() - t0)
+        if wait > 0:
+            time.sleep(wait)
+        t1 = time.monotonic()
+        cdp.touch_tap(x, y)
+        res["inject_gap_ms"] = round((t1 - t0) * 1000.0, 1)
+        after = cdp.eval("({now:performance.now(),downs:(window.__tapProbe||[])})", timeout=10) or {}
+        res["now_after"] = after.get("now")
+        downs = [e for e in (after.get("downs") or []) if e.get("type") == "pointerdown"]
+        res["page_downs"] = downs
+        if len(downs) >= 2:
+            res["page_gap_ms"] = round(downs[1]["ts"] - downs[0]["ts"], 1)
+        else:
+            res["err"] = f"页面只收到 {len(downs)} 个 pointerdown（CDP 触摸未送达）"
+    except Exception as e:
+        res["err"] = str(e)[:140]
+    finally:
+        try:
+            cdp.close()
+        except Exception:
+            pass
+    return res
+
+
+def pet_double_tap_page(target_gap_ms=150):
+    """CDP 触摸不可达时的兜底：在 pet.html 页内构造 PointerEvent，直调产品同一入口
+    （document 捕获阶段的 pointerdown/pointerup，即 pet.js onDown/onUp 的监听目标）。
+    返回字段同 pet_double_tap_cdp；page_downs 由同一捕获阶段记录，可证产品路径确实收到两枪。"""
+    from android_cdp import Cdp
+    res = {"mode": "page-__tap", "inject_gap_ms": None, "now_before": None,
+           "now_after": None, "page_downs": [], "page_gap_ms": None, "err": None}
+    cdp = Cdp(PET_CDP_PORT)
+    try:
+        cdp.attach(url_filter="pet.html", timeout=30)
+        js = """(async function(){
+          if (!window.__tapHook) {
+            window.__tapHook = true;
+            window.__tapProbe = [];
+            ["pointerdown","pointerup"].forEach(function(t){
+              document.addEventListener(t, function(e){
+                window.__tapProbe.push({type:t, ts:performance.now(),
+                  x:(e.clientX||0), y:(e.clientY||0), p:(e.pointerType||"")});
+              }, true);
+            });
+          }
+          window.__tapProbe.length = 0;
+          function ev(type, x, y){
+            document.dispatchEvent(new PointerEvent(type, {
+              bubbles:true, cancelable:true, composed:true,
+              clientX:x, clientY:y, screenX:x, screenY:y, pointerId:1,
+              pointerType:"touch", isPrimary:true, button:0,
+              buttons:(type === "pointerdown" ? 1 : 0)
+            }));
+          }
+          var x = innerWidth / 2, y = innerHeight / 2;
+          var t0 = performance.now();
+          ev("pointerdown", x, y); ev("pointerup", x, y);
+          await new Promise(function(r){ setTimeout(r, GAP_MS); });
+          var t1 = performance.now();
+          ev("pointerdown", x, y); ev("pointerup", x, y);
+          var t2 = performance.now();
+          var downs = window.__tapProbe.filter(function(e){ return e.type === "pointerdown"; });
+          return {now_before:t0, now_after:t2, inject_gap_ms:(t1 - t0),
+                  downs:downs, page_gap_ms:(downs.length > 1 ? (downs[1].ts - downs[0].ts) : null)};
+        })()""".replace("GAP_MS", str(int(target_gap_ms)))
+        r = cdp.eval(js, timeout=20) or {}
+        res.update({"inject_gap_ms": r.get("inject_gap_ms"), "now_before": r.get("now_before"),
+                    "now_after": r.get("now_after"), "page_downs": r.get("downs") or [],
+                    "page_gap_ms": r.get("page_gap_ms")})
+        if len(res["page_downs"]) < 2:
+            res["err"] = f"页面只收到 {len(res['page_downs'])} 个 pointerdown（页内探针未生效）"
+    except Exception as e:
+        res["err"] = str(e)[:140]
+    finally:
+        try:
+            cdp.close()
+        except Exception:
+            pass
+    return res
+
+
+def pet_double_tap(target_gap_ms=150):
+    """优先 CDP 触摸注入；页面未收到两枪时降级到页内 __tap（同一 pointerdown 入口）。"""
+    res = pet_double_tap_cdp(target_gap_ms)
+    if res["err"] or len(res["page_downs"]) < 2:
+        bad = res["err"] or f"page downs={len(res['page_downs'])}"
+        print(f"[FLOAT-DIAG] cdp-touch 不可用（{bad}），降级页内 PointerEvent（同一入口）", flush=True)
+        res = pet_double_tap_page(target_gap_ms)
+    return res
+
+
 def pet_visible(shot_name, box, base):
     """桌宠可见 = dumpsys frame 存在 + frame 内与基线差异 ≥ PET_MIN_DIFF。"""
     if not box:
@@ -873,9 +1002,17 @@ def main():
         check("单击气泡后桌宠仍在（不被气泡顶掉）", pet_frame(wins_b) is not None,
               f"pet_frame={pet_frame(wins_b)}")
 
-        # ⑥ 双击桌宠（同一个 adb shell 连发两枪，间隔 <380ms）→ 展开迷你窗
+        # ⑥ 双击桌宠 → 展开迷你窗
+        # 注入方式：CDP Input.dispatchTouchEvent 连发两枪（目标间隔 150ms，远小于产品 DOUBLE_MS=380）。
+        # adb `input tap` 每条命令都会重启 app_process，实测两枪间隔 493ms（run #126），不可信；
+        # 见 docs §3.10。断言与阈值不变，只换注入源。
         sh("adb logcat -c")
-        sh(f"adb shell \"input tap {tapx} {tapy}; input tap {tapx} {tapy}\"")
+        dbl = pet_double_tap(150)
+        print("[FLOAT-DIAG] double-inject mode={mode} inject_gap={ig}ms page_gap={pg}ms "
+              "now_before={nb} now_after={na} downs={dn} err={err}".format(
+                  mode=dbl["mode"], ig=dbl["inject_gap_ms"], pg=dbl["page_gap_ms"],
+                  nb=dbl["now_before"], na=dbl["now_after"],
+                  dn=len(dbl["page_downs"]), err=dbl["err"]), flush=True)
         big, panel_box, cnt6 = None, None, 0
         for i in range(5):
             time.sleep(3)

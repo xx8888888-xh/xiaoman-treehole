@@ -118,6 +118,18 @@ class Cdp:
                 f.write(data)
         return data
 
+    def touch_tap(self, x, y, timeout=10):
+        """CDP 注入一次触摸点击（touchStart → touchEnd），x/y 为页面 CSS 像素。
+        Android WebView 对 Input.dispatchTouchEvent 的支持优先验证；不支持会抛
+        RuntimeError（调用方降级到页内 PointerEvent 探针）。"""
+        self._send("Input.dispatchTouchEvent",
+                   {"type": "touchStart",
+                    "touchPoints": [{"id": 0, "x": x, "y": y, "radiusX": 1, "radiusY": 1, "force": 1}]},
+                   timeout=timeout)
+        self._send("Input.dispatchTouchEvent",
+                   {"type": "touchEnd", "touchPoints": []},
+                   timeout=timeout)
+
     def close(self):
         try:
             self.ws.close()
