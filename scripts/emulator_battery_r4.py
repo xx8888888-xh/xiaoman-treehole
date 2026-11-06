@@ -338,7 +338,7 @@ class Segment(object):
             "cpuinfoApp": ep.cpuinfo().get("app") or [],
         })
 
-    def end(self, extra=None):
+    def finish(self, extra=None):
         ticks1, detail1 = ep.procs_ticks()
         stat1 = proc_stat()
         text = read_batterystats(f"{self.name}_end")
@@ -437,7 +437,7 @@ def run_window(seg, extra_at_end=None):
         seg.sample()
         k += 1
     extra = extra_at_end() if extra_at_end else None
-    return seg.end(extra)
+    return seg.finish(extra)
 
 
 # ---- 设备状态切换 -----------------------------------------------------------
