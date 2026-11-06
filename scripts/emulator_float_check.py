@@ -254,11 +254,30 @@ def unique_colors(im):
 CANVAS_JS = r"""
 (() => {
   const c = document.querySelector('#petCanvas') || document.querySelector('canvas');
-  if (!c) return { present: false, canvases: document.querySelectorAll('canvas').length };
-  const st = (window.__pet && window.__pet.state) ? window.__pet.state() : null;
-  const out = { present: true, w: c.width, h: c.height,
-                cw: c.clientWidth, ch: c.clientHeight,
-                dpr: window.devicePixelRatio || 0, state: st };
+  const root = document.getElementById('petRoot');
+  const stage = document.getElementById('petStage');
+  const box = (el) => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { cw: el.clientWidth, ch: el.clientHeight,
+             rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
+  };
+  const cs = c ? getComputedStyle(c) : null;
+  const out = {
+    viewport: { innerW: innerWidth, innerH: innerHeight,
+                deW: document.documentElement.clientWidth,
+                deH: document.documentElement.clientHeight,
+                bodyW: document.body.clientWidth, bodyH: document.body.clientHeight,
+                dpr: devicePixelRatio || 0, vis: document.visibilityState,
+                hasFocus: document.hasFocus() },
+    root: box(root), stage: box(stage), canvasEl: box(c),
+    css: cs ? { w: cs.width, h: cs.height, display: cs.display,
+                visibility: cs.visibility, position: cs.position } : null
+  };
+  if (!c) { out.present = false; out.canvases = document.querySelectorAll('canvas').length; return out; }
+  out.present = true;
+  out.w = c.width; out.h = c.height;
+  out.state = (window.__pet && window.__pet.state) ? window.__pet.state() : null;
   try {
     const ctx = c.getContext('2d');
     const d = ctx.getImageData(0, 0, c.width, c.height).data;
@@ -272,6 +291,17 @@ CANVAS_JS = r"""
   catch (e) { out.dataurl_err = String(e); }
   return out;
 })()
+"""
+
+CONTROL_JS = r"""
+(() => ({
+  innerW: innerWidth, innerH: innerHeight,
+  deW: document.documentElement.clientWidth, deH: document.documentElement.clientHeight,
+  dpr: devicePixelRatio || 0, vis: document.visibilityState,
+  canvases: Array.from(document.querySelectorAll('canvas')).map(c => ({
+    id: c.id || c.className, w: c.width, h: c.height,
+    cw: c.clientWidth, ch: c.clientHeight }))
+}))()
 """
 
 CANVAS_PNG_JS = r"""
@@ -380,6 +410,19 @@ def pixel_evidence(pframe, base):
             cdp.close()
         except Exception:
             pass
+
+    try:
+        # 对照组：主界面 index.html 的 WebView（同一设备/同一 WebView 引擎，
+        # 若它 clientWidth 正常、overlay 里的 pet 页面为 0，问题就锁定在 overlay 窗口布局/合成）
+        ctl = Cdp(PET_CDP_PORT)
+        try:
+            ctl.attach(url_filter="index.html", timeout=20)
+            ev.append("control(main index.html): "
+                      + json.dumps(ctl.eval(CONTROL_JS, timeout=20), ensure_ascii=False)[:320])
+        finally:
+            ctl.close()
+    except Exception as e:
+        ev.append(f"control: err={str(e)[:100]}")
 
     try:
         if m1 is not None and m2 is not None and m1.size == m2.size:
