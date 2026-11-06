@@ -270,7 +270,15 @@ def main():
             lastBubble: r(lastB),
             inputBar: r(document.querySelector(".inputbar")),
             input: r(document.querySelector("#textInput")),
-            focused: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : null
+            focused: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : null,
+            // 布局取证：极矮横屏规则是否命中、顶栏到底有没有让位
+            mediaShort: matchMedia("(orientation: landscape) and (max-height: 260px)").matches,
+            topbar: (() => {
+                const t = document.querySelector(".topbar");
+                if (!t) return null;
+                return {display: getComputedStyle(t).display, ...r(t)};
+            })(),
+            stage: r(document.querySelector("#stage"))
         };
     }""")
 

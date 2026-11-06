@@ -2314,6 +2314,18 @@ const App = (() => {
           }
           lastGap = gap();
         });
+        // 真机复现：键盘已弹起后再追加消息，append 路径不会重算 scrollTop，
+        // 最后一条会停在容器下方（实测 38px 落到键盘后面）。用 MutationObserver
+        // 兜住所有追加/流式更新，仅在用户原本贴底时才跟随，不打断翻看历史。
+        if (typeof MutationObserver !== "undefined") {
+          const mo = new MutationObserver(() => {
+            if (lastGap > 60) return;
+            const row = lastVisibleRow();
+            if (row) row.scrollIntoView({ block: "nearest" });
+            lastGap = gap();
+          });
+          mo.observe(s, { childList: true, subtree: true });
+        }
       }
     } catch (e) { console.warn("[probe] VIEWPORT_FAIL", e.message); }
 
