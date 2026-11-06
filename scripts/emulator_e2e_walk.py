@@ -684,9 +684,8 @@ def main():
     }
     gate("03_voice", require_reply, "03_voice", ok3,
          {"sent": sent3, "rows": (p3 or {}).get("rows")})
-    gate("03_voice", require_true, "03_voice", lip_ok,
-         "语音播放期间口型帧为 0（maxLipSync=%s nonZeroLipSync=%s event=%s）"
-         % (voice.get("maxLipSync"), voice.get("nonZeroLipSync"), ev))
+    # BASELINE 分支临时跳过：本分支故意复现"零动画口型归零"缺陷，只为量 motion=true 基线
+    # gate("03_voice", require_true, "03_voice", lip_ok, "口型为 0")
 
     # ---------------- ③b 非默认预设（motion=true）同段语音对照 ----------------
     # 同一段 TTS fixture（text 不影响 cmd provider 的 WAV）：比较满帧路径的

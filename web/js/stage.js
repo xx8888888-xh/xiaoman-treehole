@@ -891,8 +891,9 @@ const Stage = (() => {
   /** 纯函数：TTS 包络 level → 口型目标（<0=无音频 → 静止）。
    *  口型是"正在说话"的事实反馈，不跟装饰动效开关走：motion 只决定用什么节奏画
    *  （满帧平滑 / 零动画 ≤15fps 限频定格），不决定嘴要不要动。 */
-  function lipFor(level) {
+  function lipFor(level, motion) {
     if (typeof level !== "number" || !Number.isFinite(level) || level <= 0) return 0;
+    if (!motion) return 0;   // 预修复基线：零动画下口型被归零（缺陷复现）
     return Math.min(1, 0.04 + Math.min(1, level) * 0.55);
   }
 
@@ -900,7 +901,7 @@ const Stage = (() => {
   function lipFrame(level) {
     // TTS/音频每喂一帧（含静音段 level=0）都是"正在播放"的真实信号
     markActive();
-    const target = lipFor(level);
+    const target = lipFor(level, motionEnabled);
     lipOpen = target;
     lipHold = target > 0 ? 6 : 0;
     if (!puppet || mode !== "layers") { lipWasOpen = target > 0.02; return; }
