@@ -20,6 +20,8 @@ v8 变更（Live2D 桌宠替代圆形悬浮球）：
   ⑧收起回桌宠 → ⑨float_stop 清理 → ⑩权限拒绝不崩溃 → ⑪进程被杀后恢复。
 退出码：0=全部通过；1=有失败项（逐项 [FLOAT-PASS]/[FLOAT-FAIL]）。
 """
+import base64
+import json
 import re
 import subprocess
 import sys
@@ -29,6 +31,7 @@ PKG = "com.xiaoman.treehole"
 SVC = f"{PKG}/.FloatWindowService"
 MAIN = f"{PKG}/.MainActivity"
 RESULTS = []
+PET_CDP_PORT = 9225        # 桌宠 pet.html 的 WebView devtools 转发端口（沿用既有约定）
 
 # ---- 像素差分阈值（1080x2148 实测分辨率标定；按比例自适应其他屏）----
 TOP_CROP = 120          # 裁掉状态栏+launcher时钟区（分钟跳变防误报）
@@ -195,22 +198,217 @@ def bubble_frame(wins):
     return None
 
 
+def region_mask(base, cur, box):
+    """区域差分二值 mask（阈值 DIFF_SENS），box 为全屏坐标。"""
+    from PIL import ImageChops
+    x1, y1, x2, y2 = [int(v) for v in box]
+    y1 = max(0, y1 - TOP_CROP)
+    y2 = max(0, y2 - TOP_CROP)
+    d = ImageChops.difference(base.crop((x1, y1, x2, y2)), cur.crop((x1, y1, x2, y2)))
+    m = d.point(lambda v: 255 if v > DIFF_SENS else 0)
+    return m, m.histogram()[255]
+
+
 def region_diff(base, cur, box):
     """区域差分计数（base/cur 为 TOP_CROP 裁剪后的灰度图，box 为全屏坐标）。"""
     if not box:
         return 0
     try:
-        from PIL import ImageChops
-        x1, y1, x2, y2 = [int(v) for v in box]
-        y1 = max(0, y1 - TOP_CROP)
-        y2 = max(0, y2 - TOP_CROP)
-        b = base.crop((x1, y1, x2, y2))
-        c = cur.crop((x1, y1, x2, y2))
-        d = ImageChops.difference(b, c)
-        m = d.point(lambda v: 255 if v > DIFF_SENS else 0)
-        return m.histogram()[255]
+        return region_mask(base, cur, box)[1]
     except Exception:
         return 0
+
+
+def content_mask(im):
+    """渲染层图里的「模型像素」mask 与计数。
+    透明背景（WebView 页背景 transparent）按 alpha>16 计；
+    不透明背景（CDP 出白底/黑底时）按与左上角背景像素灰度差>DIFF_SENS 计。
+    口径仍是「与同源背景不同的像素数」，与 screencap 基线差分同一量级。"""
+    from PIL import Image, ImageChops
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        a = im.convert("RGBA").getchannel("A")
+        m = a.point(lambda v: 255 if v > 16 else 0)
+    else:
+        g = im.convert("L")
+        bg = g.getpixel((0, 0))
+        d = ImageChops.difference(g, Image.new("L", g.size, bg))
+        m = d.point(lambda v: 255 if v > DIFF_SENS else 0)
+    return m, m.histogram()[255]
+
+
+def unique_colors(im):
+    """唯一色数（透明图层应远大于 1；纯色说明该区域没有画任何东西）。"""
+    try:
+        cols = im.convert("RGB").getcolors(1 << 24)
+        return -1 if cols is None else len(cols)
+    except Exception:
+        return -1
+
+
+# ---- 渲染层取图（不改产品代码，只换取图源）----------------------------------
+# screencap 走 SurfaceFlinger 合成结果；软件 GL 模拟器对 APPLICATION_OVERLAY
+# 可能根本不给该区域出帧（历史 run #110/#120 实测 frame 内 diff 恒 0）。
+# WebView 自己的渲染层不受这条路径影响，因此加两路独立取图：
+#   ① Page.captureScreenshot（Android WebView 若未实现该命令则抛错）
+#   ② 页内 canvas.toDataURL（2D 画布读回，图层真的画了就有内容）
+CANVAS_JS = r"""
+(() => {
+  const c = document.querySelector('#petCanvas') || document.querySelector('canvas');
+  if (!c) return { present: false, canvases: document.querySelectorAll('canvas').length };
+  const st = (window.__pet && window.__pet.state) ? window.__pet.state() : null;
+  const out = { present: true, w: c.width, h: c.height,
+                cw: c.clientWidth, ch: c.clientHeight,
+                dpr: window.devicePixelRatio || 0, state: st };
+  try {
+    const ctx = c.getContext('2d');
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    let a0 = 0, a16 = 0;
+    for (let i = 3; i < d.length; i += 4) { if (d[i] > 0) a0++; if (d[i] > 16) a16++; }
+    out.alpha_gt0 = a0; out.alpha_gt16 = a16;
+    out.total = c.width * c.height;
+    out.alpha_ratio = out.total ? +(a16 / out.total).toFixed(4) : 0;
+  } catch (e) { out.read_err = String(e); }
+  try { out.dataurl_len = c.toDataURL('image/png').length; }
+  catch (e) { out.dataurl_err = String(e); }
+  return out;
+})()
+"""
+
+CANVAS_PNG_JS = r"""
+(() => {
+  const c = document.querySelector('#petCanvas') || document.querySelector('canvas');
+  if (!c) return '';
+  try {
+    const url = c.toDataURL('image/png');
+    return url.length > 7000000 ? '' : url;
+  } catch (e) { return ''; }
+})()
+"""
+
+
+def layer_png(cdp, path):
+    """取 WebView 渲染层 PNG。返回 (ok, source, detail)。
+    优先 Page.captureScreenshot；Android WebView 未实现该命令时退回 canvas.toDataURL。"""
+    detail = ""
+    try:
+        data = cdp.screenshot(path, timeout=15)
+        if data and len(data) > 100:
+            return True, "Page.captureScreenshot", f"{len(data)}B"
+        detail = "screenshot 空"
+    except Exception as e:
+        detail = f"screenshot 不支持: {str(e)[:70]}"
+    try:
+        url = cdp.eval(CANVAS_PNG_JS, timeout=25) or ""
+        if url.startswith("data:image/png;base64,"):
+            raw = base64.b64decode(url.split(",", 1)[1])
+            with open(path, "wb") as f:
+                f.write(raw)
+            return True, "canvas.toDataURL", f"{len(raw)}B | {detail}"
+        detail += " | canvas.toDataURL 空"
+    except Exception as e:
+        detail += f" | canvas 读回失败: {str(e)[:60]}"
+    return False, "", detail
+
+
+def pet_layer_px(name):
+    """从桌宠 WebView 渲染层取图并统计模型像素（CDP 截图优先，canvas 读回兜底）。
+    返回 (count, detail)；count=None 表示两路取证都失败（调用方必须退回 screencap）。"""
+    from android_cdp import Cdp
+    from PIL import Image
+    cdp = Cdp(PET_CDP_PORT)
+    try:
+        cdp.attach(url_filter="pet.html", timeout=30)
+        ok, src, det = layer_png(cdp, name)
+        if ok:
+            im = Image.open(name)
+            _, cnt = content_mask(im)
+            return cnt, (f"src={src} {im.size[0]}x{im.size[1]} mode={im.mode} "
+                         f"content={cnt}px unique={unique_colors(im)} {det}")
+        js = cdp.eval(CANVAS_JS, timeout=20) or {}
+        if js.get("present"):
+            return (js.get("alpha_gt16"),
+                    f"canvas {js.get('w')}x{js.get('h')} alpha={js.get('alpha_gt16')} "
+                    f"state={json.dumps(js.get('state'), ensure_ascii=False)[:120]} | {det}")
+        return None, f"无 canvas | {det}"
+    except Exception as e:
+        return None, f"cdp-err: {str(e)[:100]}"
+    finally:
+        try:
+            cdp.close()
+        except Exception:
+            pass
+
+
+def pixel_evidence(pframe, base):
+    """判清 frame 内 diff=0px 是「图层没画」还是「screencap 抓不到」。
+    同一时刻三路证据（screencap / 渲染层 PNG / 页内 canvas 读回）落盘并打印，
+    只输出 [FLOAT-PROBE]，不改任何断言判定。"""
+    from PIL import Image, ImageChops
+    from android_cdp import Cdp
+    ev = []
+    crop, m1, cnt1 = None, None, -1
+    try:
+        shot("emulator_04_float_screencap.png")
+        full = Image.open("emulator_04_float_screencap.png").convert("RGB")
+        crop = full.crop(pframe)
+        crop.save("emulator_04_float_crop.png")
+        cur = gray("emulator_04_float_screencap.png")
+        m1, cnt1 = region_mask(base, cur, pframe)
+        ev.append(f"screencap: full={full.size[0]}x{full.size[1]} "
+                  f"crop={crop.size[0]}x{crop.size[1]} changed_vs_base={cnt1}px "
+                  f"unique={unique_colors(crop)}")
+    except Exception as e:
+        ev.append(f"screencap: err={str(e)[:80]}")
+
+    cim, m2, cnt2 = None, None, -1
+    cdp = Cdp(PET_CDP_PORT)
+    try:
+        cdp.attach(url_filter="pet.html", timeout=30)
+        ok, src, det = layer_png(cdp, "emulator_04_float_layer.png")
+        if ok:
+            cim = Image.open("emulator_04_float_layer.png")
+            m2, cnt2 = content_mask(cim)
+            ev.append(f"layer: src={src} {cim.size[0]}x{cim.size[1]} mode={cim.mode} "
+                      f"content={cnt2}px unique={unique_colors(cim)} {det}")
+        else:
+            ev.append(f"layer: 取证失败 {det}")
+        ev.append("canvas: " + json.dumps(cdp.eval(CANVAS_JS, timeout=25), ensure_ascii=False)[:500])
+    except Exception as e:
+        ev.append(f"cdp: err={str(e)[:120]}")
+    finally:
+        try:
+            cdp.close()
+        except Exception:
+            pass
+
+    try:
+        if m1 is not None and m2 is not None and m1.size == m2.size:
+            ov = ImageChops.multiply(m1, m2).histogram()[255]
+            blind = cnt1 < PET_MIN_DIFF <= cnt2
+            ev.append(f"compare: size={m1.size[0]}x{m1.size[1]} layer_content={cnt2}px "
+                      f"screencap_changed={cnt1}px overlap={ov}px -> "
+                      f"{'screencap 抓不到图层' if blind else '两源一致'}")
+        elif m1 is not None and m2 is not None:
+            ev.append(f"compare: 尺寸不同 screencap_crop={m1.size} layer={m2.size}（仅并列统计）")
+    except Exception as e:
+        ev.append(f"compare: err={str(e)[:60]}")
+
+    try:
+        if crop is not None and cim is not None:
+            h = max(crop.size[1], cim.size[1])
+            side = Image.new("RGB", (crop.size[0] + cim.size[0] + 12, h), (255, 255, 255))
+            rgba = cim.convert("RGBA") if cim.mode != "RGBA" else cim
+            bg = Image.new("RGB", cim.size, (255, 255, 255))
+            bg.paste(rgba, mask=rgba.getchannel("A"))
+            side.paste(bg, (0, 0))
+            side.paste(crop, (cim.size[0] + 12, 0))
+            side.save("emulator_04_float_sidebyside.png")
+            ev.append("sidebyside: emulator_04_float_sidebyside.png（左=渲染层叠白底 / 右=screencap）")
+    except Exception as e:
+        ev.append(f"sidebyside: err={str(e)[:60]}")
+
+    for line in ev:
+        print(f"[FLOAT-PROBE] {line}", flush=True)
 
 
 def pet_visible(shot_name, box, base):
@@ -539,6 +737,9 @@ def main():
           f"overlay={len(ov)}/{len(wins)} frames={[w['frame'] for w in ov][:3]}" if wins
           else "dumpsys未解析出窗口(诊断已存)")
     check("桌宠窗口已注册（140x180dp frame）", pframe is not None, f"frame={pframe}")
+    if pframe:
+        # 取证：同一时刻 screencap / WebView 渲染层 / canvas 读回三路并排，判 diff=0px 归因
+        pixel_evidence(pframe, base)
     check("桌宠可见（frame 内 Live2D 差分≥6000px）", pet_ok, f"diff={pdiff}px frame={pframe}")
     check("桌宠 Live2D 已就绪（[probe] pet-ready）", probe_has("[probe] pet-ready"))
     # 浮窗以前漏挂 AndroidTTS（回复只有字没有声）。注入入口统一到 WebShell.attachAndroidTts
@@ -739,6 +940,9 @@ def main():
     cur11 = gray("emulator_11_recovery_before.png")
     before_ok = p11 is not None and region_diff(base, cur11, p11) >= PET_MIN_DIFF
     check("进程恢复前：桌宠正常运行", before_ok, f"frame={p11}")
+    if p11:
+        cnt11, det11 = pet_layer_px("emulator_11_float_layer.png")
+        print(f"[FLOAT-PROBE] recovery-before: layer_content={cnt11}px {det11}", flush=True)
 
     sh(f"adb shell am force-stop {PKG}")
     time.sleep(2)
@@ -766,6 +970,9 @@ def main():
         p12 = pet_frame(wins12)
     check("进程被杀后重开：桌宠自动恢复", after_ok and svc_record_count() != "0",
           f"frame={p12} record={svc_record_count()}")
+    if p12:
+        cnt12, det12 = pet_layer_px("emulator_12_float_layer.png")
+        print(f"[FLOAT-PROBE] recovery-after: layer_content={cnt12}px {det12}", flush=True)
     check("恢复后 logcat 无 FATAL", fatal_in_logcat() == "")
 
     # 静音硬约束：全程不得出现本 App 的音频轨/播放器/音频焦点请求

@@ -11,6 +11,7 @@ android_cdp.py · WebView DevTools 极简客户端（AVD 脚本共用）
 供 emulator_adapt_sweep.py / emulator_chat_check.py 复用，避免各写一份。
 依赖：requests、websockets（CI 里 pip3 install requests websockets）。
 """
+import base64
 import json
 import re
 import subprocess
@@ -82,21 +83,40 @@ class Cdp:
             self.attach(self.url_filter)
             return self._eval(js, timeout)
 
-    def _eval(self, js, timeout=20):
+    def _send(self, method, params, timeout=20):
+        """发一条 CDP 命令并等同 id 的回包；error 字段直接抛（调用方自行降级）。"""
         self.n += 1
         mid = self.n
-        self.ws.send(json.dumps({"id": mid, "method": "Runtime.evaluate",
-                                 "params": {"expression": js, "returnByValue": True,
-                                            "awaitPromise": True}}))
+        self.ws.send(json.dumps({"id": mid, "method": method, "params": params}))
         end = time.time() + timeout
         while time.time() < end:
             msg = json.loads(self.ws.recv(timeout=timeout))
             if msg.get("id") == mid:
-                r = msg.get("result", {})
-                if "exceptionDetails" in r:
-                    raise RuntimeError(str(r["exceptionDetails"])[:300])
-                return r.get("result", {}).get("value")
-        raise RuntimeError("CDP 超时")
+                if "error" in msg:
+                    raise RuntimeError(f"CDP {method} error: {str(msg['error'])[:200]}")
+                return msg.get("result", {})
+        raise RuntimeError(f"CDP {method} 超时")
+
+    def _eval(self, js, timeout=20):
+        r = self._send("Runtime.evaluate",
+                       {"expression": js, "returnByValue": True, "awaitPromise": True},
+                       timeout=timeout)
+        if "exceptionDetails" in r:
+            raise RuntimeError(str(r["exceptionDetails"])[:300])
+        return r.get("result", {}).get("value")
+
+    def screenshot(self, path=None, timeout=20):
+        """Page.captureScreenshot → PNG bytes（直接取 WebView 渲染层，绕过 SurfaceFlinger）。
+        Android WebView 不支持该命令时抛 RuntimeError，调用方按「取证不可用」处理。
+        返回 bytes；path 非空时同时落盘。"""
+        r = self._send("Page.captureScreenshot",
+                       {"format": "png", "fromSurface": True, "captureBeyondViewport": False},
+                       timeout=timeout)
+        data = base64.b64decode((r or {}).get("data") or "")
+        if path and data:
+            with open(path, "wb") as f:
+                f.write(data)
+        return data
 
     def close(self):
         try:
