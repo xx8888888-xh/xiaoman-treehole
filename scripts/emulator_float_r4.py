@@ -1625,6 +1625,32 @@ def anr_evidence(round_no=None, preset=None, out_dir=None):
     return out
 
 
+def memory_snapshot():
+    """dumpsys meminfo 关键行：TOTAL PSS 与 Graphics/GL mtrack。
+
+    canvas 后备缓冲从 469×1080 裁到可见区后，主要收益在图形内存与后备 clear/合成；
+    这里按预设记录进程 TOTAL PSS 与 Graphics 行，供 R6「内存」项对照。
+    """
+    out = {"lines": []}
+    try:
+        rc, txt = sh(f"adb shell dumpsys meminfo {PKG}", timeout=40)
+        if rc != 0:
+            return {"error": f"rc={rc}"}
+        for ln in (txt or "").splitlines():
+            s = ln.strip()
+            if (s.startswith("TOTAL") or s.startswith("Graphics")
+                    or "GL mtrack" in s or "EGL mtrack" in s):
+                out["lines"].append(s[:160])
+        for s in out["lines"]:
+            if s.startswith("TOTAL"):
+                nums = [int(x) for x in re.findall(r"\d+", s)]
+                if nums:
+                    out["totalPssKb"] = nums[-1]
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+    return out
+
+
 def run_preset(name, seconds, out_dir, round_no=1, size_matrix=True):
     """单预设全流程：写 localStorage → 拉起桌宠 → HOME → CDP 探针 → 采样 → 判据
     →（minimal 采样后）尺寸×DPI 几何矩阵 → ANR 取证。"""
@@ -1691,6 +1717,7 @@ def run_preset(name, seconds, out_dir, round_no=1, size_matrix=True):
                     "error": f"{type(e).__name__}: {str(e)[:180]}"}
                 rec["reasons"].append(f"几何矩阵执行异常：{str(e)[:180]}")
                 rec["ok"] = False
+        rec["memory"] = memory_snapshot()
         rec["logcat"] = logcat_summary()
         rec["anr"] = anr_evidence(round_no, name, out_dir)
         if rec["anr"].get("anrDetected"):
