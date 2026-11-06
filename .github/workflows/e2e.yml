@@ -1,9 +1,10 @@
 name: e2e
 
 # 慢闸门（浏览器端到端）：docker compose 起 web/mock/tts 三容器，Playwright 真跑浏览器用例。
-# 触发：main push（只跑核心四套）/ 手动（可选核心 + 额外脚本）/ 被 gates.yml、nightly.yml 调用。
+# 触发：main push（只跑核心六套）/ 手动（可选核心 + 额外脚本）/ 被 gates.yml、nightly.yml 调用。
 # 全程静音：XIAOMAN_TTS_PROVIDER=none + Chromium --mute-audio + 用例内 tts=off。
-# 基线（main，2026-11-05）：test_e2e 60/60、test_feature_loop 43/43、test_live2d_original 24/24、test_raf_budget 8/8。
+# 基线（main，2026-11-06）：test_e2e 60/60、test_feature_loop 43/43、test_live2d_original 24/24、test_raf_budget 8/8、
+# test_roundtrip 22/22（备份导出→清空→导入逐项比对）、test_msg_edit 32/32（悬停/左滑删改 + 统计清空）。
 
 permissions:
   contents: read
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       core:
-        description: "是否跑核心四套（e2e / feature_loop / live2d / raf）"
+        description: "是否跑核心六套（e2e / feature_loop / roundtrip / msg_edit / live2d / raf）"
         required: false
         default: "true"
       ui_scripts:
@@ -28,7 +29,7 @@ on:
   workflow_call:
     inputs:
       core:
-        description: "是否跑核心四套"
+        description: "是否跑核心六套"
         required: false
         type: string
         default: "true"
@@ -140,6 +141,8 @@ jobs:
 
           run_suite e2e python scripts/test_e2e.py
           run_suite feature_loop python scripts/test_feature_loop.py
+          run_suite roundtrip python scripts/test_roundtrip.py
+          run_suite msg_edit python scripts/test_msg_edit.py
           run_suite live2d python scripts/test_live2d_original.py \
             --base-url "$web_base" --out artifacts/live2d
           run_suite raf python scripts/test_raf_budget.py \
@@ -153,7 +156,7 @@ jobs:
             cat artifacts/failed.txt
             exit 1
           fi
-          echo "四套浏览器用例全部通过"
+          echo "六套浏览器用例全部通过"
 
       - name: Job summary
         if: always()
@@ -165,6 +168,8 @@ jobs:
             echo "|---|---|"
             grep -h "\[SUMMARY\]" artifacts/e2e.log 2>/dev/null | sed 's/^/| e2e | /; s/$/ |/' || echo "| e2e | (未运行/无汇总) |"
             grep -h "RESULT" artifacts/feature_loop.log 2>/dev/null | sed 's/^/| feature_loop | /; s/$/ |/' || echo "| feature_loop | (未运行/无汇总) |"
+            grep -h "ROUNDTRIP" artifacts/roundtrip.log 2>/dev/null | sed 's/^/| roundtrip | /; s/$/ |/' || echo "| roundtrip | (未运行/无汇总) |"
+            grep -h "MSG-EDIT" artifacts/msg_edit.log 2>/dev/null | sed 's/^/| msg_edit | /; s/$/ |/' || echo "| msg_edit | (未运行/无汇总) |"
             grep -h "=== .* 通过 ===" artifacts/live2d.log 2>/dev/null | sed 's/^/| live2d | /; s/$/ |/' || echo "| live2d | (未运行/无汇总) |"
             grep -h "=== .* 通过 ===" artifacts/raf.log 2>/dev/null | sed 's/^/| raf | /; s/$/ |/' || echo "| raf | (未运行/无汇总) |"
             echo ""
