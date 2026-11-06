@@ -189,6 +189,16 @@ PROBE_JS = r"""
 })()
 """
 
+FILL_JS = r"""
+(() => {
+  const i = document.querySelector('#textInput');
+  if (!i) return {err: 'no input'};
+  i.value = __TXT__;
+  i.dispatchEvent(new Event('input', {bubbles: true}));
+  return {ok: true, value: i.value};
+})()
+"""
+
 SEND_JS = r"""
 (() => {
   const i = document.querySelector('#textInput');
@@ -418,13 +428,22 @@ def wait_voice_done(cdp, quiet_ms=900, timeout=30):
     return False
 
 
-def js_send(cdp, text):
-    """JS 直填 + click 发送：绕开 IME/tap，motion=true 的慢机上用来做对照测量。"""
+def js_fill_tap(cdp, origin, text):
+    """JS 只填值（省掉慢机上的 10s 键入），发送仍用 adb tap。
+
+    不能用 JS click 发送：合成点击不算用户手势，WebView 不给音频播放授权，
+    TTS 会 ok=false（上一跑 ③b 就是这样：frames=2、maxLevel=0、maxLipSync=0）。
+    """
     sent_at = cdp.eval("Math.round(performance.now())")
-    r = cdp.eval(SEND_JS.replace("__TXT__", json.dumps(text))) or {}
+    r = cdp.eval(FILL_JS.replace("__TXT__", json.dumps(text))) or {}
+    time.sleep(0.6)
+    if origin:
+        tap(cdp, "send", origin)
+    else:                                   # 没有 WebView 坐标时才退回合成点击
+        cdp.eval(SEND_JS.replace("__TXT__", json.dumps(text)))
     time.sleep(0.8)
     p = cdp.eval(PROBE_JS) or {}
-    return {"mode": "js-send", "sentAt": sent_at, "ok": r.get("ok"),
+    return {"mode": "js-fill+tap", "sentAt": sent_at, "fill": r.get("ok"),
             "rowsAfterSend": p.get("rows")}
 
 
@@ -656,14 +675,18 @@ def main():
     except Exception:
         total3 = None
     s3 = cdp.eval(STATE_JS) or {}
+    lip_ok = (voice.get("maxLipSync") or 0) > 0 and (voice.get("nonZeroLipSync") or 0) > 0
     METRICS["states"]["03_voice"] = {
         "shot": "e2e_03_voice.png" if voice["shotBytes"] else None,
         "replyArrived": ok3, "sent": sent3, "voiceEvent": ev, "voiceWaitS": waited,
-        "chain": chain, "hook": hook, "motionDefault": motion,
+        "chain": chain, "hook": hook, "motionDefault": motion, "lipOk": lip_ok,
         "ttsEvents": events, "chatPager": total3, "lip": voice, "probe": s3
     }
     gate("03_voice", require_reply, "03_voice", ok3,
          {"sent": sent3, "rows": (p3 or {}).get("rows")})
+    gate("03_voice", require_true, "03_voice", lip_ok,
+         "语音播放期间口型帧为 0（maxLipSync=%s nonZeroLipSync=%s event=%s）"
+         % (voice.get("maxLipSync"), voice.get("nonZeroLipSync"), ev))
 
     # ---------------- ③b 非默认预设（motion=true）同段语音对照 ----------------
     # 同一段 TTS fixture（text 不影响 cmd provider 的 WAV）：比较满帧路径的
@@ -681,8 +704,8 @@ def main():
     except Exception:
         n1 = 0
     rows2 = (cdp.eval(PROBE_JS) or {}).get("rows") or 0
-    # motion=true 下 adb 键入会被慢渲染拖到 10s、tap 还可能打空；对照测量改用 JS 直发
-    sent3b = js_send(cdp, "zai shuo yi bian")
+    # motion=true 下 adb 键入会被慢渲染拖到 10s；对照测量改成 JS 填值 + adb tap 发送
+    sent3b = js_fill_tap(cdp, origin, "zai shuo yi bian")
     log(f"③b 发送结果: {sent3b}")
     grew_user, pu = wait_row_count(cdp, rows2 + 1, timeout=15)
     gate("03b_motion", require_true, "03b_motion", grew_user,
@@ -697,11 +720,15 @@ def main():
         events_b = cdp.eval("window.__ttsLog || []")
     except Exception:
         events_b = None
+    lip_ok_b = (voice_b.get("maxLipSync") or 0) > 0 and (voice_b.get("nonZeroLipSync") or 0) > 0
     METRICS["states"]["03b_motion_voice"] = {
         "shot": "e2e_03b_voice_motion.png" if voice_b["shotBytes"] else None,
         "replyArrived": ok3b, "sent": sent3b, "voiceEvent": ev_b, "voiceWaitS": waited_b,
-        "motion": motion_on, "ttsEvents": events_b, "lip": voice_b
+        "motion": motion_on, "ttsEvents": events_b, "lip": voice_b, "lipOk": lip_ok_b
     }
+    gate("03b_motion", require_true, "03b_motion", lip_ok_b,
+         "motion=true 语音期间口型帧为 0（maxLipSync=%s nonZero=%s event=%s）"
+         % (voice_b.get("maxLipSync"), voice_b.get("nonZeroLipSync"), ev_b))
     # 还原默认极简：后续 ④⑤⑥ 口径与之前一致
     try:
         motion_off = cdp.eval(
