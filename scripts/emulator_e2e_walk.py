@@ -30,6 +30,7 @@ from android_cdp import Cdp, PKG, sh
 
 PORT = 9224
 MAIN = f"{PKG}/.MainActivity"
+APP_URL = "https://appassets.androidplatform.net/www/index.html"
 TTS_BASE = os.environ.get("E2E_TTS_BASE", "http://10.0.2.2:8903")
 METRICS = {"states": {}, "notes": []}
 
@@ -312,7 +313,7 @@ def main():
 
     cdp = Cdp(port=PORT)
     try:
-        url = cdp.attach("index.html", timeout=120)
+        url = cdp.attach("index.html", timeout=120, fallback_url=APP_URL)
     except Exception as e:
         log(f"附着失败: {e}")
         METRICS["fatal"] = f"attach failed: {e}"
@@ -381,7 +382,7 @@ def main():
     # 归零。第 ③ 项要拍"语音播放中的口型/表情"，这里按用户手动开启动效的路径打开
     # （Appearance.motion=true 等价于设置页关掉"减少动效"），仅影响本次走查截图。
     try:
-        motion = cdp.eval("(() => { const c = API.loadCfg(); c.motion = true; API.saveCfg(c);"
+        motion = cdp.eval("(() => { if (Appearance.setSwitch) Appearance.setSwitch('motion', true);"
                           " Stage.setMotionEnabled(true);"
                           " return (window.Appearance && Appearance.get) ? Appearance.get().motion : 'n/a'; })()")
     except Exception as e:
