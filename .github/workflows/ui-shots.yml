@@ -654,10 +654,13 @@ jobs:
                   window.__latT0 = performance.now();
                   window.__latFirst = 0;
                   window.__latEnd = 0;
-                  TTS.speak(t,
-                      (lv) => { if (!window.__latFirst && lv >= 0.12)
-                                  window.__latFirst = performance.now(); },
-                      () => { window.__latEnd = performance.now(); });
+                  const cb = (lv) => { if (!window.__latFirst && lv >= 0.12)
+                                          window.__latFirst = performance.now(); };
+                  const done = () => { window.__latEnd = performance.now(); };
+                  // main（R4 基线）的出口是 speak(text, opts)，本分支是 speak(text, onFrame, onEnd)；
+                  // 基线传错签名会导致回调永远不触发（上一轮 latency_before 全是 timeout）。
+                  if (TTS.speak.length >= 3) TTS.speak(t, cb, done);
+                  else TTS.speak(t, {cfg: API.loadCfg(), onFrame: cb, onEnd: done});
                   return true;
               }"""
               READ_JS = """() => ({
