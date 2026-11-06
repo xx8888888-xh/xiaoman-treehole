@@ -215,6 +215,21 @@ def tap(cdp, key, origin):
     return (x, y)
 
 
+def wait_row_count(cdp, target, timeout=20):
+    """只看 DOM 行数，不等 busy（说话中也要能确认"用户消息已落屏"）。"""
+    end = time.time() + timeout
+    last = {}
+    while time.time() < end:
+        try:
+            last = cdp.eval(PROBE_JS) or {}
+        except Exception:
+            last = {}
+        if (last.get("rows") or 0) >= target:
+            return True, last
+        time.sleep(0.4)
+    return False, last
+
+
 def wait_rows(cdp, target, timeout=40):
     end = time.time() + timeout
     last = {}
@@ -343,6 +358,9 @@ def type_and_send(cdp, origin, text):
     p = cdp.eval(PROBE_JS) or {}
     value = (p.get("value") or "").strip()
     mode = "tap"
+    # 记下发送瞬间的页面时钟：之后只认 at >= sentAt 的 speakSafe 事件，
+    # 避免把上一轮回复的后续气泡当成这一轮的"新语音"（上一版就是这样误判过）。
+    sent_at = cdp.eval("Math.round(performance.now())")
     if value:
         if origin:
             tap(cdp, "send", origin)
@@ -356,21 +374,58 @@ def type_and_send(cdp, origin, text):
     time.sleep(0.8)
     after = cdp.eval(PROBE_JS) or {}
     return {"mode": mode, "tries": tries, "value": value,
-            "disabled": p.get("disabled"), "rowsAfterSend": after.get("rows")}
+            "disabled": p.get("disabled"), "rowsAfterSend": after.get("rows"),
+            "sentAt": sent_at}
 
 
-def wait_voice(cdp, n0, timeout=25.0):
-    """等一条新的 speakSafe 事件（说明回复真的在播），返回事件与等待时长。"""
+def wait_voice(cdp, n0, timeout=25.0, min_at=None):
+    """等一条新的 speakSafe 事件（说明回复真的在播），返回事件与等待时长。
+
+    min_at：页面时钟下限（发送瞬间）。上一轮回复的后续气泡可能在"打字"期间才
+    开始播，只看 len(__ttsLog) 会把它们当成本轮新语音；必须按 at >= min_at 过滤。
+    """
     t0 = time.time()
     while time.time() - t0 < timeout:
         try:
             logv = cdp.eval("window.__ttsLog || []") or []
         except Exception:
             logv = []
-        if len(logv) > n0:
-            return logv[-1], round(time.time() - t0, 2)
+        fresh = [e for e in logv[n0:] if (min_at is None or (e.get("at") or 0) >= min_at)]
+        if fresh:
+            return fresh[-1], round(time.time() - t0, 2)
         time.sleep(0.25)
     return None, round(time.time() - t0, 2)
+
+
+def wait_voice_done(cdp, quiet_ms=900, timeout=30):
+    """等上一轮语音真正收尾：连续 quiet_ms 没有新的包络帧，且页面不 busy。"""
+    end = time.time() + timeout
+    q = r"""
+    (() => ({
+      now: Math.round(performance.now()),
+      last: (window.__lipFeed || {}).lastAt || 0,
+      busy: typeof window.__isBusy === 'function' ? window.__isBusy() : null
+    }))()
+    """
+    while time.time() < end:
+        try:
+            st = cdp.eval(q) or {}
+        except Exception:
+            st = {}
+        if not st.get("busy") and (st.get("now") or 0) - (st.get("last") or 0) > quiet_ms:
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def js_send(cdp, text):
+    """JS 直填 + click 发送：绕开 IME/tap，motion=true 的慢机上用来做对照测量。"""
+    sent_at = cdp.eval("Math.round(performance.now())")
+    r = cdp.eval(SEND_JS.replace("__TXT__", json.dumps(text))) or {}
+    time.sleep(0.8)
+    p = cdp.eval(PROBE_JS) or {}
+    return {"mode": "js-send", "sentAt": sent_at, "ok": r.get("ok"),
+            "rowsAfterSend": p.get("rows")}
 
 
 GREET_JS = r"""
@@ -577,6 +632,7 @@ def main():
     except Exception as e:
         motion = f"err {e}"[:80]
     log(f"默认动效状态: {motion}")
+    wait_voice_done(cdp)                 # ② 回复的后续气泡先播完，避免串台
     try:
         n0 = len(cdp.eval("window.__ttsLog || []") or [])
     except Exception:
@@ -585,7 +641,7 @@ def main():
     sent3 = type_and_send(cdp, origin, "xie xie ni pei wo")
     log(f"③ 发送结果: {sent3}")
     # 等"真的有一条新的语音在播"，再开采样窗口——避免像上一轮那样对着静音采样
-    ev, waited = wait_voice(cdp, n0, timeout=30)
+    ev, waited = wait_voice(cdp, n0, timeout=30, min_at=sent3.get("sentAt"))
     log(f"③ 语音开始: {ev} waited={waited}s")
     # 硬门：没有新的语音事件 = 回复没开始播，绝不对着静音采样口型
     gate("03_voice", require_voice, "03_voice", ev)
@@ -619,17 +675,22 @@ def main():
         motion_on = f"err {e}"[:80]
     log(f"③b motion 开关 → {motion_on}")
     time.sleep(0.8)                     # appearance:change → Stage.setMotionEnabled(true)
+    wait_voice_done(cdp)                # ③ 的第二个气泡先播完；否则会被当成 ③b 的"新语音"
     try:
         n1 = len(cdp.eval("window.__ttsLog || []") or [])
     except Exception:
         n1 = 0
     rows2 = (cdp.eval(PROBE_JS) or {}).get("rows") or 0
-    sent3b = type_and_send(cdp, origin, "zai shuo yi bian")
+    # motion=true 下 adb 键入会被慢渲染拖到 10s、tap 还可能打空；对照测量改用 JS 直发
+    sent3b = js_send(cdp, "zai shuo yi bian")
     log(f"③b 发送结果: {sent3b}")
-    ev_b, waited_b = wait_voice(cdp, n1, timeout=30)
+    grew_user, pu = wait_row_count(cdp, rows2 + 1, timeout=15)
+    gate("03b_motion", require_true, "03b_motion", grew_user,
+         "用户消息没有落屏（sent=%s rows=%s）" % (sent3b, (pu or {}).get("rows")))
+    ev_b, waited_b = wait_voice(cdp, n1, timeout=30, min_at=sent3b.get("sentAt"))
     gate("03b_motion", require_voice, "03b_motion", ev_b)
     voice_b = sample_voice(cdp, path="e2e_03b_voice_motion.png", seconds=5.5)
-    ok3b, p3b = wait_rows(cdp, rows2 + 2, timeout=8)
+    ok3b, p3b = wait_row_count(cdp, rows2 + 2, timeout=15)
     gate("03b_motion", require_reply, "03b_motion", ok3b,
          {"sent": sent3b, "rows": (p3b or {}).get("rows")})
     try:
