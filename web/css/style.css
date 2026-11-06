@@ -1131,7 +1131,26 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
    * 键盘弹起的横屏里标题栏让位给消息本身，键盘收起（392 CSS px）自动恢复。 */
   .topbar { display: none; }
   #chatArea { margin: 0; }
-  .inputbar { padding: var(--space-1) 0 calc(var(--space-1) + env(safe-area-inset-bottom, 0px)); }
+  /* 可视高只剩 149 CSS px：输入栏若仍占文档流，聊天区最多 ~70px。
+   * 改为浮在聊天区底部，让 #chatScroll 拿满整列高度（实测 149px ≥ 120px）；
+   * 聊天内容底部留出同高内边距 + scroll-padding，最后一条气泡不会被输入栏压住。 */
+  /* .inputbar 是 #chatArea（position: relative）的子节点，absolute 后只浮在对话列
+   * #chatArea 底部，不会压到左列舞台。 */
+  .inputbar {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+    padding: var(--space-1) 0 calc(var(--space-1) + env(safe-area-inset-bottom, 0px));
+    background: var(--bg);
+  }
+  /* 极矮视口里状态条（语音不可用/本地模式/排队提示）同样让位：实测 voiceTip 一条就占
+   * 60px，把聊天区从 145px 压到 89px（云端 AVD 同时有多条时只剩 52px）。它们不是
+   * 可操作控件，键盘收起（视口回 363px）即恢复。 */
+  .status-stack, .hook-bar { display: none !important; }
+  /* 输入栏实测高 = 输入框/按钮 --tap(44) + 上下 padding 各 --space-1，聊天列表底部
+   * 预留同高，滚到底时最后一条气泡正好落在输入栏上沿而不是被它盖住。 */
+  #chatScroll {
+    padding-bottom: calc(var(--tap) + var(--space-5) + env(safe-area-inset-bottom, 0px));
+    scroll-padding-bottom: calc(var(--tap) + var(--space-5) + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 /* ---------- 记忆抽屉空态 ---------- */
