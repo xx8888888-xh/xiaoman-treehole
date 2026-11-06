@@ -16,14 +16,14 @@
 | 断言到底跑了什么 | #117/#118 的聊天链路 **11/11 真跑过且全过**；#117/#118/#119 的浮窗检查 **全部没跑到**（noisy check 先 exit 1），所以这三次的浮窗状态是“未执行”，既不是绿也不是红 | `[CHAT-SUMMARY] 11/11 通过`；`ERROR: NoisyGuard registration check failed` → `##[error]The process '/usr/bin/sh' failed with exit code 1` |
 | 真机能不能出声，CI 能否证明 | **当前 CI 无法证明可闻性，而且原因有两条、彼此独立**：镜像没有 TTS 引擎（`available()=False` → `speak()` 直接返回 `False`，根本没创建 AudioTrack）；AVD 又带 `-no-audio`。CI 能证明的只是“三条 WebView 都注入了桥且可调用”，不是“有声音” | `[FLOAT-PASS] ... available()=False speak()返回=False(boolean) err=-`；AVD 参数 `-no-window -gpu swiftshader_indirect -no-snapshot -memory 3072 -no-audio` |
 | 浮窗 3 条像素断言仍红，是否是本次改动引入 | **不是。** 合并前的 `origin/main` 基线 #110（`2163963`）同 3 条、同 `diff=0px`、同 frame 坐标；这 3 条断言的代码在 `2163963` 与当前 HEAD 之间**逐字节一致**；AVD 配置也一致。定位到截图路径（`dumpsys` frame 存在 + `[probe] pet-ready` 通过，但 screencap 在该 frame 内的像素差恒 0） | #110 `[FLOAT-SUMMARY] 18/21`；#113 `19/22`；#114 `19/23`；#116 `23/26`；#120 `23/26`；各 run 的 3 条 `[FLOAT-FAIL]` 完全相同 |
-| 本轮是否改产品代码 | **没有**。未发现音频回归，产品代码/断言零改动；只改了 CI 取证脚本与 workflow（`4c7b557`，用于恢复判定能力） | `4c7b557` 只含 `scripts/emulator_noisy_check.py` + `.github/workflows/android-ci.yml` |
-| 浮窗 3 条像素红的真实根因 | **不是 screencap 抓不到，也不是 Live2D 没画**：浮窗页在 CI 的 WebView 83 上 `#petRoot/#petStage/canvas` 布局为 0x0（`inset:0` 不被解析），canvas 背板有 476,535 个非透明像素但元素无尺寸、从未合成到屏幕 → **屏幕上确实看不到桌宠，三条断言是真失败** | run #121–#123 `[FLOAT-PROBE]`：`Page.captureScreenshot` 385x495/819B/`unique=1`；canvas `alpha_gt16=476535/901440`；`#petRoot cw=ch=0`、主界面 `#puppet` 85x196 正常；`CSS.supports('inset')=false`，UA `Chrome/83.0.4103.120`（§3.6） |
+| 本轮是否改产品代码 | **是（已授权）**。`95e9f12` 只改 `web/css/pet.css` / `web/css/style.css` / `web/js/app.js` 的兼容写法；`4c7b557` 只改 CI 取证脚本与 workflow。断言与阈值零改动 | `git show 95e9f12 --stat`；`git diff 9c9d0c2 HEAD -- scripts/emulator_float_check.py` 中三条断言与 `PET_MIN_DIFF=6000` 未变 |
+| 浮窗 3 条像素红的真实根因 | **不是 screencap 抓不到，也不是 Live2D 没画**：浮窗页在 CI 的 WebView 83 上 `#petRoot/#petStage/canvas` 布局为 0x0（`inset:0` 不被解析），canvas 背板有 476,535 个非透明像素但元素无尺寸、从未合成到屏幕 → **屏幕上确实看不到桌宠，三条断言是真失败**。**已按根因修复（`95e9f12`）并在 #125/#126 转绿** | 根因见 run #121–#123 `[FLOAT-PROBE]`（§3.6）；转绿证据见 #125/#126 `[FLOAT-PASS] 桌宠可见 diff=99669px` / `可拖动 diff=101929px` / `收起后复现 diff=102129px` |
 
-一句话：**#117–#119 的红是“新加的验收脚本自己没跑通”，不是“音频坏了”；#120 修复后 noisy 已 `PASS 3 / FAIL 0 / SKIP 0`、chat `11/11`，只剩既有的浮窗像素红。可闻性仍未证明；浮窗像素红在 `origin/main` 合并前就已存在，#121–#123 已把根因证到「CI 的 WebView 83 不解析 `inset:0` → 浮窗页布局 0x0 → 屏幕上确实不可见」，断言保持原样，修复建议见 §4.3 P0-0（需授权）。**
+一句话：**#117–#119 的红是“新加的验收脚本自己没跑通”，不是“音频坏了”；#120 修复后 noisy 已 `PASS 3 / FAIL 0 / SKIP 0`、chat `11/11`。浮窗 3 条像素红的根因是 CI 的 WebView 83 不解析 `inset:0` → 浮窗页 0×0 → 屏幕上确实不可见（§3.6），已按根因修产品代码（`95e9f12`），#125/#126 实测 3 条像素断言自然转绿（`diff=99669px` / `101929px` / `102129px`，阈值 `PET_MIN_DIFF=6000` 未动）。#125/#126 的 `emulator-smoke` 仍红在**另一条既有链路**：adb 两枪间隔 493ms > 双击窗口 380ms（`[FLOAT-DIAG]` 已证），与本次修复无关，见 §3.8。可闻性仍未证明。**
 
 ---
 
-## 1. `android-ci` 真实结果（#110、#113–#123）
+## 1. `android-ci` 真实结果（#110、#113–#126）
 
 ### 1.1 run 总表（`gh run list --workflow android-ci.yml`）
 
@@ -38,6 +38,8 @@
 | #118 | 11-06 00:08 | main / `f5dba85` | success | success | **fail** | **11/11 通过** | 未执行 | noisy 的 logcat 探针断言（dumpsys 层已 PASS） |
 | #119 | 11-06 00:27 | main / `17fd464` | success | success | **fail** | 未执行 | 未执行 | `ModuleNotFoundError: No module named 'websockets'` |
 | #120 | 11-06 01:48 | docs/audio-verifiability / `4c7b557` | success | success | **fail** | **11/11 通过** | **23/26** | noisy `PASS 3 / FAIL 0 / SKIP 0`；唯一红是 3 条**既有**像素断言 |
+| #125 | 11-06 12:02 | docs/audio-verifiability / `95e9f12`（产品修复） | success | success | **fail** | **11/11 通过** | **32/38** | 3 条像素断言**全绿**；红 6 条全在「双击展开迷你窗」链（adb 两枪间隔，§3.8） |
+| #126 | 11-06 12:13 | docs/audio-verifiability / `8123c04`（补双击诊断） | success | success | **fail** | **11/11 通过** | **32/38** | 同上；`[FLOAT-DIAG]` 实测两枪间隔 493ms > 380ms |
 
 补充事实（拉取时点，2026-11-06）：
 
@@ -135,15 +137,20 @@ ERROR: float window check failed
 - 这证明：依赖先装、noisy 三态、chat、float **确实按顺序执行了**；logcat 探针在 `logcat -c` + 重启触发 + `--pid` 拉取后**真的拿到了**（#118 的缺失是采集窗口问题，已在采集侧修好）。
 - 这仍然**不证明**可闻性（`available()=False` 未变，见 §2.1），也不代表浮窗像素红已解决（§3）。
 
-### 1.7 三路取图取证 run（#121–#123）
+### 1.7 三路取图取证 run（#121–#126）
 
 | run | commit | 本轮加什么 | float 结果 | 关键结论 |
 |---|---|---|---|---|
 | #121 | `627b26a` | `[FLOAT-PROBE]`：screencap + CDP `Page.captureScreenshot` + canvas `getImageData` | `23/26`（仍 3 条像素红） | canvas 有 47.6 万非透明像素；CDP 截图 819B 全透明 → 两种取图源都空 |
 | #122 | `adfa963` | 补 `innerW/H`、`#petRoot/#petStage/canvas` 的 `clientWidth/Height` 与 rect；主界面 WebView 对照组 | `23/26` | 浮窗页视口 140x180 正常，但 `#petRoot/#petStage/canvas` 全为 0x0；主界面 `#puppet` 85x196 正常 |
 | #123 | `db544ff` | 补 `navigator.userAgent`、`CSS.supports('inset','0')`、`#petRoot` 计算样式 | `23/26` | UA `Chrome/83.0.4103.120`；`inset` 支持 `false`；`#petRoot` 无有效偏移 → 收缩为 0x0（根因，见 §3.6） |
+| #124 | `23133e2` | 文档收口（无脚本变化） | `23/26` | 基线复核，仍 3 条像素红 |
+| **#125** | `95e9f12`（产品修复） | `pet.css` 两处 `inset:0` 拆成显式四边；`style.css`/`app.js` 同步 | **`32/38`**，3 条像素断言**全部转绿** | `桌宠可见 diff=99669px`、`可拖动 diff=101929px`、`收起后复现 diff=101904px`；`[FLOAT-PROBE] layer` 仍 `content=0px`（CDP 透明页限制，仅取证，不参与判定） |
+| **#126** | `8123c04`（补双击诊断） | `[FLOAT-DIAG]` 打印 ⑥ 期间 pet 探针（不改断言） | **`32/38`**，3 条像素断言再次全绿 | `收起后复现 diff=102129px`；`[FLOAT-DIAG]` 实证两次 `input tap` 间隔 **493ms > 380ms**，双击链未触发 |
 
-三次 run 的 `build-apk` / `web-tests` 均 success，`emulator-smoke` 仍只红在 §3.1 的 3 条；`[FLOAT-SUMMARY]` 三次都是 `23/26`，未因新增取证而改变任何断言。取证图随 `emulator-screenshots` artifact 上传（`emulator_04_float_layer.png`、`emulator_04_float_crop.png`、`emulator_04_float_sidebyside.png`）。
+> #121–#124 走的是「桌宠不可见」降级分支（26 条断言）；#125 起桌宠可见，进入双击交互链（38 条断言），因此分母变化。新增 12 条里 6 条红，全部来自 adb 双击时序（§3.8），与 `inset` 修复无关。
+
+`build-apk` / `web-tests` 在 #121–#126 均 success。取证图随 `emulator-screenshots` artifact 上传（`emulator_04_float_layer.png`、`emulator_04_float_crop.png`、`emulator_04_float_sidebyside.png`）。#125 起 `emulator_04_float_pet.png` 与 screencap 一致且有内容（744KB）。
 
 ---
 
@@ -375,11 +382,60 @@ curl -s localhost:9225/json/list          # 找到 pet.html
 # 在页面执行：CSS.supports('inset','0') / getComputedStyle(petRoot).width / canvas.clientWidth
 ```
 
-#### 3.6.6 修复建议（产品代码，本轮未改，需授权）
+#### 3.6.6 已修复（产品代码 `95e9f12`，用户已授权）
 
-- 最小修复：`web/css/pet.css` 两处 `inset: 0` 改为显式 `top: 0; right: 0; bottom: 0; left: 0`（WebView 83 可用，对现代 WebView 等价）。
-- 或 CI 侧升级：让 AVD 使用 WebView ≥ 87（或换带新 WebView 的系统镜像）。
-- 任一修复落地后，这 3 条像素断言应自然转绿；**断言与 `PET_MIN_DIFF=6000` 均不动**。
+- `web/css/pet.css`：`#petRoot` / `#petStage` 的 `inset: 0` → `top/right/bottom/left: 0` 显式四边。
+- `web/css/style.css`：`#app::before`（`inset: 0 0 auto` → `top/right/bottom:auto/left`）、`.stage-skeleton`、`#stage::before`、`.stage-fallback`（`inset: var(--space-3)` → 四边）同步拆分；`42dvh/33dvh/23dvh` 前加 `vh` 兜底。
+- `web/js/app.js`：编辑遮罩内联 `inset:0` → 四边显式。
+- 修复后 #125/#126 三条像素断言**自然转绿**（`diff=99669px` / `101929px` / `102129px`），**断言与 `PET_MIN_DIFF=6000` 均未动**。
+- 未采用的替代：CI 换 WebView ≥ 87 镜像。修复落在产品侧，任何 WebView 83 真机同样受益。
+
+### 3.7 全仓 CSS 兼容扫描（WebView 83 / Chrome 83 基线）
+
+> 扫描命令：`grep -rn "inset:" web/`、`grep -rnE "dvh|:has\(|gap:|:focus-visible" web/css web/js`；`env(safe-area-inset-*)` 属安全区变量（Chrome 69 已支持），不改。
+
+| 语法 | 最低版本 | 本仓出现处 | 是否已修 | 影响 |
+|---|---|---|---|---|
+| `inset` 简写 | Chrome 87 | `pet.css` 2 处（已修）、`style.css:198,269,314,379`（已修）、`app.js:925`（已修） | **全修** | 未修时整条声明丢弃 → 浮窗 0×0（本轮根因）；主界面遮罩/占位层同理 |
+| `dvh` | Chrome 108 | `style.css:166,199,299,308` | **已修**（`166` 原有 `100%` 兜底；其余补 `vh`） | 未修时高度退回 `auto`/内容高度，舞台与顶栏留白偏差 |
+| `:has()` | Chrome 105 | `style.css:303`（骨架让位，已用相邻兄弟选择器补齐）、`321`、`708` | **部分修** | `303` 已等价；`321` 只在聊天有内容时压缩舞台高度、`708` 只影响发送键配色，均为装饰性，旧 WebView 不生效 |
+| flex `gap` | Chrome 84（flex） | `pet.css:76`；`style.css` 37 处；`app.js:930,944` | **未修**（列此备查） | 旧 WebView 下间距塌成 0，仅排版变紧，不影响任何断言/像素门限；用 margin 兜底会与现代浏览器双倍间距，风险大于收益 |
+| `:focus-visible` | Chrome 86 | `style.css:212,662` | **未修**（列此备查） | 旧 WebView 无键盘焦点环；触屏主路径不受影响，且有 `[hidden]`/`aria` 兜底 |
+
+结论：本轮只修「会改变布局尺寸、进而影响像素断言」的 `inset` 与 `dvh`；纯装饰类（flex gap / `:focus-visible` / 两处 `:has`）只登记不改，避免扩大产品改动面。
+
+### 3.8 修复后的云端验收（#125 / #126）与双击链新暴露
+
+| 断言 | #121–#124 | #125 | #126 |
+|---|---|---|---|
+| 桌宠可见（frame 内差分≥6000px） | FAIL `diff=0px` | **PASS `diff=99669px`** | **PASS `diff=99669px`** |
+| 桌宠可拖动并贴边 | FAIL | **PASS `diff=101929px`** | **PASS `diff=101929px`** |
+| 收起后桌宠复现 | FAIL | **PASS `diff=101904px`** | **PASS `diff=102129px`** |
+| float 汇总 | `23/26` | `32/38` | `32/38` |
+
+`[FLOAT-PROBE]` 在 #125 的对照：`screencap: crop=385x495 changed_vs_base=99669px unique=36993`；`layer: Page.captureScreenshot 385x495 content=0px unique=1 819B`。**判定源仍是 screencap**，CDP 透明页限制只作归因，未替换断言。
+
+**新增的 6 条红（与 `inset` 修复无关）**：桌宠可见后首次进入「双击展开迷你窗」链路，#126 `[FLOAT-DIAG]` 原文：
+
+```text
+[FLOAT-DIAG] after-double: ... 12:13:57.187 [probe] pet-tap:head || 12:13:59.067 [probe] pet-tap:head || 12:13:59.560 [probe] pet-tap:head
+```
+
+两枪都到位，但间隔 **493ms**，超过产品双击窗口 `DOUBLE_MS=380`（`pet_core.js:23`），于是被识别为两次单击（两次 `pet-tap`），`pet-double` 不出现 → 后续 6 条（大窗口 frame、双击探针、迷你窗 TTS 注入、迷你窗桥、面板像素、桌宠隐藏）连带红。这与 `42be337` 已记录的「adb 每次 `input` 重启进程，两枪间隔超阈值」是同一问题。**不属产品缺陷，也不放宽断言**；后续若要让这条链路稳定跑，应在取证侧改用 CDP `Input.dispatchTouchEvent` 注入两枪（保持 `pet-double` 断言强度），而不是绕过双击直接调 `openPanel()`。
+
+### 3.9 布局塌陷的耗电影响（真机旧 WebView）
+
+布局塌陷（`inset` 不解析 → 页面 0×0）与"看不见"是两件事：**窗口仍在，渲染进程也仍在**。真机旧 WebView（≤ 86）上的实际行为：
+
+| 外观预设 | `motion` | 塌陷时的行为 | 耗电影响 |
+|---|---|---|---|
+| **极简（默认）** | `false` | 挂载时 `renderOnce()` 画一帧后 `freezeFrame()` 停 rAF；无循环 | 近似"一张静止位图"：无持续 GPU 出帧；但 WebView 进程常驻 + 前台服务（`specialUse`）不释放，系统无法进入深度 Doze，属**常驻基线功耗** |
+| 默认 / 生动 | `true` | `envBlocked()` 只认 `envPaused` 与 `document.hidden`；塌陷时窗口对 WindowManager **可见**，`document.hidden=false` → 暂停逻辑抓不到；rAF 以满帧跑，但元素 0×0，合成结果全透明 | 前 10s（`IDLE_STOP_MS`）**满帧空转**：每帧仍要光栅化 `626×1440≈90 万`像素背板（`fit()` 在 `clientHeight=0` 时回退 `720`），约 54M 像素/秒的无效填充；10s 后 `enterIdleStop()` 停 rAF，降为每 10s 一帧呼吸（`BREATH_WAKE_MS`） |
+| 任意 | 任意 | `styleTimer` 每 15s、`reminderTimer` 每 30s、触摸/气泡/`__petRepaint` 都会唤醒一次；`setMotionEnabled` 若值变化会 `noteActivity()` 重开满帧窗口 | 即使已静止停机，也有 15s/30s 级定时唤醒；提醒命中会再触发 10s 满帧空转 + 气泡动画 |
+
+定性结论：**默认极简预设下，"不可见"不会带来持续跑渲染循环**（只有常驻服务基线功耗）；**一旦用户选了默认/生动（`motion=true`），塌陷期间每次唤醒都会带来最多 10s 的满帧无效渲染**，耗电与"正常显示桌宠"同量级却完全没有可见收益。修复 `inset` 后，这部分无效功耗与"桌宠不可见"一并消失。
+
+真机核对方法（无需人耳）：`adb shell dumpsys gfxinfo com.xiaoman.treehole framestats` 看帧数与空转；`adb shell dumpsys batterystats --charged com.xiaoman.treehole` 对比 `motion=true` 修复前后 30 分钟的 `Uid u0a...` 能耗增量；`adb shell dumpsys window` 确认 overlay 窗口仍 `isVisible=true`。CI 侧 `window.__pet.state()` 已有 `{motion, loop, idle}`，可直接断言 `loop=false`（`motion=false` 时）。
 
 ---
 
@@ -428,9 +484,10 @@ curl -s localhost:9225/json/list          # 找到 pet.html
 
 **P0（已完成，云端）**
 
-0. **[需授权 · 产品代码] 修浮窗页 `inset` 兼容**：`web/css/pet.css:21,28` 的 `inset: 0` → `top:0; right:0; bottom:0; left:0`（CI 的 WebView 83 不支持 `inset` 简写，导致页面 0×0）。这是 §3.6 已验证的根因；本轮按约束**未改产品代码**，修复需另行授权。修完这 3 条像素断言应自然转绿，断言/阈值不动。可选替代：CI 换 WebView ≥ 87 的镜像。
+0. **[已完成 · 产品代码 `95e9f12`] 修浮窗页 `inset` 兼容**：`web/css/pet.css` 两处 `inset: 0` → `top/right/bottom/left: 0`；`style.css` 四处与 `app.js` 一处同步拆分，`dvh` 补 `vh` 兜底。验收 #125/#126：3 条像素断言自然转绿（`diff=99669px`/`101929px`/`102129px`），断言代码与 `PET_MIN_DIFF=6000` 未动。全仓扫描见 §3.7，耗电影响见 §3.9。
+0b. **[待办 · 取证侧] 双击链 adb 时序**：#126 实测两枪间隔 493ms > `DOUBLE_MS=380`，导致「双击展开迷你窗」6 条断言红。建议改用 CDP `Input.dispatchTouchEvent` 注入两枪（~150ms 间隔），保留 `pet-double` 断言强度；**禁止**绕过双击直接调 `openPanel()` 把该断言变成空转。
 1. **[云端] `4c7b557`**：noisy 三态 + 依赖前置 + logcat 采集窗口，验收 run #120。
-2. **[云端] 下次复跑用**：`gh workflow run android-ci.yml --ref docs/audio-verifiability`，确认 noisy 仍为 `PASS`、chat 仍 `11/11`；float 的 3 条像素红按 §3 保留。
+2. **[云端] 下次复跑用**：`gh workflow run android-ci.yml --ref docs/audio-verifiability`，确认 3 条像素断言仍绿、noisy `PASS`、chat `11/11`；双击链红按 §3.8 的取证侧方案处理。
 
 **P1（必须真机）**
 
@@ -479,6 +536,15 @@ gh run view 42146247414 --log | grep -E "NOISY-|NoisyGuard 注册验收|CHAT-SUM
 gh run view 42148539464 --log | grep -E "FLOAT-PROBE|FLOAT-FAIL|FLOAT-SUMMARY"
 gh run view 42149633564 --log | grep -E "FLOAT-PROBE"
 gh run view 42150649869 --log | grep -E "FLOAT-PROBE"
+
+# 7) 修复后验收（#125 产品修复 / #126 补双击诊断，§3.8）
+gh workflow run android-ci.yml --ref docs/audio-verifiability
+gh run view 42213768208 --log | grep -E "FLOAT-PASS|FLOAT-FAIL|FLOAT-SUMMARY"
+gh run view 42215671965 --log | grep -E "FLOAT-DIAG|FLOAT-PASS|FLOAT-FAIL|FLOAT-SUMMARY"
+
+# 8) 证明三条断言与阈值没动（产品修复 commit 前后）
+git diff 95e9f12^ 95e9f12 --stat        # 只有 web/css + web/js
+git diff 9c9d0c2 HEAD -- scripts/emulator_float_check.py | grep -E "PET_MIN_DIFF|check\("
 ```
 
 本地复现（可选，需要同规格 AVD，当前不主动启动）：
@@ -495,9 +561,9 @@ python scripts/emulator_float_check.py   # 预期同样 3 条 [FLOAT-FAIL]；另
 
 ## 6. 约束与声明
 
-- 本轮未改产品代码、未改测试断言、未放宽阈值、未加 skip/xfail。
-- 2026-11-06 取证轮（#121–#123）：只改 `scripts/emulator_float_check.py` 与 `scripts/android_cdp.py`（新增 `[FLOAT-PROBE]` 三路取证：screencap / CDP `Page.captureScreenshot` / canvas `getImageData`），**三条像素断言的代码、`PET_MIN_DIFF=6000` 与判定式均未改**。
-- 取证结论：不是 screencap 盲，也不是 Live2D 没画，而是 CI 的 WebView 83 不解析 `inset:0` → 浮窗页 0×0 → 屏幕确实不可见（§3.6）。因此**没有把断言换成 CDP/canvas 源**：CDP 实测同样 0px，canvas alpha 判定会让断言假绿。`web/css/pet.css` 的修复属产品代码，按约束未动，已列入 §4.3 P0-0 待授权。
+- 2026-11-06 修复轮（#125/#126）：`95e9f12` 依用户授权改产品代码，只动 `web/css/pet.css`、`web/css/style.css`、`web/js/app.js` 的 `inset`/`dvh` 兼容写法；**三条像素断言的代码、`PET_MIN_DIFF=6000` 与判定式均未改**（`git diff 9c9d0c2 HEAD -- scripts/emulator_float_check.py` 可核）。`8123c04` 只加 `[FLOAT-DIAG]` 打印，不加断言、不改阈值。
+- #125/#126 实测：3 条像素断言自然转绿；`emulator-smoke` 仍红在「双击展开迷你窗」链（adb 两枪间隔 493ms > 380ms，§3.8），该问题与本次修复无关，已在 §4.3 P0-0b 立项，未用任何绕过手段掩盖。
+- 取证结论：不是 screencap 盲，也不是 Live2D 没画，而是 CI 的 WebView 83 不解析 `inset:0` → 浮窗页 0×0 → 屏幕确实不可见（§3.6）；修复落在产品侧（§3.6.6），因此**没有把断言换成 CDP/canvas 源**。
 - 本轮未移除 `-no-audio`，未新增 AVD 静音豁免。
-- commit 划分：取证脚本 `627b26a` / `adfa963` / `db544ff`；文档（本次）。都推在同一分支 `docs/audio-verifiability`；未 force push、未动他人分支。
+- commit 划分：取证脚本 `627b26a` / `adfa963` / `db544ff`；产品修复 `95e9f12`；双击诊断 `8123c04`；文档（本次）。都推在同一分支 `docs/audio-verifiability`；未 force push、未动他人分支。
 - 交付物：本文档 + `scripts/android_cdp.py`（新增 `screenshot()`）/ `scripts/emulator_float_check.py`（新增 `[FLOAT-PROBE]` 取证与对照组）。

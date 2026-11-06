@@ -242,6 +242,8 @@ jobs:
             # [FLOAT-PROBE] 另取 WebView 渲染层（CDP Page.captureScreenshot）与页内 canvas 读回，仅用于归因。
             # run #121–#123 实测：该 AVD 的 WebView 83 不解析 inset:0 → 浮窗页 0×0，两路新源同样为空；
             # 新源与 screencap 不一致时只用于归因，不得据此放宽/替换断言（详见 docs §3.6）。
+            # #125 起产品已修（95e9f12：inset 改显式四边），3 条像素断言在 screencap 源下自然转绿；
+            # CDP 页对透明 overlay 仍返回全透明，属已知限制，仅取证，不参与判定。
             echo "[CAPTURE] verdict=screencap; probes=CDP render-layer + canvas readback (evidence only, no threshold change)"
             python3 scripts/emulator_float_check.py || { echo "ERROR: float window check failed"; exit 1; }
 
