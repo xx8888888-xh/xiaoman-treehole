@@ -849,6 +849,41 @@ def main():
                          "shot": "e2e_05_back_portrait.png", "bytes": b5c}
     }
 
+    # ---------------- ⑤b 语音失败提示：出现 → 存活期自动收起 → 重绘不复活 ----------------
+    VOICE_TIP_JS = r"""
+(() => {
+  const el = document.getElementById('voiceTip');
+  let logs = [];
+  try { logs = JSON.parse(sessionStorage.getItem('xiaoman_voice_fail_log') || '[]'); } catch (e) {}
+  const ctl = window.__voiceTip ? window.__voiceTip() : null;
+  return {
+    visible: !!el && !el.classList.contains('hidden'),
+    text: (document.getElementById('voiceTipText') || {}).textContent || '',
+    logs: logs.length,
+    last: logs.length ? logs[logs.length - 1].reason : null,
+    ttl: ctl ? ctl.ttlMs : null,
+  };
+})()
+"""
+    # 走生产同一条入口（TTS 失败回调调用的就是它），不另外造失败
+    cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
+    time.sleep(0.4)
+    vt0 = cdp.eval(VOICE_TIP_JS) or {}
+    ttl_ms = vt0.get("ttl") or 8000
+    time.sleep(ttl_ms / 1000.0 + 1.2)
+    vt1 = cdp.eval(VOICE_TIP_JS) or {}
+    cdp.eval("window.__voiceTip && window.__voiceTip().render(), 1")   # 模拟一次重绘
+    time.sleep(0.3)
+    vt2 = cdp.eval(VOICE_TIP_JS) or {}
+    vt_ok = (bool(vt0.get("visible")) and int(vt0.get("logs") or 0) >= 1
+             and not vt1.get("visible") and int(vt1.get("logs") or 0) == int(vt0.get("logs") or 0)
+             and not vt2.get("visible") and int(vt2.get("logs") or 0) >= 1)
+    METRICS["states"]["05b_voice_tip"] = {"shown": vt0, "afterTtl": vt1,
+                                          "afterRender": vt2, "ok": vt_ok}
+    gate("05b_voice_tip", require_true, "05b_voice_tip", vt_ok,
+         "语音失败提示应出现并在 %sms 后自动收起、重绘不复活且失败日志仍保留（%r）"
+         % (ttl_ms, {"shown": vt0, "afterTtl": vt1, "afterRender": vt2}))
+
     # ---------------- ⑥ 连续 20 轮后滚到底 ----------------
     _, tot0 = wait_total(cdp, 0, timeout=2)
     base_total = int(tot0.get("total") or 0)
