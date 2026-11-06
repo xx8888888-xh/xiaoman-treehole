@@ -112,6 +112,7 @@
 | 10–60s（静止） | **0/s** | 0.04/s（50s 2 帧） | 28,694px/s | 0.1/s（50s 5 帧） |
 
 60s 合计：fill 93,249,844px，raster 16,497,994px，**窗口外光栅 266,711px = fill 的 0.286%**（R4：1,814,539px = fill 的 1.40%、raster 的 7.38%）。静止补帧间隔实测 **20,001ms**（R4 为 10s 档）。
+第二段 float-only 复测（run `42253920785`）复核同一比例：fill 123,379,521px、raster 21,845,507px、窗口外 353,055px = **0.286%**（两次完全一致）；满帧档 18.66 rAF/s、20.83 帧/s，接近 R4 的 19.32（同一环境上限）。
 
 **本轮改了什么**（`web/js/pet.js`、`web/js/pet_core.js`）：
 - 取景余量 `CLIP_MARGIN_PX` 6 → 2，并把可见 rect 的向外取整抽成纯函数 `clipRect`（新增 4 项几何测试：4 档窗型 × dpr 1/1.5/2 下“可见 rect 完全包含于 clip”）。
@@ -127,9 +128,10 @@
 默认档截图（`emulator_float_r4_default.png`）在采样末尾捕捉到系统对话框 **“小满树洞 isn't responding / Close app / Wait”**；极简档截图正常（木偶完整、无裁剪）。
 - 同段采样数据完整：三档策略按 12.0/s → 9.25 帧/s → 0.04 帧/s 执行，`stoppedIntervalsMs=20001`，说明页面在 10–60s 内仍按策略存活（20s/40s 各补 1 帧）。
 - 该 run 的 logcat 摘要只过滤了 `[probe] pet-*`，未含 ANR 记录；因此无法判定是“采样结束后的系统启动抖动/2 核 CPU 争抢”，还是产品侧主线程阻塞。
-- 已给浮窗探针加 `anr_evidence()`（`dumpsys activity anr` / `dumpsys window windows` / 最近 4000 行 logcat 关键字），并支持 `float_only` 复测；复测 run 结果见下（若仍复现，则按“未达标”记录并附 trace）。
+- 已给浮窗探针加 `anr_evidence()`（`dumpsys activity anr` / `dumpsys window windows` / 最近 4000 行 logcat 关键字），并支持 `float_only` 复测；复测结论见下。
 
-<!-- R5_ANR_RESULT -->
+**复测结论（run `42253920785`，`float_only=true`）**：**未复现**。探针新增的 `anr_evidence()` 采集 `dumpsys activity anr` / `dumpsys window windows` / 最近 4000 行 logcat，`anrDetected=false`、无任何匹配；两档截图均正常，默认档木偶完整、无裁剪、无对话框（`emulator_float_r4_default.png`）。
+因此首轮 ANR 最可能是“模拟器冷启动 + 2 核软件渲染 + 连续 force-stop/start”的系统侧抖动，采样数据本身完整（三档策略按时执行）。仍不能完全排除偶发，后续每轮浮窗探针都会带 ANR 取证；本轮不把它记为产品回退，但保留为**未闭环观察项**。
 
 ## 6. 未达标项汇总（不粉饰）
 
@@ -137,7 +139,7 @@
 2. **idle_minimal 严格判据红**：60s 内 1 次 303,309px 重绘（45s 周期事件），非循环渲染；判据未放宽。
 3. **idle_default / 浮窗满帧档判据红**：2 核 `swiftshader_indirect` 上限导致，绝对指标已较 R4 降 67%–68%；这是装置上限，不是产品未优化。
 4. **浮窗 6–10s 档帧 9.25/s（下限 10）**：setTimeout 抖动，rAF=0 目标成立。
-5. **浮窗默认档 ANR 异常**：证据不足，见 §5.3。
+5. **浮窗默认档 ANR 异常**：首轮截图偶发一次系统 ANR 对话框；float-only 复测（`42253920785`）未复现、无 ANR 记录、截图正常。记为未闭环观察项，不算产品回退。
 
 ## 7. 回归与风险
 
