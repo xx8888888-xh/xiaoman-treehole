@@ -629,18 +629,24 @@ def run_background(minutes, uid, cdp):
 
 # ---- 汇总 -------------------------------------------------------------------
 def add_net_cost(segs):
-    """App 净成本 = App 段 - 纯待机段；同时保留绝对量。"""
+    """App 净成本 = App 段 - 纯待机段；mAh 必须同为整机模型，不能拿 uid 估算比整机。"""
     base = next((s for s in segs if s.get("name") == "standby"), None)
     if not base:
         return
+
+    def device_mah(s):
+        return s.get("deviceMahMeasured") if s.get("deviceMahMeasured") is not None \
+            else s.get("mahMeasured")
+
+    base_mah = device_mah(base)
     for s in segs:
         if s.get("name") == "standby":
             s["appNetCost"] = None
             continue
+        s_mah = device_mah(s)
         s["appNetCost"] = {
-            "mahOverStandby": round((s.get("mahMeasured") or 0)
-                                    - (base.get("mahMeasured") or 0), 6)
-            if s.get("mahMeasured") is not None else None,
+            "mahOverStandby": round(s_mah - base_mah, 6)
+            if s_mah is not None and base_mah is not None else None,
             "cpuMsOverStandby": round((s.get("cpuMs") or 0), 1)
             if s.get("cpuMs") is not None else None,   # 待机无 App 进程，基准为 0
             "deviceCpuMsOverStandby": round((s.get("deviceCpuMs") or 0)
