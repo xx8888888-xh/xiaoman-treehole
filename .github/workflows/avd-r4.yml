@@ -1,0 +1,164 @@
+name: avd-r4
+
+# 第四轮耗电验收（云端 AVD 探针）：零渲染 / 动画基线 / 后台归零
+# 只在云端跑（workflow_dispatch），本机不启模拟器。
+# build-apk 照抄 android-ci.yml 的前半（无签名需求）；avd-probe 复用同一套
+# reactivecircus/android-emulator-runner 参数（api 30 / x86_64 / pixel_4）。
+#
+# 注意：emulator-runner 的 script 是逐行执行的（见 android-ci.yml 内注释），
+# 因此每行都写成自包含的单行命令，不依赖跨行 shell 变量。
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      idle_seconds:
+        description: "idle_minimal / idle_default 每段秒数"
+        required: false
+        default: "60"
+      bg_seconds:
+        description: "background 段秒数（默认 300）"
+        required: false
+        default: "300"
+
+concurrency:
+  group: avd-r4-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.workers.max=4 -Dorg.gradle.jvmargs=-Xmx2g"
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android
+            /opt/hostedtoolcache/android-sdk
+          key: android-sdk-${{ runner.os }}-${{ hashFiles('android/gradle.properties') }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-
+
+      - name: Ensure Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: Sync web assets into android assets/www (single source of truth)
+        run: bash scripts/build_assets.sh
+
+      - name: Build Debug APK (Gradle preferred, fallback to script)
+        run: |
+          if [ -f android/gradlew ]; then
+            (cd android && ./gradlew assembleDebug --no-daemon)
+          else
+            bash scripts/build_apk.sh
+          fi
+
+      - name: Normalize APK to fixed path
+        run: |
+          APK=$(find . -name "*.apk" -path "*debug*" 2>/dev/null | head -1)
+          [ -n "$APK" ] || { echo "No debug APK produced"; exit 1; }
+          mkdir -p artifact-staging
+          cp "$APK" artifact-staging/xiaoman-treehole.apk
+          ls -la artifact-staging/
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaoman-treehole-apk
+          path: artifact-staging/xiaoman-treehole.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  avd-probe:
+    runs-on: ubuntu-latest
+    needs: build-apk
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Debug APK from build-apk
+        uses: actions/download-artifact@v4
+        with:
+          name: xiaoman-treehole-apk
+          path: downloaded-apk/
+
+      - name: Locate downloaded APK (diagnostics)
+        run: |
+          echo "== downloaded tree =="
+          find downloaded-apk -type f -printf "%p (%s bytes)\n" 2>/dev/null || ls -R downloaded-apk
+          APK_PATH=$(find downloaded-apk -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK_PATH" ]; then echo "ERROR: no APK found after download"; exit 1; fi
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run emulator & R4 power probe
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          profile: pixel_4
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072 -no-audio
+          emulator-boot-timeout: 600
+          script: |
+            APK_PATH=${APK_PATH:?no apk located in earlier step}
+            echo "Installing APK: $APK_PATH"
+            adb install -r "$APK_PATH"
+            pip3 install --quiet --user requests websockets pillow 2>/dev/null || pip3 install --quiet requests websockets pillow || true
+            python3 -c "import websockets, requests, PIL; print('probe deps ok, PIL', PIL.__version__)" || { echo "ERROR: python probe deps unavailable"; exit 1; }
+            adb shell am start -n com.xiaoman.treehole/.MainActivity
+            sleep 8
+            for i in 1 2 3; do adb shell pidof com.xiaoman.treehole && { echo "process alive (attempt $i)"; break; }; echo "attempt $i: relaunching"; adb shell am start -n com.xiaoman.treehole/.MainActivity || true; sleep 10; done
+            adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found after 3 attempts — crash evidence follows"; adb logcat -d | rg -i "xiaoman|FATAL|AndroidRuntime|lowmemorykiller" | tail -100 || adb logcat -d | tail -200 || true; exit 1; }
+            mkdir -p artifacts/avd
+            IDLE="${{ inputs.idle_seconds }}"; BG="${{ inputs.bg_seconds }}"; python3 scripts/emulator_power_r4.py --idle-seconds "${IDLE:-60}" --bg-seconds "${BG:-300}" --out artifacts/avd/power_r4.json || echo 1 > /tmp/r4_power_failed
+            if [ -f scripts/emulator_float_r4.py ]; then python3 scripts/emulator_float_r4.py || echo 1 > /tmp/r4_float_failed; fi
+            [ ! -f /tmp/r4_power_failed ] || { echo "ERROR: power r4 判据未全部成立（见 artifacts/avd/power_r4.json 与 power_r4_*.txt）"; exit 1; }
+            if [ -f /tmp/r4_float_failed ]; then echo "WARN: emulator_float_r4.py 非零退出（不影响本 job 的耗电判据）"; fi
+
+      - name: Upload power artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: avd-r4-power
+          path: |
+            artifacts/
+            power_*.txt
+            *.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload logcat on failure
+        if: failure()
+        run: adb logcat -d > logcat_avd_r4.txt || true
+
+      - name: Upload logcat artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: avd-r4-logcat
+          path: logcat_avd_r4.txt
+          if-no-files-found: ignore
+          retention-days: 7
