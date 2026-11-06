@@ -231,12 +231,13 @@ def battery_power(name, uid):
             f.write(out)
     except Exception:
         pass
-    m = re.search(rf"^    UID {re.escape(uid)}:.*$", out, re.M)
+    # API 30 的 batterystats 行首是 "Uid"（不是全大写 UID），这里统一大小写匹配。
+    m = re.search(rf"^    [Uu]id {re.escape(uid)}:.*$", out, re.M)
     if not m:
         return None
     line = m.group(0)
     try:
-        tot = float(re.search(r"UID \S+: (\d+\.\d+)", line).group(1))
+        tot = float(re.search(r"[Uu]id \S+: (\d+\.\d+)", line).group(1))
         cpu_mah = float(re.search(r"cpu=(\d+\.\d+)", line).group(1))
         cpu_m = re.search(r"cpu=\d+\.\d+ \((.+?)\)", line)
         cpu_sec = parse_duration(cpu_m.group(1)) if cpu_m else 0.0
@@ -329,6 +330,23 @@ def read_snap(cdp, timeout=10):
     return val, None
 
 
+def read_snap_recover(cdp, timeout=10):
+    """前台/段首用：掉线时重连并重新注入探针，尽量不中断 60s 序列。
+    页面若真的 reload 过，计数会从 0 重来（判据里按 stale 处理）。"""
+    smp, err = read_snap(cdp, timeout=timeout)
+    if smp is not None:
+        return smp, None
+    try:
+        cdp.attach(url_filter="index.html", timeout=20)
+        ok2, inj = fast_eval(cdp, PROBE_JS, timeout=12)
+        if not ok2 or inj not in ("installed", "already"):
+            return None, f"reinject-fail:{inj}"
+        smp, err = read_snap(cdp, timeout=timeout)
+        return (smp, None) if smp is not None else (None, f"recover-read-fail:{err}")
+    except Exception as e:
+        return None, f"recover-fail:{str(e)[:110]}"
+
+
 def ints(v):
     try:
         return int(v or 0)
@@ -375,7 +393,9 @@ def attach_ready(port, timeout=90, stage_wait=45):
                     print(f"[R4-WARN] 舞台未就绪（__stageMode={val.get('stageMode')}），"
                           f"零渲染判据的可信度下降", flush=True)
                 ok2, injected = fast_eval(cdp, PROBE_JS, timeout=12)
-                if not ok2 or injected != "installed":
+                # reload 后 reinject 会返回 installed；同一页面二次进入返回 already，
+                # 两者都表示探针可用（不要把它当失败）。
+                if not ok2 or injected not in ("installed", "already"):
                     raise RuntimeError(f"页内探针注入失败：{injected}")
                 return cdp, val
         time.sleep(1)
@@ -470,7 +490,7 @@ def measure_foreground(cdp, name, seconds, preset, expectation):
     battery_reset()
     uid = uid_of()
     ticks0, tick_detail0 = procs_ticks()
-    snap0, err0 = read_snap(cdp)
+    snap0, err0 = read_snap_recover(cdp)
     if snap0 is None:
         raise RuntimeError(f"段首读不到页内探针：{err0}")
 
@@ -478,7 +498,7 @@ def measure_foreground(cdp, name, seconds, preset, expectation):
     samples = []
     for i in range(seconds):
         sleep_until(t0 + i + 1)          # 每秒一拍，interval≈1s
-        smp, err = read_snap(cdp, timeout=10)
+        smp, err = read_snap_recover(cdp, timeout=10)
         if smp is None:
             samples.append({"t": round(time.time() - t0, 2), "cdp": "cdp-unavailable",
                             "err": str(err)[:120]})
@@ -592,12 +612,12 @@ def measure_background(cdp, seconds):
     print(f"\n=== SEGMENT background ({seconds}s, preset=default) ===", flush=True)
 
     # ① 前台基线 5s（同一预设、同一进程）
-    s_start, err = read_snap(cdp)
+    s_start, err = read_snap_recover(cdp)
     if s_start is None:
         raise RuntimeError(f"后台段前台基线读不到页内探针：{err}")
     t_fg = time.time()
     time.sleep(5)
-    s_base, err = read_snap(cdp)
+    s_base, err = read_snap_recover(cdp)
     if s_base is None:
         raise RuntimeError(f"前台基线 5s 后读不到探针：{err}")
     fg_wall = time.time() - t_fg
