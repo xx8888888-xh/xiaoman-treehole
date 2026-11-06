@@ -52,13 +52,18 @@ test("选档：force 支持 s050/s070 与旧探针 1024/2048 兼容", () => {
   assert.equal(Stage._pickTier({}), "s070");
 });
 
-test("情绪映射：无表情的 sad/surprised 退到中性/微笑，不静默失败", () => {
+test("情绪映射：疲惫/敷衍/惊讶有独立表情；沉默与未知值落平静脸", () => {
   assert.equal(Stage._emotionFor("happy"), "smile");
   assert.equal(Stage._emotionFor("gentle"), "smile");
   assert.equal(Stage._emotionFor("shy"), "shy");
   assert.equal(Stage._emotionFor("neutral"), "neutral");
   assert.equal(Stage._emotionFor("sad"), "neutral");
-  assert.equal(Stage._emotionFor("surprised"), "smile");
+  // 第四轮：不再借微笑/中性，复用现有眼/嘴图层拼最小表情
+  assert.equal(Stage._emotionFor("surprised"), "surprised");
+  assert.equal(Stage._emotionFor("tired"), "tired");
+  assert.equal(Stage._emotionFor("flat"), "flat");
+  assert.equal(Stage._emotionFor("quiet"), "neutral");
+  assert.equal(Stage._emotionFor("TIRED"), "tired", "大小写不敏感");
   assert.equal(Stage._emotionFor("???"), "neutral");
 });
 

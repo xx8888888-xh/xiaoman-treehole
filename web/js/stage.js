@@ -28,7 +28,10 @@ const Stage = (() => {
   let motionEnabled = typeof window !== "undefined" && window.Appearance
     ? Appearance.get().motion
     : true;
-  const MOODS = { happy: "开心", sad: "有点难过", gentle: "温柔模式", surprised: "诶？", shy: "脸红了", neutral: "在听你说" };
+  const MOODS = {
+    happy: "开心", sad: "有点难过", gentle: "温柔模式", surprised: "诶？",
+    shy: "脸红了", neutral: "在听你说", tired: "也有点累", flat: "嗯，在听", quiet: "安静陪着",
+  };
 
   /* ---------- 资产与引擎（唯一模型源） ----------
    * manifest.js 提供 window.PUPPET_MANIFEST（免 fetch，file:// 直开也能用）；
@@ -359,7 +362,9 @@ const Stage = (() => {
       // 口型：包络驱动，短暂保持后回 0（不随机张嘴）；引擎内部 7 档交叉淡入
       const lip = lipHold > 0 ? lipOpen : 0;
       puppet.setParam("lipSync", lip);
-      if (lipHold > 0) lipHold -= 1;
+      // 保持量按 60fps 帧当量递减：30fps 时一帧抵两帧，墙钟时长恒为 ~100ms，
+      // 不让低帧率设备的嘴"拖音"（旧写法按帧减 1，30fps 下会变 200ms）
+      if (lipHold > 0) lipHold = Math.max(0, lipHold - dt * 60);
       puppet.update(dt);
       puppet.render();
       rafId = requestAnimationFrame(tick);
@@ -575,9 +580,16 @@ const Stage = (() => {
     happy: "smile",
     sad: "neutral",
     gentle: "smile",
-    surprised: "smile",
+    // 惊讶原来借微笑，嘴型与情绪相反；manifest 已补 open+open_l 的独立表情
+    surprised: "surprised",
     shy: "shy",
     neutral: "neutral",
+    // 疲惫/敷衍原来都落 gentle → smile；已补两张最小表情（复用现有眼/嘴图层）
+    tired: "tired",
+    flat: "flat",
+    // 沉默不需要新图：用平静脸（不再借微笑），语义上"安静陪着"就是平静
+    quiet: "neutral",
+    silent: "neutral",
     smile: "smile", laugh: "laugh", talk: "talk",
   };
   const MOTION_MAP = {
@@ -595,15 +607,18 @@ const Stage = (() => {
 
   function setEmotion(name) {
     if (!puppet) return;
-    const mood = emotionFor(name);
+    const key = String(name || "").toLowerCase();
+    const mood = emotionFor(key);
     puppet.setEmotion(mood);
-    // sad 没有独立表情层：用轻微低头表达（引擎的 headTilt 参数）
-    puppet.setParam("headTilt", mood === "neutral" && name === "sad" ? -0.6 : 0);
+    // sad 没有独立表情层：用轻微低头表达（引擎的 headTilt 参数）；
+    // 疲惫再压一点肩颈，敷衍只比平静低一点，避免三张脸在视觉上又挤成一档
+    const tilt = key === "sad" ? -0.6 : mood === "tired" ? -0.35 : mood === "flat" ? -0.18 : 0;
+    puppet.setParam("headTilt", tilt);
     // 零动画模式下 rAF 已停：状态切换后手动渲染一帧，否则画面停在旧表情
     if (!motionEnabled) renderOnce();
     const moodEl = document.getElementById("moodText");
     if (moodEl) {
-      moodEl.textContent = MOODS[name] || "在听你说";
+      moodEl.textContent = MOODS[key] || "在听你说";
       const chip = moodEl.parentElement;
       chip.classList.add("pop");
       setTimeout(() => chip.classList.remove("pop"), 350);

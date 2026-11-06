@@ -216,8 +216,9 @@ const MockEngine = (() => {
     generic: "对了，你最近睡得还行吗"
   };
   const EMO_MAP = {
-    work: ["gentle", "Nod"], love: ["sad", "Nod"], lonely: ["gentle", null],
-    insomnia: ["gentle", null], family: ["gentle", null], money: ["surprised", null],
+    work: ["gentle", "Nod"], love: ["sad", "Nod"], lonely: ["quiet", null],
+    // 疲惫/失眠是低能量场景：不再借"温柔微笑"，改独立疲惫脸（半垂眼+闭嘴）
+    insomnia: ["tired", null], family: ["tired", null], money: ["surprised", null],
     intimate: ["gentle", "Nod"], happy: ["happy", "HappyJump"],
     greet: ["gentle", "Greeting"], generic: ["neutral", null]
   };

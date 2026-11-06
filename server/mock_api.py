@@ -857,8 +857,9 @@ def detail_pool(text):
 
 
 EMO_MAP = {
-    "work": ("gentle", "Nod"), "love": ("sad", "Nod"), "lonely": ("gentle", None),
-    "insomnia": ("gentle", None), "family": ("gentle", None), "money": ("surprised", None),
+    "work": ("gentle", "Nod"), "love": ("sad", "Nod"), "lonely": ("quiet", None),
+    # 疲惫/失眠是低能量场景：不再借"温柔微笑"，改独立疲惫脸（半垂眼+闭嘴）
+    "insomnia": ("tired", None), "family": ("tired", None), "money": ("surprised", None),
     "intimate": ("gentle", "Nod"),
     "happy": ("happy", "HappyJump"), "greet": ("gentle", "Greeting"),
     "generic": ("neutral", None),
@@ -1538,7 +1539,8 @@ def make_reply(messages, session_id=None):
         _STATE.increment_crisis(session_id)
         level = risk_guard.max_level(risk["level"], track["level"])
         payload = risk_guard.crisis_payload(level)
-        payload["emotion"] = "gentle"
+        # 危机场景不微笑：用平静/安静陪伴脸，情绪与话术一致
+        payload["emotion"] = "quiet"
         payload["motion"] = None
         payload["memory_updates"] = {}
         payload["hook"] = None
@@ -1581,7 +1583,7 @@ def make_reply(messages, session_id=None):
         sess = _STATE.get_session(session_id)
         sess["no_probe"] = 2
         reply = "行，删了。" if dropped else "行，不记了。"
-        return {"reply": reply, "emotion": "gentle", "motion": None,
+        return {"reply": reply, "emotion": "flat", "motion": None,
                 "memory_updates": {}, "hook": None, "crisis": False}
 
     # W20 拒绝说话：真的停下来（短、无问号、不逼话），并让下一轮不翻旧账。
@@ -1591,14 +1593,14 @@ def make_reply(messages, session_id=None):
         _STATE.next_turn(session_id)
         sess = _STATE.get_session(session_id)
         sess["no_probe"] = 2
-        return {"reply": _refusal_reply(session_id), "emotion": "gentle",
+        return {"reply": _refusal_reply(session_id), "emotion": "flat",
                 "motion": None, "memory_updates": {}, "hook": None, "crisis": False}
 
     # W11 沉默轮早退：用户只发"……/嗯/累/随便"时不追问、不丢引导 hook，
     # 只回 1-5 字短句（"在。""我在这儿"），保留轮次计数让后续引导节奏不乱。
     if topic != "greet" and is_silent_input(user_text):
         _STATE.next_turn(session_id)
-        return {"reply": _silent_reply(session_id), "emotion": "gentle",
+        return {"reply": _silent_reply(session_id), "emotion": "quiet",
                 "motion": None, "memory_updates": {}, "hook": None, "crisis": False}
 
     # 从会话状态读取旧记忆

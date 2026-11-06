@@ -228,6 +228,24 @@ window.PUPPET_MANIFEST = {
       "eye_r": "open",
       "mouth": "open_m",
       "label": "说话"
+    },
+    "surprised": {
+      "eye_l": "open",
+      "eye_r": "open",
+      "mouth": "open_l",
+      "label": "惊讶"
+    },
+    "tired": {
+      "eye_l": "half",
+      "eye_r": "half",
+      "mouth": "closed",
+      "label": "疲惫"
+    },
+    "flat": {
+      "eye_l": "open",
+      "eye_r": "open",
+      "mouth": "open_xs",
+      "label": "敷衍"
     }
   },
   "motions": [

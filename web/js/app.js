@@ -1473,7 +1473,7 @@ const App = (() => {
         const typing = risk.level === "high" ? 450 : 800;
         await showTyping(typing);
         const careHandle = addMsg(script, "them", { crisis: true, level: risk.level });
-        Stage.setEmotion("gentle");
+        Stage.setEmotion("quiet");
         pushHistory("assistant", script, undefined, careHandle && careHandle.rec);
         logRisk(risk, text);
         stickySet(risk.level, RISK_STICKY_TURNS);
@@ -1685,7 +1685,7 @@ const App = (() => {
         const { level, script } = crisisScript(data);
         await showTyping(level === "high" ? 150 : 300);
         const careHandle = addMsg(script, "them", { crisis: true, level });
-        Stage.setEmotion("gentle");
+        Stage.setEmotion("quiet");
         pushHistory("assistant", script, undefined, careHandle && careHandle.rec);
         return;   // 高危/中危：不播 TTS、不做钩子
       }
@@ -1718,7 +1718,7 @@ const App = (() => {
         const { level, script } = crisisScript(data);
         renderer.replace(script);
         const careHandle = addMsg(script, "them", { crisis: true, level });
-        Stage.setEmotion("gentle");
+        Stage.setEmotion("quiet");
         pushHistory("assistant", script, undefined, careHandle && careHandle.rec);
         return;   // 高危/中危：不播 TTS、不做钩子
       }

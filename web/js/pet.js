@@ -142,8 +142,10 @@
     showLocalTip(text);
   }
 
+  /** 页内气泡最长 44 字（原生长气泡是独立 View，不受浮窗宽高限制） */
   function showLocalTip(text) {
-    tipEl.textContent = text;
+    const s = String(text == null ? "" : text);
+    tipEl.textContent = s.length > 44 ? s.slice(0, 44) + "…" : s;
     tipEl.classList.remove("hidden");
     clearTimeout(tipTimer);
     tipTimer = setTimeout(() => tipEl.classList.add("hidden"), 5200);
@@ -177,8 +179,9 @@
   }
 
   const EMOTION_MAP = {
-    happy: "smile", sad: "neutral", gentle: "smile", surprised: "smile",
+    happy: "smile", sad: "neutral", gentle: "smile", surprised: "surprised",
     shy: "shy", neutral: "neutral", smile: "smile", laugh: "laugh", talk: "talk",
+    tired: "tired", flat: "flat", quiet: "neutral", silent: "neutral",
   };
   const MOTION_MAP = {
     greeting: "nod", nod: "nod", shake: "shake", happyjump: "nod", talk: "talk",
@@ -331,8 +334,10 @@
 
   function setEmotion(name) {
     if (!puppet) return;
-    try { puppet.setEmotion(EMOTION_MAP[name] || "neutral"); } catch (e) { /* 忽略 */ }
-    setParam("headTilt", name === "sad" ? -0.6 : 0);
+    const key = String(name || "").toLowerCase();
+    const mood = EMOTION_MAP[key] || "neutral";
+    try { puppet.setEmotion(mood); } catch (e) { /* 忽略 */ }
+    setParam("headTilt", key === "sad" ? -0.6 : mood === "tired" ? -0.35 : mood === "flat" ? -0.18 : 0);
     if (!motion) renderOnce();
   }
 
@@ -633,6 +638,10 @@
     destroy,
     tickReminders,
     repaint,
+    /** 预览/截图用：菜单本身就由长按触发，这里只暴露同一状态切换 */
+    menu(show) { showMenu(!!show); },
+    /** 预览/截图用：注入一条长文本，验证小窗 4 行封顶与省略 */
+    tip(text) { showLocalTip(text); },
     state() {
       const idleMs = Date.now() - lastActionAt;
       const mode = idleStopped ? "stopped" : (idleMs >= IDLE_THROTTLE_MS ? "preview" : "full");
