@@ -59,11 +59,76 @@ const Stage = (() => {
   let wanderTimer = null;     // 视线漫游计时器：零动画时必须真正停掉
   let freezeTimer = null;     // 零动画的"渲染几帧后定格"计时器
   let rafId = null;           // 动画循环句柄（零动画必须为 null）
-  let lastTs = 0;
+  let frameTimer = null;      // 低频档的唤醒计时器：到点只请求一帧，不补帧
+  let lastTs = 0;             // 上一次真正渲染的时间戳（dt 与门控共用）
   let resizeObs = null;
   let fallbackImg = null;     // 静态/剪影兜底图（容器尺寸变化时重绘，不再请求网络）
   let envBound = false;       // 环境监听（hidden/blur/pagehide）只绑定一次
   let pausedByEnv = false;    // 页面不可见/窗口失焦期间暂停，恢复时清
+
+  /* ---------- 空闲分级降档（第四轮耗电实测：默认预设静置 60s ≈54.75% CPU） ----------
+   * 只认真实信号，不做"猜你闲置"的假计时器：
+   *   活跃 = TTS/音频帧喂入口型、口型保持、动作/眨眼动画在播、3s 内用户输入。
+   *   降档 = 空闲 3s → 15fps；10s → 5fps；30s → 1fps（见 gate）。
+   * 门控只看时间戳：不足帧长就不渲染、不累计欠账；恢复时清掉等待并立刻补一帧，
+   * 避免切回满帧瞬间"补一大批帧"造成卡顿。
+   * 30s 不彻底停 rAF：默认预设仍有呼吸，全停会让画面"假死"；1fps 采样呼吸
+   * 每秒只画一次（1 次 canvas 填充），耗电几乎为零，又能看出轻微起伏。
+   * 眨眼（215ms）在 1fps 下无法被采样，相位机会被拖成数秒的"半闭眼"，
+   * 因此该档保持睁眼、只让呼吸继续动；回到其它档位后眨眼自动恢复。
+   * ---------- 状态机（纯时间函数，便于单测注入时间源） ---------- */
+  const IDLE_15_MS = 3000;
+  const IDLE_5_MS = 10000;
+  const IDLE_1FPS_MS = 30000;
+  const RATE_FULL = 0;        // 0 = 不节流（跟随 rAF）
+  const RATE_STOPPED = -1;    // 不可见：不渲染也不排帧
+
+  function createIdleGovernor() {
+    let lastActivity = nowMs();
+    let lastRender = -Infinity;
+    let hidden = false;
+
+    /** 记一次活跃信号：计时归零，并允许下一帧立即渲染（不补历史帧） */
+    function markActivity(t) {
+      lastActivity = typeof t === "number" ? t : nowMs();
+      lastRender = -Infinity;
+    }
+
+    /** 纯函数：t 时刻的空闲档位（不看任何真实信号之外的输入） */
+    function rateAt(t) {
+      if (hidden) return RATE_STOPPED;
+      const idle = t - lastActivity;
+      if (idle >= IDLE_1FPS_MS) return 1;
+      if (idle >= IDLE_5_MS) return 5;
+      if (idle >= IDLE_15_MS) return 15;
+      return RATE_FULL;
+    }
+
+    /** 本帧该不该画：render=false 时 waitMs 给出下一次最早可画的时间 */
+    function gate(t) {
+      const rate = rateAt(t);
+      if (rate === RATE_STOPPED) return { rate, render: false, waitMs: -1 };
+      if (rate === RATE_FULL) { lastRender = t; return { rate, render: true, waitMs: 0 }; }
+      const interval = 1000 / rate;
+      const elapsed = t - lastRender;
+      if (elapsed + 0.5 < interval) {
+        return { rate, render: false, waitMs: Math.max(1, Math.ceil(interval - elapsed)) };
+      }
+      lastRender = t;
+      return { rate, render: true, waitMs: 0 };
+    }
+
+    function hide() { hidden = true; }
+    function show(t) {
+      hidden = false;
+      lastActivity = typeof t === "number" ? t : nowMs();
+      lastRender = -Infinity;
+    }
+
+    return { markActivity, rateAt, gate, hide, show, state: () => ({ lastActivity, lastRender, hidden }) };
+  }
+
+  const idleGov = createIdleGovernor();
 
   /** 纹理档位：按 DPR + 画布可视尺寸 + 12MB 预算选 s050/s070（首屏只下载当前档）。
    *  与引擎内 pickTier 同一口径（预算含画布后备缓冲），前端先算出来便于探针/E2E。 */
@@ -292,6 +357,7 @@ const Stage = (() => {
   function pauseForEnv(why) {
     if (pausedByEnv) return;
     pausedByEnv = true;
+    idleGov.hide();
     stopLoop();
     stopWander();
     stopSharedTicker();
@@ -303,7 +369,8 @@ const Stage = (() => {
 
   function resumeForEnv(why) {
     pausedByEnv = false;
-    if (typeof document !== "undefined" && document.hidden) return;
+    idleGov.show(nowMs());
+    if (typeof document !== "undefined" && document.hidden) { idleGov.hide(); return; }
     if (!puppet || mode !== "layers") { renderOnce(); return; }
     if (motionEnabled) {
       puppet.setAutoIdle(true);
@@ -326,6 +393,12 @@ const Stage = (() => {
   function onFocus() { resumeForEnv("focus"); }
   function onPageHide(e) { if (!e?.persisted) destroy(); }
 
+  // 用户真实输入：只用来"唤醒满帧"，不参与任何视觉判断；passive 不阻塞滚动
+  const ACTIVITY_EVENTS = ["pointerdown", "touchstart", "keydown", "wheel", "scroll"];
+  const ACTIVITY_OPTS = { passive: true, capture: true };
+
+  function onUserActivity() { markActive(); }
+
   function bindEnv() {
     if (envBound || typeof document === "undefined") return;
     envBound = true;
@@ -333,6 +406,7 @@ const Stage = (() => {
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
     window.addEventListener("pagehide", onPageHide);
+    for (const ev of ACTIVITY_EVENTS) document.addEventListener(ev, onUserActivity, ACTIVITY_OPTS);
   }
 
   function unbindEnv() {
@@ -342,34 +416,78 @@ const Stage = (() => {
     window.removeEventListener("blur", onBlur);
     window.removeEventListener("focus", onFocus);
     window.removeEventListener("pagehide", onPageHide);
+    for (const ev of ACTIVITY_EVENTS) document.removeEventListener(ev, onUserActivity, ACTIVITY_OPTS);
   }
 
-  /* ---------- 渲染循环（唯一 rAF；零动画/不可见时不得存在） ---------- */
+  /* ---------- 渲染循环（唯一 rAF；零动画/不可见时不得存在） ----------
+   * 满帧档跟随 rAF；降档后不再空转 rAF：算好下一次可画的时间，只等一个 timer，
+   * 到点再请求单帧。这样 15/5/1fps 的 rAF 调度次数与真实帧数一致（便于实测）。 */
   function stopLoop() {
     if (rafId) cancelAnimationFrame(rafId);
     rafId = null;
+    if (frameTimer) clearTimeout(frameTimer);
+    frameTimer = null;
     lastTs = 0;
   }
 
-  function startLoop() {
-    if (rafId || !puppet || mode !== "layers" || !motionEnabled || envBlocked()) return;
-    lastTs = 0;
-    const tick = (ts) => {
-      rafId = null;
-      if (!puppet || mode !== "layers" || !motionEnabled) return;
-      const dt = lastTs ? Math.min(0.05, (ts - lastTs) / 1000) : 1 / 60;
-      lastTs = ts;
-      // 口型：包络驱动，短暂保持后回 0（不随机张嘴）；引擎内部 7 档交叉淡入
-      const lip = lipHold > 0 ? lipOpen : 0;
-      puppet.setParam("lipSync", lip);
-      // 保持量按 60fps 帧当量递减：30fps 时一帧抵两帧，墙钟时长恒为 ~100ms，
-      // 不让低帧率设备的嘴"拖音"（旧写法按帧减 1，30fps 下会变 200ms）
-      if (lipHold > 0) lipHold = Math.max(0, lipHold - dt * 60);
-      puppet.update(dt);
-      puppet.render();
+  function canAnimate() {
+    return !!puppet && mode === "layers" && motionEnabled && !envBlocked();
+  }
+
+  function requestNext(waitMs) {
+    if (rafId || frameTimer || !canAnimate()) return;
+    if (waitMs > 0) {
+      frameTimer = setTimeout(() => {
+        frameTimer = null;
+        if (!canAnimate()) return;
+        rafId = requestAnimationFrame(tick);
+      }, waitMs);
+    } else {
       rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
+    }
+  }
+
+  /** 真实活跃信号：重置空闲计时；若正处在低频等待，立即取消等待补一帧 */
+  function markActive(ts) {
+    idleGov.markActivity(typeof ts === "number" ? ts : nowMs());
+    if (frameTimer) {
+      clearTimeout(frameTimer);
+      frameTimer = null;
+      requestNext(0);
+    }
+  }
+
+  function tick(ts) {
+    rafId = null;
+    if (!canAnimate()) return;
+    const t = typeof ts === "number" ? ts : nowMs();
+    // 动作/口型在播 → 真实活跃，重置空闲计时（呼吸不算，否则永不休眠）。
+    // 眨眼只把本段动画临时提到满帧，不重置空闲计时：自动眨眼每 3~6s 一次，
+    // 若也算活跃会把计时永远清零，10s/30s 档根本到不了。
+    if (puppet.motion || lipHold > 0) idleGov.markActivity(t);
+    const blinking = !!(puppet.blink && puppet.blink.phase !== "open");
+    const g = blinking ? { rate: RATE_FULL, render: true, waitMs: 0 } : idleGov.gate(t);
+    if (!g.render) { if (g.waitMs > 0) requestNext(g.waitMs); return; }
+    // 1fps 采样不到 215ms 的眨眼：保持睁眼，避免相位机拖成数秒"半闭眼"
+    if (g.rate === 1 && puppet.blink && puppet.blink.phase === "open") puppet.blink.t = 0;
+    // 时间戳累加出 dt：低频时按真实墙钟推进呼吸，不按帧数补动画
+    const dt = lastTs ? Math.min(1, Math.max(0, (t - lastTs) / 1000)) : 1 / 60;
+    lastTs = t;
+    // 口型：包络驱动，短暂保持后回 0（不随机张嘴）；引擎内部 7 档交叉淡入
+    const lip = lipHold > 0 ? lipOpen : 0;
+    puppet.setParam("lipSync", lip);
+    // 保持量按 60fps 帧当量递减：低帧率时一帧抵多帧，墙钟时长恒为 ~100ms
+    if (lipHold > 0) lipHold = Math.max(0, lipHold - dt * 60);
+    puppet.update(dt);
+    puppet.render();
+    requestNext(g.rate === RATE_FULL ? 0 : Math.max(1, Math.ceil(1000 / g.rate)));
+  }
+
+  function startLoop() {
+    if (rafId || frameTimer || !canAnimate()) return;
+    idleGov.show(nowMs());
+    lastTs = 0;
+    requestNext(0);
   }
 
   function renderOnce() {
@@ -606,6 +724,7 @@ const Stage = (() => {
   }
 
   function setEmotion(name) {
+    markActive();                       // 表情切换是一次真实的状态变化
     if (!puppet) return;
     const key = String(name || "").toLowerCase();
     const mood = emotionFor(key);
@@ -630,6 +749,7 @@ const Stage = (() => {
     const id = motionFor(group);
     if (!id) return;
     puppet.playMotion(id);
+    markActive();                           // 动作开始播放 → 满帧
     startLoop();
   }
 
@@ -704,6 +824,8 @@ const Stage = (() => {
 
   /** TTS 播放期间的口型喂入（level 来自音频包络关键帧；<0 = 无音频，静止） */
   function lipFrame(level) {
+    // TTS/音频每喂一帧（含静音段 level=0）都是"正在播放"的真实信号
+    markActive();
     const target = lipFor(level, motionEnabled);
     lipOpen = target;
     lipHold = target > 0 ? 6 : 0;
@@ -728,6 +850,12 @@ const Stage = (() => {
     _emotionFor: emotionFor,
     _motionFor: motionFor,
     _vramFor: vramFor,
+    /** 空闲降档：阈值/档位常量 + 可注入时间源的状态机（单测用） */
+    _idleThresholds: { to15: IDLE_15_MS, to5: IDLE_5_MS, to1: IDLE_1FPS_MS },
+    _idleRates: { full: RATE_FULL, stopped: RATE_STOPPED, fps15: 15, fps5: 5, fps1: 1 },
+    _createIdleGovernor: createIdleGovernor,
+    _idleRate: () => idleGov.rateAt(nowMs()),
+    _idleState: () => idleGov.state(),
     /** 单测入口：口型目标纯函数与当前内部状态 */
     _lipFor: lipFor,
     _lipState: () => ({ lipOpen, lipHold })
