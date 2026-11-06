@@ -645,7 +645,12 @@ jobs:
                   t0: window.__latT0 || 0,
                   first: window.__latFirst || 0,
                   end: window.__latEnd || 0,
-                  timing: (window.TTS && TTS._lastTiming) ? TTS._lastTiming() : null
+                  timing: (window.TTS && TTS._lastTiming) ? TTS._lastTiming() : null,
+                  chain: (window.TTS && TTS.chain) ? TTS.chain() : null,
+                  provider: (window.TTS && TTS.provider) ? TTS.provider() : null,
+                  muted: (window.TTS && TTS.isMuted) ? TTS.isMuted() : null,
+                  cfg: (typeof API !== "undefined" && API.loadCfg)
+                       ? {tts: API.loadCfg().tts, server: API.loadCfg().ttsServer} : null
               })"""
 
               def latency(base, tag, texts, server):
@@ -670,7 +675,9 @@ jobs:
                              ("end-no-frame" if end else "timeout"))
                       rows.append({"why": why,
                                    "totalMs": round(first - t0, 1) if (first and t0) else None,
-                                   "timing": r.get("timing")})
+                                   "timing": r.get("timing"),
+                                   "chain": r.get("chain"), "provider": r.get("provider"),
+                                   "muted": r.get("muted"), "cfg": r.get("cfg")})
                       page.evaluate("() => window.TTS && TTS.stop()")
                       ctx.close()
                   m = {"tag": tag, "runs": rows}
@@ -711,6 +718,11 @@ jobs:
           print(json.dumps({k: (v.get("medianMs") if isinstance(v, dict) and "medianMs" in v else "ok")
                             for k, v in M.items()}, ensure_ascii=False))
           PY
+
+      # 延迟段若全部回落到 browser provider，需要看服务端到底有没有收到请求
+      - name: Dump TTS server logs
+        if: always()
+        run: tail -n 30 /tmp/tts-fast.log /tmp/tts-slow.log || true
 
       - name: Upload shots
         if: always()
