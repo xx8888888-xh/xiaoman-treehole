@@ -16,16 +16,25 @@ html, body {
   -webkit-user-select: none;
 }
 
+/* 注意：Android WebView 83（Chrome 83）不支持 inset 简写（Chrome 87 起），
+ * 旧版会整条声明丢弃 → 定位元素四边保持 auto → 收缩为 0×0，浮窗整页塌陷。
+ * 这里必须写四边显式值。 */
 #petRoot {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   overflow: hidden;
   background: transparent;
 }
 
 #petStage {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   cursor: grab;
 }
 

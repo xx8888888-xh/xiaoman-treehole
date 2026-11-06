@@ -195,7 +195,12 @@ body {
 #app::before {
   content: "";
   position: absolute;
-  inset: 0 0 auto;
+  /* 显式四边：Android WebView 83 不解析 inset 简写（Chrome 87 起支持） */
+  top: 0;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  height: 42vh;
   height: 42dvh;
   background: radial-gradient(120% 100% at 50% 0%, var(--paper-glow), transparent 72%);
   pointer-events: none;
@@ -266,7 +271,10 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
 /* 加载占位：静态纸片剪影（不是 skeleton shimmer，也没有转圈）；canvas / 降级卡出现即让位 */
 .stage-skeleton {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -289,6 +297,9 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   border-radius: var(--radius-pill);
   background: var(--skeleton-strong);
 }
+/* 用相邻兄弟选择器代替 :has()（Chrome 105 起）：画布由 stage.js 插到容器首位，
+ * 占位层必在其后，旧版 WebView 83 同样能把占位层让位。 */
+#stage .stage-canvas ~ .stage-skeleton,
 #stage:has(.stage-canvas) .stage-skeleton,
 #stage.is-fallback .stage-skeleton { display: none; }
 
@@ -296,6 +307,7 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   position: relative;
   z-index: 2;
   flex: 0 0 auto;
+  height: clamp(196px, 33vh, 296px);
   height: clamp(196px, 33dvh, 296px);
   min-height: 196px;
   cursor: pointer;
@@ -305,13 +317,21 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
 }
 /* 一旦有了聊天内容（空态收起），舞台就让位：角色"退到旁边"，把高度还给对话（仅小屏） */
 @media (max-width: 899px) {
-  #app:has(#emptyState.hidden) #stage { height: clamp(158px, 23dvh, 212px); min-height: 158px; }
+  /* dvh 需 Chrome 108；先给 vh 兜底。:has() 需 Chrome 105，旧版 WebView 不生效（仅影响舞台留白，不影响渲染） */
+  #app:has(#emptyState.hidden) #stage {
+    height: clamp(158px, 23vh, 212px);
+    height: clamp(158px, 23dvh, 212px);
+    min-height: 158px;
+  }
 }
 /* 画框光晕：舞台不是"贴图"，而是一块有光的留白 */
 #stage::before {
   content: "";
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 0;
   pointer-events: none;
   background:
@@ -376,7 +396,10 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   justify-content: center;
   gap: var(--space-3);
   align-items: flex-start;
-  inset: var(--space-3);
+  top: var(--space-3);
+  right: var(--space-3);
+  bottom: var(--space-3);
+  left: var(--space-3);
   padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--line-soft);

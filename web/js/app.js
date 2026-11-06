@@ -922,7 +922,8 @@ const App = (() => {
     const old = String(rec.text == null ? "" : rec.text);
     const mask = document.createElement("div");
     mask.className = "msg-edit-mask";
-    mask.style.cssText = "position:fixed;inset:0;z-index:70;background:rgba(20,18,16,.32);"
+    // 不用 inset 简写：Android WebView 83 不解析，遮罩会塌成 0×0
+    mask.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:70;background:rgba(20,18,16,.32);"
       + "display:flex;align-items:center;justify-content:center;padding:16px;";
     const panel = document.createElement("div");
     panel.className = "msg-edit-panel";
