@@ -411,3 +411,15 @@ test("横屏 + 软键盘：极矮视口（≤260px）必须收紧顶栏与输入
   assert.match(block, /#chatArea\s*\{\s*margin:\s*0;\s*\}/, "聊天区外层 margin 未清零");
   assert.match(block, /\.inputbar\s*\{[\s\S]{0,120}var\(--space-1\)/, "输入条 padding 未压缩");
 });
+
+test("横屏分栏：#stage 规则不得把 :has 混进选择器列表（WebView 83 会整条作废）", () => {
+  // 云端 AVD 实测（WebView 83，782×149，键盘弹起）：舞台锁在 min-height:196px，
+  // 聊天区被挤到 12px，最后一条气泡溢出输入框下方 221px。
+  // 根因是 `#stage, #app:has(...) #stage { ... }` 一条规则：旧内核不认 :has()，
+  // 选择器列表里有一个非法选择器 → 整条规则（含 #stage 的 grid 定位）全部丢弃。
+  assert.doesNotMatch(CSS, /#stage,\s*#app:has/,
+    "选择器列表混入 :has：WebView 83 会把 #stage 的 grid 定位一起作废");
+  assert.match(CSS, /#stage\s*\{\s*grid-column:\s*1;/, "#stage 缺少无条件生效的分栏定位");
+  assert.match(CSS, /#app:has\(#emptyState\.hidden\)\s*#stage\s*\{\s*height:\s*auto;\s*min-height:\s*0;\s*\}/,
+    "新版内核仍需一条 :has 覆盖（有消息时压过 23vh 规则）");
+});

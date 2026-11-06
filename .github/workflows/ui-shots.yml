@@ -437,6 +437,21 @@ jobs:
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/health >/dev/null && curl -sf http://127.0.0.1:8904/health >/dev/null && break; sleep 0.5; done
           curl -sf http://127.0.0.1:8903/health || { echo "TTS 8903 未就绪"; exit 1; }
           curl -sf http://127.0.0.1:8904/health || { echo "TTS 8904 未就绪"; exit 1; }
+          # 先确证"服务端吐出来的字节确实是可解码的 WAV"：上一轮探针 envReadyAt=-1 且
+          # audio 一直不 ended，怀疑 fixture 本身坏了；用 curl 取一份真响应并让 wave 解析。
+          curl -sS -X POST -H "Content-Type: application/json" \
+            -d '{"text":"今天降温了，出门记得带围巾。","voice":"zh-CN-XiaoyiNeural","rate":"normal"}' \
+            -o /tmp/got.wav http://127.0.0.1:8903/tts
+          ls -l /tmp/r5-tts.wav /tmp/got.wav
+          python3 - <<'PY'
+          import wave
+          for p in ("/tmp/r5-tts.wav", "/tmp/got.wav"):
+              w = wave.open(p)
+              print(p, "ch=%d rate=%d frames=%d width=%d sec=%.2f"
+                    % (w.getnchannels(), w.getframerate(), w.getnframes(),
+                       w.getsampwidth(), w.getnframes() / w.getframerate()))
+              w.close()
+          PY
           python -u - <<'PY'
           import json, os, statistics, time
           from PIL import Image, ImageChops, ImageOps
@@ -527,8 +542,9 @@ jobs:
           }"""
 
           with sync_playwright() as p:
-              browser = p.chromium.launch(args=["--mute-audio",
-                                               "--autoplay-policy=no-user-gesture-required",
+              # 不加 --mute-audio：runner 本来没有声卡，mute 只会让 audio 元素
+              # 的媒体时钟不走（上一轮 fetchEnd/playAt 都拿到了、ended 与包络帧却永远没有）。
+              browser = p.chromium.launch(args=["--autoplay-policy=no-user-gesture-required",
                                                # headless 多 context 下页面会被判 hidden，
                                                # setTimeout 节流会把 12s 探针拖到 1 次/分钟。
                                                "--disable-background-timer-throttling",
@@ -649,6 +665,7 @@ jobs:
                   first: window.__latFirst || 0,
                   end: window.__latEnd || 0,
                   timing: (window.TTS && TTS._lastTiming) ? TTS._lastTiming() : null,
+                  audio: (window.TTS && TTS._probeAudio) ? TTS._probeAudio() : null,
                   chain: (window.TTS && TTS.chain) ? TTS.chain() : null,
                   provider: (window.TTS && TTS.provider) ? TTS.provider() : null,
                   muted: (window.TTS && TTS.isMuted) ? TTS.isMuted() : null,
@@ -667,7 +684,7 @@ jobs:
                       page.wait_for_timeout(300)
                       page.evaluate(START_JS, text)
                       r = {}
-                      deadline = time.time() + 10
+                      deadline = time.time() + 15
                       while time.time() < deadline:
                           r = page.evaluate(READ_JS) or {}
                           if r.get("first") or r.get("end"):
@@ -678,7 +695,7 @@ jobs:
                              ("end-no-frame" if end else "timeout"))
                       rows.append({"why": why,
                                    "totalMs": round(first - t0, 1) if (first and t0) else None,
-                                   "timing": r.get("timing"),
+                                   "timing": r.get("timing"), "audio": r.get("audio"),
                                    "chain": r.get("chain"), "provider": r.get("provider"),
                                    "muted": r.get("muted"), "cfg": r.get("cfg")})
                       page.evaluate("() => window.TTS && TTS.stop()")

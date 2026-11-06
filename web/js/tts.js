@@ -248,6 +248,7 @@ const TTS = (() => {
       const timing = {
         speakAt: lastSpeakAt || now(), fetchEndAt: now(), decodeStartAt: 0, playRequestAt: 0,
         playAt: 0, envReadyAt: 0, firstNonZeroAt: 0,
+        envError: "", envFrames: 0, frames: 0,
       };
       lastTiming = timing;
       const settle = (failed) => {
@@ -275,10 +276,16 @@ const TTS = (() => {
       computeEnvelope(url).then(e => {
         env = e;
         timing.envReadyAt = now();
-      }).catch(() => { env = null; timing.envReadyAt = -1; });
+        timing.envFrames = (e && e.levels) ? e.levels.length : 0;
+      }).catch((err) => {
+        env = null;
+        timing.envReadyAt = -1;
+        timing.envError = String((err && err.message) || err || "decode failed");
+      });
 
       const tick = () => {
         if (settled) return;
+        timing.frames++;
         let level;
         if (env && env.levels.length) {
           const idx = envelopeIndex(audio.currentTime, env.frameMs, env.levels.length);
@@ -572,6 +579,15 @@ const TTS = (() => {
       isMuted: () => muted,
       /** 探针：上一次服务端播放的分段耗时（毫秒，性能时间轴；不参与播放逻辑） */
       _lastTiming: () => lastTiming,
+      /** 探针：当前 <audio> 的真实状态（诊断"包络没出帧"到底是没解码还是没开播） */
+      _probeAudio: () => (currentAudio ? {
+        t: +(currentAudio.currentTime || 0).toFixed(3),
+        dur: +((currentAudio.duration || 0).toFixed(3)),
+        readyState: currentAudio.readyState,
+        networkState: currentAudio.networkState,
+        paused: !!currentAudio.paused,
+        err: currentAudio.error ? currentAudio.error.code : 0
+      } : null),
       /** provider 对象（单测用：直接校验 available/speak/stop 接口与参数） */
       providerObjects: providers,
       providers: Object.keys(providers),
