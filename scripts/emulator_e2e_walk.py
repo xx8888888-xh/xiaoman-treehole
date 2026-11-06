@@ -377,6 +377,16 @@ def main():
         hook = cdp.eval(TTS_HOOK_JS)
     except Exception as e:
         hook = f"err {e}"[:80]
+    # 云端 AVD 默认命中 prefers-reduced-motion（实测 reduce=True）→ Stage 按契约把口型
+    # 归零。第 ③ 项要拍"语音播放中的口型/表情"，这里按用户手动开启动效的路径打开
+    # （Appearance.motion=true 等价于设置页关掉"减少动效"），仅影响本次走查截图。
+    try:
+        motion = cdp.eval("(() => { const c = API.loadCfg(); c.motion = true; API.saveCfg(c);"
+                          " Stage.setMotionEnabled(true);"
+                          " return (window.Appearance && Appearance.get) ? Appearance.get().motion : 'n/a'; })()")
+    except Exception as e:
+        motion = f"err {e}"[:80]
+    log(f"动效已开: {motion}")
     rows1 = (s2.get("rows") or 0)
     if origin:
         tap(cdp, "input", origin)
@@ -397,7 +407,7 @@ def main():
     s3 = cdp.eval(STATE_JS) or {}
     METRICS["states"]["03_voice"] = {"shot": "e2e_03_voice.png" if voice["shotBytes"] else None,
                                       "replyArrived": ok3, "chain": chain, "hook": hook,
-                                      "ttsEvents": events,
+                                      "motionForced": motion, "ttsEvents": events,
                                       "lip": voice, "probe": s3}
 
     # ---------------- ④ 浮窗模式 ----------------
