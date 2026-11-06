@@ -229,10 +229,28 @@ TTS_HOOK_JS = r"""
   if (window.__ttsHooked) return 'already';
   const o = TTS.speakSafe;
   window.__ttsLog = [];
+  window.__pageTag = 'p' + Math.round(performance.now());
+  window.__lipFeed = {frames: 0, max: 0, firstAt: 0, lastAt: 0, uiMax: 0};
   window.TTS.speakSafe = function (t, f, end, silent) {
-    const e = {txt: String(t || '').slice(0, 10), at: Math.round(performance.now())};
+    const e = {txt: String(t || '').slice(0, 10), at: Math.round(performance.now()),
+               frames: 0, maxLevel: 0};
     __ttsLog.push(e);
-    return o.call(TTS, t, f, (ok) => {
+    const wrapped = function (lv) {
+      const F = window.__lipFeed;
+      F.frames += 1;
+      e.frames += 1;
+      const v = Number(lv) || 0;
+      if (v > F.max) F.max = v;
+      if (v > e.maxLevel) e.maxLevel = v;
+      if (!F.firstAt) F.firstAt = Math.round(performance.now());
+      F.lastAt = Math.round(performance.now());
+      if (window.Stage && Stage._lipState) {
+        const st = Stage._lipState();
+        if (st.lipOpen > F.uiMax) F.uiMax = st.lipOpen;
+      }
+      if (typeof f === 'function') f(lv);
+    };
+    return o.call(TTS, t, wrapped, (ok) => {
       e.ok = ok === true; e.endAt = Math.round(performance.now());
       if (typeof end === 'function') end(ok);
     }, (r) => {
@@ -245,38 +263,144 @@ TTS_HOOK_JS = r"""
 })()
 """
 
+LIP_PROBE_JS = r"""
+(() => {
+  const st = (window.Stage && Stage._lipState) ? Stage._lipState() : null;
+  const face = (window.Stage && Stage._faceState) ? Stage._faceState() : null;
+  const F = window.__lipFeed || {};
+  return {
+    t: Math.round(performance.now() * 10) / 10,
+    lipOpen: st ? st.lipOpen : null,
+    lipHold: st ? st.lipHold : null,
+    // 引擎里的真实参数（不是 Stage 的局部变量）：嘴到底动没动看这两个
+    lipSync: face ? face.lipSync : null,
+    mouth: face ? face.mouth : null,
+    mix: face ? face.mouthMix : null,
+    faceNull: face === null,
+    frames: F.frames || 0,
+    feedMax: F.max || 0,
+    mode: (window.Stage && Stage._mode) ? Stage._mode() : null,
+    raf: (window.Stage && Stage._rafActive) ? Stage._rafActive() : null,
+    tag: window.__pageTag || ''
+  };
+})()
+"""
 
-def sample_lip(cdp, seconds=3.0, path="e2e_03_voice.png", shot_at=0.45):
-    """高频采样 Stage 真实口型状态；峰值时截图（全程没到阈值就在末尾补一张）。"""
+
+def type_and_send(cdp, origin, text):
+    """输入并发送一条消息，带"真的落下去了"的校验与兜底。
+
+    慢 AVD 上 tap 输入框后 IME 附着可能 >1s；固定 0.6s 就 adb input text 会把字打在
+    还没聚焦的框上（本脚本上一版就是这样丢了第 ③ 条）。这里逐次校验 #textInput.value，
+    重试两次仍为空就走 JS 兜底，绝不带着空输入框继续往下走。
+    """
+    typed = text.replace(" ", "%s")
+    value = ""
+    tries = 0
+    for attempt in range(2):
+        tries = attempt + 1
+        if origin:
+            tap(cdp, "input", origin)
+        time.sleep(1.4 if attempt else 0.9)     # 等 IME 真正附着
+        sh(f'adb shell input text "{typed}"')
+        time.sleep(0.9)
+        p = cdp.eval(PROBE_JS) or {}
+        value = (p.get("value") or "").strip()
+        if value:
+            break
+        log(f"输入第 {tries} 次没落进输入框（value 空），重试")
+    sh("adb shell input keyevent 111")          # 收键盘：截图要干净的可视区
+    time.sleep(1.0)
+    p = cdp.eval(PROBE_JS) or {}
+    value = (p.get("value") or "").strip()
+    mode = "tap"
+    if value:
+        if origin:
+            tap(cdp, "send", origin)
+        else:
+            cdp.eval(SEND_JS.replace("__TXT__", json.dumps(text)))
+            mode = "js-send"
+    else:
+        cdp.eval(SEND_JS.replace("__TXT__", json.dumps(text)))
+        mode = "js-fallback"
+        log("输入框始终为空，已走 JS 兜底发送")
+    time.sleep(0.8)
+    after = cdp.eval(PROBE_JS) or {}
+    return {"mode": mode, "tries": tries, "value": value,
+            "disabled": p.get("disabled"), "rowsAfterSend": after.get("rows")}
+
+
+def wait_voice(cdp, n0, timeout=25.0):
+    """等一条新的 speakSafe 事件（说明回复真的在播），返回事件与等待时长。"""
     t0 = time.time()
-    samples = []
-    shot_done = False
-    shot_size = 0
-    shot_at_s = None
-    last = {}
+    while time.time() - t0 < timeout:
+        try:
+            logv = cdp.eval("window.__ttsLog || []") or []
+        except Exception:
+            logv = []
+        if len(logv) > n0:
+            return logv[-1], round(time.time() - t0, 2)
+        time.sleep(0.25)
+    return None, round(time.time() - t0, 2)
+
+
+def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.45):
+    """播放期间高频采样：局部 lipOpen + 引擎 lipSync/mouthMix + 喂帧计数。
+
+    截图阈值取**引擎参数** lipSync（嘴真的张开了），不再用 Stage 局部变量；
+    统计"播放中段 1 秒"的喂帧数，用来证明帧数与音频时长/包络正相关。
+    """
+    t0 = time.time()
+    samples, null_faces = [], 0
+    shot_done, shot_size, shot_t, peak = False, 0, None, 0.0
     while time.time() - t0 < seconds:
         try:
-            last = cdp.eval("(() => ({lip: Stage._lipState(), "
-                            "face: Stage._faceState ? Stage._faceState() : null}))") or {}
+            p = cdp.eval(LIP_PROBE_JS) or {}
         except Exception as e:
             samples.append({"err": str(e)[:80]})
-            time.sleep(0.1)
+            time.sleep(0.03)
             continue
-        lip = last.get("lip") or {}
-        open_v = float(lip.get("lipOpen") or 0)
-        samples.append({"t": round(time.time() - t0, 3), "lipOpen": round(open_v, 3)})
-        if not shot_done and open_v >= shot_at:
+        rec = {"t": round(time.time() - t0, 3), "pageT": p.get("t"),
+               "open": round(float(p.get("lipOpen") or 0), 3),
+               "sync": round(float(p.get("lipSync") or 0), 4),
+               "mouth": p.get("mouth"), "mix": p.get("mix"),
+               "frames": p.get("frames"), "mode": p.get("mode"),
+               "raf": p.get("raf"), "tag": p.get("tag")}
+        samples.append(rec)
+        if p.get("faceNull"):
+            null_faces += 1
+        focus = rec["sync"] if rec["sync"] is not None else rec["open"]
+        if focus > peak:
+            peak = focus
+        if not shot_done and focus >= shot_at:
             shot_size = shot(path)
-            shot_at_s = round(time.time() - t0, 3)
+            shot_t = rec["t"]
             shot_done = True
-        time.sleep(0.04)
+        time.sleep(0.035)
     if not shot_done:
         shot_size = shot(path)
-    peak = max([x.get("lipOpen") or 0 for x in samples if "lipOpen" in x] or [0])
-    nz = len([x for x in samples if (x.get("lipOpen") or 0) > 0.05])
-    return {"samples": samples, "n": len(samples), "maxLip": round(peak, 3),
-            "nonZeroFrames": nz, "shotAtPeak": shot_at_s, "shotBytes": shot_size,
-            "face": last.get("face")}
+    ok = [x for x in samples if "open" in x]
+    nz_open = len([x for x in ok if x["open"] > 0.05])
+    nz_sync = len([x for x in ok if (x["sync"] or 0) > 0.02])
+    # 播放中段：以第一次"引擎嘴型真的张开"为起点，取 1.0s 窗口
+    start = next((x["t"] for x in ok if (x["sync"] or 0) > 0.02), None)
+    mid = None
+    if start is not None:
+        win = [x for x in ok if start <= x["t"] <= start + 1.0]
+        if win:
+            mid = {"from": round(start, 2), "to": round(start + 1.0, 2),
+                   "feedFrames": int((win[-1]["frames"] or 0) - (win[0]["frames"] or 0)),
+                   "samples": len(win),
+                   "nonzeroSync": len([x for x in win if (x["sync"] or 0) > 0.02]),
+                   "maxSync": round(max((x["sync"] or 0) for x in win), 4)}
+    return {"samples": samples, "n": len(samples),
+            "maxLipOpen": round(max([x["open"] for x in ok] or [0]), 3),
+            "maxLipSync": round(max([(x["sync"] or 0) for x in ok] or [0]), 4),
+            "nonZeroLipOpen": nz_open, "nonZeroLipSync": nz_sync,
+            "nullFaceSamples": null_faces,
+            "pageTags": sorted({x["tag"] for x in ok if x.get("tag")}),
+            "modes": sorted({str(x["mode"]) for x in ok}), "midSecond": mid,
+            "shotAt": shot_t, "shotBytes": shot_size}
 
 
 def dumpsys_windows():
@@ -349,24 +473,15 @@ def main():
 
     # ---------------- ② 发一条消息后 ----------------
     rows0 = s1.get("rows") or 0
-    if origin:
-        tap(cdp, "input", origin)
-        time.sleep(0.8)
-        sh('adb shell input text "jin%s tian%s xin%s qing%s bu%s hao"')
-        time.sleep(0.8)
-        sh("adb shell input keyevent 111")   # 收键盘：截图要干净的可视区
-        time.sleep(1.2)
-        tap(cdp, "send", origin)
-    else:
-        log("无 WebView 原点，退回 JS 触发发送")
-        cdp.eval(SEND_JS.replace("__TXT__", json.dumps("今天心情不好")))
-    grew, p2 = wait_rows(cdp, rows0 + 2)
+    sent2 = type_and_send(cdp, origin, "jin tian xin qing bu hao")
+    log(f"② 发送结果: {sent2}")
+    grew, p2 = wait_rows(cdp, rows0 + 2, timeout=30)
     time.sleep(1.2)
     s2 = cdp.eval(STATE_JS) or {}
     b2 = shot("e2e_02_chat.png")
     METRICS["states"]["02_chat"] = {"shot": "e2e_02_chat.png", "bytes": b2,
                                     "png": png_size("e2e_02_chat.png"),
-                                    "replyArrived": grew, "probe": s2}
+                                    "replyArrived": grew, "sent": sent2, "probe": s2}
 
     # ---------------- ③ 语音播放中（口型/表情） ----------------
     try:
@@ -378,38 +493,40 @@ def main():
         hook = cdp.eval(TTS_HOOK_JS)
     except Exception as e:
         hook = f"err {e}"[:80]
-    # 云端 AVD 默认命中 prefers-reduced-motion（实测 reduce=True）→ Stage 按契约把口型
-    # 归零。第 ③ 项要拍"语音播放中的口型/表情"，这里按用户手动开启动效的路径打开
-    # （Appearance.motion=true 等价于设置页关掉"减少动效"），仅影响本次走查截图。
+    # 不再强制开启动效：用首次安装默认的极简预设（motion=false）+ AVD 默认
+    # prefers-reduced-motion，正好验证"默认用户说话时嘴到底动不动"。
     try:
-        motion = cdp.eval("(() => { if (Appearance.setSwitch) Appearance.setSwitch('motion', true);"
-                          " Stage.setMotionEnabled(true);"
-                          " return (window.Appearance && Appearance.get) ? Appearance.get().motion : 'n/a'; })()")
+        motion = cdp.eval("(window.Appearance && Appearance.get) ? Appearance.get().motion : null")
     except Exception as e:
         motion = f"err {e}"[:80]
-    log(f"动效已开: {motion}")
+    log(f"默认动效状态: {motion}")
+    try:
+        n0 = len(cdp.eval("window.__ttsLog || []") or [])
+    except Exception:
+        n0 = 0
     rows1 = (s2.get("rows") or 0)
-    if origin:
-        tap(cdp, "input", origin)
-        time.sleep(0.6)
-        sh('adb shell input text "xie%s xie%s ni%s pei%s wo"')
-        time.sleep(0.6)
-        sh("adb shell input keyevent 111")
-        time.sleep(1.0)
-        tap(cdp, "send", origin)
-    else:
-        cdp.eval(SEND_JS.replace("__TXT__", json.dumps("谢谢你陪我")))
-    ok3, p3 = wait_rows(cdp, rows1 + 2, timeout=40)
-    voice = sample_lip(cdp, seconds=6.0)
+    sent3 = type_and_send(cdp, origin, "xie xie ni pei wo")
+    log(f"③ 发送结果: {sent3}")
+    # 等"真的有一条新的语音在播"，再开采样窗口——避免像上一轮那样对着静音采样
+    ev, waited = wait_voice(cdp, n0, timeout=30)
+    log(f"③ 语音开始: {ev} waited={waited}s")
+    voice = sample_voice(cdp, seconds=5.5)
+    ok3, p3 = wait_rows(cdp, rows1 + 2, timeout=6)
     try:
         events = cdp.eval("window.__ttsLog || []")
     except Exception:
         events = None
+    try:
+        total3 = cdp.eval(TOTAL_JS)
+    except Exception:
+        total3 = None
     s3 = cdp.eval(STATE_JS) or {}
-    METRICS["states"]["03_voice"] = {"shot": "e2e_03_voice.png" if voice["shotBytes"] else None,
-                                      "replyArrived": ok3, "chain": chain, "hook": hook,
-                                      "motionForced": motion, "ttsEvents": events,
-                                      "lip": voice, "probe": s3}
+    METRICS["states"]["03_voice"] = {
+        "shot": "e2e_03_voice.png" if voice["shotBytes"] else None,
+        "replyArrived": ok3, "sent": sent3, "voiceEvent": ev, "voiceWaitS": waited,
+        "chain": chain, "hook": hook, "motionDefault": motion,
+        "ttsEvents": events, "chatPager": total3, "lip": voice, "probe": s3
+    }
 
     # ---------------- ④ 浮窗模式 ----------------
     sh(f"adb shell appops set {PKG} SYSTEM_ALERT_WINDOW allow")
