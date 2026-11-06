@@ -67,7 +67,8 @@
       report(err) {
         const f = classifySendError(err);
         toastFn(f.toast);
-        noticeFn(f.notice, { retry: true, action: retryFn });
+        // 按钮文案与文案里的「再发一次」保持一致，用户不会去猜"重试"是哪个
+        noticeFn(f.notice, { retry: true, action: retryFn, label: "再发一次" });
         return f;
       },
       clear() {

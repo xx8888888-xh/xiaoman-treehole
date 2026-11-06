@@ -476,6 +476,7 @@ const App = (() => {
     $("noticeText").textContent = text;
     const canRetry = !!(opts && opts.retry && opts.action);
     retry.classList.toggle("hidden", !canRetry);
+    retry.textContent = (opts && opts.label) || "重试";
     noticeAction = canRetry ? opts.action : null;
     bar.classList.remove("hidden");
   }

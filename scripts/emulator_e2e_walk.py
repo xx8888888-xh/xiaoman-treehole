@@ -13,6 +13,10 @@ emulator_e2e_walk.py · 全链路回归走查（云端 AVD，单 run 一条链�
   ⑤ 横→竖→回横屏       e2e_05_landscape.png / e2e_05_portrait.png / e2e_05_back_landscape.png
   ⑥ 20 轮后滚到底      e2e_06_rounds20.png
   ⑦ 语音失败提示       （出现 → 存活期自动收起 → 重绘不复活）
+  ⑧ 发送失败态（真机） e2e_08_fail_500.png / e2e_08_retry_ok.png
+  ⑧b 断网/超时分支     e2e_08b_fail_timeout.png
+     （脚本内起可控 OpenAI 兼容后端，注入 500 / 挂起；量提示条 rect + 命中测试，
+       adb 真点「再发一次」并由服务端请求计数证明"确实只多发一次"）
 
 实测值全部来自运行时：CDP DOM rect、uiautomator WebView bounds、dumpsys window、
 Stage._lipState()、screencap PNG 尺寸。
@@ -24,7 +28,9 @@ Stage._lipState()、screencap PNG 尺寸。
   - 同日重启后 total 增加或时段问候变多（重入不该重复问候）；
   - 键盘收起后横屏 chatH < 48.5（放不下一颗气泡）；
   - 20 轮里有任何一轮回复没到齐；
-  - 语音失败提示不出现 / 到期不消失 / 重绘又复活 / 失败日志丢失。
+  - 语音失败提示不出现 / 到期不消失 / 重绘又复活 / 失败日志丢失；
+  - 发送失败后提示条不在视口 / 被 inputbar 或 voiceTip 盖住 / 「再发一次」点不到；
+  - 点了「再发一次」服务端没有收到第二次请求，或失败时偷偷打了 mock 接口。
 汇总表写到 e2e_walk_summary.md（artifact 一并上传），失败也写。
 
 用法：python3 scripts/emulator_e2e_walk.py（App 已启动、TTS server 已在 8903 起）
@@ -35,8 +41,10 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from android_cdp import Cdp, PKG, sh
 from e2e_walk_gate import GateFail, require_reply, require_true, require_voice
@@ -630,6 +638,292 @@ def ime_state():
             "inputViewShown": bool(re.search(r"mIsInputViewShown\s*=\s*true", out))}
 
 
+# ---------------- ⑧ 发送失败态：可控后端 + 真机可视/可点断言 ----------------
+FAIL_PORT = 8902
+FAIL_BASE = os.environ.get("E2E_FAIL_BASE", f"http://10.0.2.2:{FAIL_PORT}")
+# 与 web/js/resilience.js 的 FAIL_COPY 逐字对齐：同一条失败必须走同一套提示
+FAIL_NOTICE = {
+    "http": "这句没送出去（服务器打了个嗝）。点「再发一次」，我继续听",
+    "timeout": "刚才那句没送出去（等太久啦）。点「再发一次」，我接着听",
+    "network": "这句没送出去（网断了一下）。点「再发一次」，我马上接住",
+}
+
+FAIL_CFG_JS = (
+    "(() => { API.resetBreakers(); API.saveCfg(__CFG__); const c = API.loadCfg();"
+    " return {mode: c.mode, apiBase: c.apiBase, hasKey: !!c.apiKey}; })()"
+)
+
+# 提示条可见性不能只看 class：要 rect 在视口内、不被 inputbar/voiceTip 盖住，
+# 并用 elementFromPoint 做命中测试（rect 重叠/遮挡都会让命中落到别的元素）。
+FAIL_PROBE_JS = r"""
+(() => {
+  const q = (s) => document.querySelector(s);
+  const rect = (el) => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return {l: +r.left.toFixed(1), t: +r.top.toFixed(1), r: +r.right.toFixed(1),
+            b: +r.bottom.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1)};
+  };
+  const shown = (el) => {
+    if (!el || el.classList.contains('hidden')) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const hit = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!(at && el.contains(at));
+  };
+  const notice = q('#noticeBar'), retry = q('#noticeRetry');
+  const toastEl = q('#toast'), voice = q('#voiceTip'), pending = q('#pendingBar');
+  return {
+    iw: window.innerWidth, ih: window.innerHeight, dpr: window.devicePixelRatio || 1,
+    notice: {visible: shown(notice), text: (q('#noticeText') || {}).textContent || '',
+             rect: rect(notice), hitAtCenter: hit(notice)},
+    retry: {visible: shown(retry), text: retry ? retry.textContent : '',
+            rect: rect(retry), hitAtCenter: hit(retry)},
+    toast: {visible: shown(toastEl), text: toastEl ? toastEl.textContent : ''},
+    voiceTip: {visible: shown(voice), text: (q('#voiceTipText') || {}).textContent || '',
+               rect: rect(voice)},
+    pending: {visible: shown(pending), rect: rect(pending)},
+    inputbar: rect(q('.inputbar')),
+    degrade: {visible: shown(q('#degradeBadge')), text: (q('#degradeText') || {}).textContent || ''},
+    rows: document.querySelectorAll('#messages .msg-row:not(.hidden)').length,
+    meRows: document.querySelectorAll('#messages .msg-row.me:not(.hidden)').length,
+    busy: typeof window.__isBusy === 'function' ? window.__isBusy() : null,
+    mode: (window.API && API.effectiveMode) ? API.effectiveMode() : null
+  };
+})()
+"""
+
+
+class FailBackend:
+    """可控 OpenAI 兼容后端（仅 ⑧ 步骤起，跑完即停）。
+
+    mode: http500 → 直连请求回 500；ok → 流式回 SSE / 非流式回 JSON；hang → 挂住不回。
+    记录每条请求的 path/stream，用来断言"点再发一次确实只多发一次直连请求"，
+    以及"失败时没有偷偷打 mock/代理接口"（那意味着又掉回离线人格）。
+    """
+
+    def __init__(self, port=FAIL_PORT):
+        self.port = port
+        self.mode = "ok"
+        self.hang_s = 8.0
+        self.reqs = []
+        self._lock = threading.Lock()
+        self._srv = None
+        self._th = None
+
+    def _note(self, path, stream):
+        with self._lock:
+            self.reqs.append({"path": path, "stream": bool(stream),
+                              "mode": self.mode, "at": round(time.time(), 3)})
+
+    def direct_count(self):
+        with self._lock:
+            return len([r for r in self.reqs if r["path"] == "/v1/chat/completions"])
+
+    def mock_count(self):
+        with self._lock:
+            return len([r for r in self.reqs if r["path"] != "/v1/chat/completions"])
+
+    def _handler(self):
+        backend = self
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def log_message(self, fmt, *args):
+                pass
+
+            def _hdr(self, code, ctype=None, extra=None):
+                self.send_response(code)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+                self.send_header("Access-Control-Max-Age", "600")
+                if ctype:
+                    self.send_header("Content-Type", ctype)
+                for k, v in (extra or {}).items():
+                    self.send_header(k, v)
+
+            def _body(self, code, payload, ctype="application/json"):
+                data = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+                self._hdr(code, ctype, {"Content-Length": str(len(data))})
+                self.end_headers()
+                try:
+                    self.wfile.write(data)
+                except Exception:
+                    pass                       # 客户端已因首字超时断开
+
+            def do_OPTIONS(self):
+                self._hdr(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_GET(self):
+                path = self.path.split("?")[0]
+                if path in ("/health", "/api/health"):
+                    self._body(200, "{}")
+                else:
+                    self._body(404, "{}")
+
+            def do_POST(self):
+                path = self.path.split("?")[0]
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except Exception:
+                    n = 0
+                try:
+                    raw = self.rfile.read(n) if n else b""
+                except Exception:
+                    raw = b""
+                text = raw.decode("utf-8", "ignore")
+                stream = ('"stream":true' in text) or ('"stream": true' in text)
+                backend._note(path, stream)
+                if path != "/v1/chat/completions":
+                    self._body(500, '{"error":"unexpected mock path"}')
+                    return
+                if backend.mode == "http500":
+                    self._body(500, '{"error":"upstream boom"}')
+                    return
+                if backend.mode == "hang":
+                    time.sleep(backend.hang_s)
+                    self._body(200, '{"choices":[{"message":{"content":""}}]}')
+                    return
+                # 紧凑 JSON：extractReplyPrefix 逐字扫描 "reply":"，别让空格打断增量解析
+                if stream:
+                    content = json.dumps({"reply": "嗯，我在呢"}, ensure_ascii=False,
+                                         separators=(",", ":"))
+                    chunk = json.dumps({"choices": [{"delta": {"content": content}}]},
+                                       ensure_ascii=False, separators=(",", ":"))
+                    data = ("data: " + chunk + "\n\n" + "data: [DONE]\n\n").encode("utf-8")
+                    self._body(200, data, "text/event-stream")
+                else:
+                    content = json.dumps({"reply": "嗯，我在呢，刚才那句收到了"},
+                                         ensure_ascii=False, separators=(",", ":"))
+                    body = json.dumps({"choices": [{"message": {"content": content}}]},
+                                      ensure_ascii=False, separators=(",", ":"))
+                    self._body(200, body)
+
+        return H
+
+    def start(self):
+        self._srv = ThreadingHTTPServer(("127.0.0.1", self.port), self._handler())
+        self._srv.daemon_threads = True
+        self._th = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._th.start()
+
+    def stop(self):
+        try:
+            self._srv.shutdown()
+            self._srv.server_close()
+        except Exception:
+            pass
+
+
+def rect_overlap(a, b):
+    if not a or not b:
+        return 0.0
+    w = min(a["r"], b["r"]) - max(a["l"], b["l"])
+    h = min(a["b"], b["b"]) - max(a["t"], b["t"])
+    return round(max(0.0, w) * max(0.0, h), 1)
+
+
+def fail_layout_problems(p):
+    """提示条必须在可视区、不被 inputbar/voiceTip/排队条盖住，按钮真实可点。"""
+    probs = []
+    n = p.get("notice") or {}
+    nr = n.get("rect") or {}
+    ib = (p.get("inputbar") or {})
+    ih = p.get("ih") or 0
+    if not n.get("visible"):
+        probs.append("常驻提示条不可见")
+    if (nr.get("h") or 0) < 32:
+        probs.append("提示条高度 %.1f < 32" % (nr.get("h") or 0))
+    if not (nr.get("t", -1) >= 0 and nr.get("b", 1e9) <= ih + 0.5):
+        probs.append("提示条不在可视区（t=%s b=%s ih=%s）"
+                     % (nr.get("t"), nr.get("b"), ih))
+    if nr.get("b", 1e9) > (ib.get("t", -1)) + 0.5:
+        probs.append("提示条被 inputbar 挤到下方（b=%s inputbar.t=%s）"
+                     % (nr.get("b"), ib.get("t")))
+    ov_ib = rect_overlap(nr, ib)
+    if ov_ib > 0:
+        probs.append("提示条与 inputbar 重叠 %.1f px" % ov_ib)
+    if not n.get("hitAtCenter"):
+        probs.append("提示条中心被其他元素盖住（elementFromPoint 未命中）")
+    for key, name in (("voiceTip", "voiceTip"), ("pending", "排队条")):
+        other = p.get(key) or {}
+        if other.get("visible"):
+            ov = rect_overlap(nr, other.get("rect"))
+            if ov > 0:
+                probs.append("提示条与%s重叠 %.1f px" % (name, ov))
+            if (other.get("rect") or {}).get("t", -1) < nr.get("t", 1e9):
+                probs.append("%s 被排到提示条上方（说明布局被挤）" % name)
+    r = p.get("retry") or {}
+    rr = r.get("rect") or {}
+    if not r.get("visible"):
+        probs.append("「再发一次」按钮不可见")
+    if (rr.get("w") or 0) < 44 or (rr.get("h") or 0) < 32:
+        probs.append("「再发一次」按钮过小 %.1fx%.1f" % (rr.get("w") or 0, rr.get("h") or 0))
+    if not r.get("hitAtCenter"):
+        probs.append("「再发一次」按钮中心被盖住（点不到）")
+    if (r.get("text") or "").strip() != "再发一次":
+        probs.append("按钮文案不是「再发一次」而是 %r" % r.get("text"))
+    if nr and rr and not (rr.get("l", -1) >= nr.get("l", 0) - 1
+                          and rr.get("r", 1e9) <= nr.get("r", 0) + 1
+                          and rr.get("t", -1) >= nr.get("t", 0) - 1
+                          and rr.get("b", 1e9) <= nr.get("b", 0) + 1):
+        probs.append("「再发一次」按钮不在提示条内")
+    return probs
+
+
+def fail_copy_problems(p, kind):
+    """失败文案不能出现 HTTP 状态码/英文错误；同一种失败必须同一套提示。"""
+    probs = []
+    ntext = (p.get("notice") or {}).get("text") or ""
+    ttext = (p.get("toast") or {}).get("text") or ""
+    for label, txt in (("提示条", ntext), ("toast", ttext)):
+        if not txt:
+            continue
+        if re.search(r"HTTP|Error|error|timeout|Timeout|undefined|null", txt):
+            probs.append("%s 文案混入技术术语：%r" % (label, txt))
+        if re.search(r"[A-Za-z]", txt):
+            probs.append("%s 文案出现英文：%r" % (label, txt))
+        if re.search(r"\d{3}", txt):
+            probs.append("%s 文案出现三位数字（疑似状态码）：%r" % (label, txt))
+    want = FAIL_NOTICE.get(kind)
+    if want and ntext != want:
+        probs.append("%s 文案不是同一套提示：%r != %r" % (kind, ntext, want))
+    return probs
+
+
+def wait_fail_probe(cdp, timeout=25, want_visible=True):
+    end = time.time() + timeout
+    start = end - timeout
+    last = {}
+    while time.time() < end:
+        try:
+            last = cdp.eval(FAIL_PROBE_JS) or {}
+        except Exception:
+            last = {}
+        if bool((last.get("notice") or {}).get("visible")) == bool(want_visible):
+            return True, last, round(time.time() - start, 2)
+        time.sleep(0.3)
+    return False, last, round(time.time() - start, 2)
+
+
+def wait_direct(be, target, timeout=20):
+    end = time.time() + timeout
+    start = end - timeout
+    while time.time() < end:
+        if be.direct_count() >= target:
+            return True, be.direct_count(), round(time.time() - start, 2)
+        time.sleep(0.25)
+    return False, be.direct_count(), round(time.time() - start, 2)
+
+
 def main():
     dev, dens = wm_size()
     METRICS["device"] = {"screenPx": dev, "densityDpi": dens}
@@ -1040,6 +1334,174 @@ def main():
             f" → afterTtl visible={vt1.get('visible')}"
             f" → afterRender visible={vt2.get('visible')} logs={vt2.get('logs')}")
 
+    # ---------------- ⑧ 发送失败态（真机 + 可控后端） ----------------
+    # 前七步跑的是 mock/offline；这里把在线直连指向脚本内起的可控后端，
+    # 先成功一次洗掉"离线示例模式"徽标，再注入 500 / 超时，验证失败提示条。
+    sh("adb shell settings put system user_rotation 0")   # 回到竖屏：日常可视区
+    time.sleep(3)
+    origin8 = origin
+    vb8 = webview_bounds(ui_dump())
+    if vb8:
+        origin8 = (vb8["l"], vb8["t"])
+
+    be = FailBackend()
+    backend_err = None
+    try:
+        be.start()
+    except Exception as e:                       # 端口占用等：直接判红，别假装测过
+        backend_err = str(e)
+        log(f"可控后端起不来: {backend_err}")
+    if backend_err:
+        gate("08_fail_ui_500", require_true, "08_fail_ui_500", False,
+             f"可控后端 127.0.0.1:{FAIL_PORT} 启动失败：{backend_err}")
+
+    try:
+        cfg8 = cdp.eval(FAIL_CFG_JS.replace("__CFG__", json.dumps({
+            "mode": "openai", "apiBase": FAIL_BASE,
+            "apiKey": "e2e-key", "model": "e2e"}))) or {}
+        log(f"⑧ 在线直连配置: {cfg8} → {FAIL_BASE}")
+
+        # 先打通一次在线直连：把前七步留下的离线徽标清掉，
+        # 后面失败态里徽标仍隐藏，才说明"没有掉回离线人格"。
+        be.mode = "ok"
+        rows_w0 = int((cdp.eval(FAIL_PROBE_JS) or {}).get("rows") or 0)
+        sent_w = js_fill_tap(cdp, origin8, "zai xian tong dao ce shi")
+        warm, _pw = wait_rows(cdp, rows_w0 + 2, timeout=40)
+        pw = cdp.eval(FAIL_PROBE_JS) or {}
+        d0 = be.direct_count()
+        warm_ok = bool(warm and d0 >= 1 and not (pw.get("degrade") or {}).get("visible")
+                       and (pw.get("mode") == "openai"))
+        gate("08_warmup", require_true, "08_warmup", warm_ok,
+             f"在线直连预热失败（reply={warm} direct={d0} mode={pw.get('mode')!r} "
+             f"degrade={pw.get('degrade')!r} send={sent_w}）")
+        set_row("08_warmup", warm_ok,
+                f"direct={d0} mode={pw.get('mode')} degrade={(pw.get('degrade') or {}).get('visible')}")
+
+        # ---- ⑧a 后端 500：提示条必须出现在可视区、按钮可点、文案无状态码/英文 ----
+        be.mode = "http500"
+        d_before = be.direct_count()
+        js_fill_tap(cdp, origin8, "zhe ju hua yao shi mei song chu qu")
+        got8, p8, wait8 = wait_fail_probe(cdp, timeout=25, want_visible=True)
+        # 让 voiceTip 与提示条同屏：验证提示条不会被它挤掉/盖住
+        cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
+        time.sleep(0.5)
+        p8 = cdp.eval(FAIL_PROBE_JS) or p8
+        b8 = shot("e2e_08_fail_500.png")
+
+        probs = fail_layout_problems(p8) + fail_copy_problems(p8, "http")
+        if not got8:
+            probs.append("后端 500 后提示条没有出现")
+        if not (p8.get("voiceTip") or {}).get("visible"):
+            probs.append("voiceTip 未同屏，没能验证提示条不被它挤掉")
+        if be.direct_count() != d_before + 1:
+            probs.append("500 后直连请求 %d != %d（重试/兜底次数不对）"
+                         % (be.direct_count(), d_before + 1))
+        if be.mock_count() != 0:
+            probs.append("失败时打了 %d 次 mock/代理接口（掉回离线人格）" % be.mock_count())
+        if (p8.get("degrade") or {}).get("visible"):
+            probs.append("失败时掉回离线人格徽标")
+        if (p8.get("mode") or "") in ("mock", "offline"):
+            probs.append("失败后模式变成 %r" % p8.get("mode"))
+        METRICS["states"]["08_fail_500"] = {
+            "shot": "e2e_08_fail_500.png", "bytes": b8, "waited": wait8,
+            "notice": p8.get("notice"), "retry": p8.get("retry"),
+            "voiceTip": p8.get("voiceTip"), "pending": p8.get("pending"),
+            "inputbar": p8.get("inputbar"), "toast": p8.get("toast"),
+            "degrade": p8.get("degrade"), "mode": p8.get("mode"),
+            "direct": be.direct_count(), "mock": be.mock_count(),
+            "requests": list(be.reqs), "problems": probs}
+        gate("08_fail_ui_500", require_true, "08_fail_ui_500", not probs,
+             "；".join(probs) if probs else f"直连 {be.direct_count()} 次，mock 0 次")
+        set_row("08_fail_ui_500", True,
+                f"notice={p8.get('notice', {}).get('rect')} "
+                f"retry={p8.get('retry', {}).get('rect')} "
+                f"hit={p8.get('notice', {}).get('hitAtCenter')}/"
+                f"{p8.get('retry', {}).get('hitAtCenter')} shot={b8}B")
+
+        # ---- ⑧a-2 adb 真点「再发一次」：必须只多发一次直连请求并成功补回一条回复 ----
+        be.mode = "ok"
+        d_retry_base = be.direct_count()
+        rows_pre_retry = int(p8.get("rows") or 0)      # 已含失败兜底文案，重发必须在此之上
+        rr = (p8.get("retry") or {}).get("rect") or {}
+        dpr8 = p8.get("dpr") or 1
+        tx = int(origin8[0] + (rr["l"] + rr["r"]) / 2 * dpr8)
+        ty = int(origin8[1] + (rr["t"] + rr["b"]) / 2 * dpr8)
+        me8 = int(p8.get("meRows") or 0)
+        sh(f"adb shell input tap {tx} {ty}")
+        hit8, d_after, wait_r = wait_direct(be, d_retry_base + 1, timeout=25)
+        hid8, p8r, wait_h = wait_fail_probe(cdp, timeout=30, want_visible=False)
+        rowOK, _ = wait_rows(cdp, rows_pre_retry + 1, timeout=30)
+        time.sleep(0.4)
+        p8r = cdp.eval(FAIL_PROBE_JS) or p8r
+        b8r = shot("e2e_08_retry_ok.png")
+
+        probs2 = []
+        if not hit8 or d_after != d_retry_base + 1:
+            probs2.append("点「再发一次」后直连请求 %d != %d（没真重发或多发）"
+                          % (d_after, d_retry_base + 1))
+        if (p8r.get("notice") or {}).get("visible"):
+            probs2.append("重发成功后提示条仍未收起")
+        if int(p8r.get("meRows") or 0) != me8:
+            probs2.append("重发把用户消息又插了一遍（meRows %s→%s）"
+                          % (me8, p8r.get("meRows")))
+        if not rowOK or int(p8r.get("rows") or 0) <= rows_pre_retry:
+            probs2.append("重发成功后没有新回复气泡（rows %s→%s）"
+                          % (rows_pre_retry, p8r.get("rows")))
+        if (p8r.get("degrade") or {}).get("visible"):
+            probs2.append("重发成功后掉回离线人格徽标")
+        if be.mock_count() != 0:
+            probs2.append("重发走了 %d 次 mock/代理接口" % be.mock_count())
+        METRICS["states"]["08_retry_ok"] = {
+            "shot": "e2e_08_retry_ok.png", "bytes": b8r, "tap": [tx, ty],
+            "waitedDirect": wait_r, "waitedHide": wait_h,
+            "direct": d_after, "notice": p8r.get("notice"),
+            "rows": rows_pre_retry, "rowsAfter": p8r.get("rows"),
+            "meRows": p8r.get("meRows"), "toast": p8r.get("toast"),
+            "problems": probs2}
+        gate("08_fail_retry", require_true, "08_fail_retry", not probs2,
+             "；".join(probs2) if probs2 else f"直连 {d_retry_base}→{d_after}")
+        set_row("08_fail_retry", True,
+                f"tap=({tx},{ty}) direct {d_retry_base}→{d_after} "
+                f"rows {rows_pre_retry}→{p8r.get('rows')} meRows={p8r.get('meRows')} "
+                f"shot={b8r}B")
+
+        # ---- ⑧b 超时/断网分支：同一套提示、同样不掉回离线人格 ----
+        be.mode = "hang"
+        d_t0 = be.direct_count()
+        cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
+        time.sleep(0.3)
+        js_fill_tap(cdp, origin8, "wang luo duan le hai zai ma")
+        got8b, p8b, wait8b = wait_fail_probe(cdp, timeout=25, want_visible=True)
+        time.sleep(0.6)
+        p8b = cdp.eval(FAIL_PROBE_JS) or p8b
+        b8b = shot("e2e_08b_fail_timeout.png")
+        probs3 = fail_layout_problems(p8b) + fail_copy_problems(p8b, "timeout")
+        if not got8b:
+            probs3.append("首字超时后提示条没有出现")
+        if be.direct_count() != d_t0 + 1:
+            probs3.append("超时后直连请求 %d != %d" % (be.direct_count(), d_t0 + 1))
+        if be.mock_count() != 0:
+            probs3.append("超时后打了 %d 次 mock/代理接口（掉回离线人格）" % be.mock_count())
+        if (p8b.get("degrade") or {}).get("visible"):
+            probs3.append("超时后掉回离线人格徽标")
+        if (p8b.get("mode") or "") in ("mock", "offline"):
+            probs3.append("超时后模式变成 %r" % p8b.get("mode"))
+        METRICS["states"]["08b_fail_timeout"] = {
+            "shot": "e2e_08b_fail_timeout.png", "bytes": b8b, "waited": wait8b,
+            "notice": p8b.get("notice"), "retry": p8b.get("retry"),
+            "voiceTip": p8b.get("voiceTip"), "inputbar": p8b.get("inputbar"),
+            "toast": p8b.get("toast"), "degrade": p8b.get("degrade"),
+            "mode": p8b.get("mode"), "direct": be.direct_count(),
+            "mock": be.mock_count(), "requests": list(be.reqs), "problems": probs3}
+        gate("08b_fail_timeout", require_true, "08b_fail_timeout", not probs3,
+             "；".join(probs3) if probs3 else f"直连 {be.direct_count()} 次，mock 0 次")
+        set_row("08b_fail_timeout", True,
+                f"notice={p8b.get('notice', {}).get('rect')} "
+                f"retry={p8b.get('retry', {}).get('rect')} shot={b8b}B")
+        be.stop()
+    finally:
+        be.stop()
+
     # ---------------- 汇总 ----------------
     METRICS["keyChecks"] = {
         "reentryNoDuplicateGreeting": reentry_ok,
@@ -1048,6 +1510,12 @@ def main():
                                "backLandscape": land2["chatH"],
                                "ok": _chat_ok(land1) and _chat_ok(port) and _chat_ok(land2)},
         "voiceTipNoRevive": vt_ok,
+        "sendFailureNoticeVisible": bool(((METRICS["states"].get("08_fail_500") or {})
+                                          .get("notice") or {}).get("visible")),
+        "sendFailureRetryOnce": len([s for s in SUMMARY if s["step"] == "08_fail_retry"
+                                     and s["ok"]]) == 1,
+        "sendFailureTimeoutSameCopy": len([s for s in SUMMARY
+                                           if s["step"] == "08b_fail_timeout" and s["ok"]]) == 1,
     }
     METRICS["ok"] = all(r["ok"] for r in SUMMARY)
     dump_metrics()

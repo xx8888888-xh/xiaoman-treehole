@@ -36,7 +36,7 @@ test("R7-1 失败时同时出现 toast + 常驻提示条，点「再发一次」
   // 修后：toast 1 + 常驻提示条 1，重发入口与排队条状态无关
   assert.equal(toasts, 1);
   assert.equal(notices, 1);
-  assert.deepEqual(shownOpts, { retry: true, action: shownOpts.action });
+  assert.deepEqual(shownOpts, { retry: true, action: shownOpts.action, label: "再发一次" });
   assert.equal(typeof shownOpts.action, "function");
   shownOpts.action();
   assert.equal(retries, 1);
