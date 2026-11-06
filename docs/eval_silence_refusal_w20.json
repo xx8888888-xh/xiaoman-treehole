@@ -1,0 +1,400 @@
+{
+ "cases": 18,
+ "passed": 17,
+ "rate": 0.9444,
+ "by_category": {
+  "拒绝建议": {
+   "passed": 6,
+   "total": 6
+  },
+  "沉默": {
+   "passed": 6,
+   "total": 6
+  },
+  "拒绝说话": {
+   "passed": 5,
+   "total": 6
+  }
+ },
+ "failure_reasons": {
+  "拒绝后仍翻旧账": 1,
+  "拒绝轮还在追问": 1
+ },
+ "failures": [
+  {
+   "case": "refuse-04",
+   "category": "拒绝说话",
+   "reasons": [
+    "拒绝后仍翻旧账“工作”：那就不聊工作。\n\n团子今天自己玩毛线球，结果把自己缠住了，笑死我了。",
+    "拒绝轮还在追问：好啊，最近有部新片子口碑不错。团子那团毛线最后解开了吗？"
+   ]
+  }
+ ],
+ "metrics": {
+  "turns": 26,
+  "protocol_errors": 1,
+  "advice_turns": 0,
+  "advice_rate": 0.0,
+  "summary_empathy_turns": 0,
+  "summary_empathy_rate": 0.0,
+  "opening_tic_hits": {},
+  "opening_tic_rate": 0.0,
+  "session_turns": 26,
+  "repeat_opening": 0,
+  "repeat_opening_rate": 0.0,
+  "recall_checks": 0,
+  "recall_natural": 0,
+  "recall_natural_rate": 0.0
+ },
+ "aborted": null,
+ "limit_skips": 0,
+ "coverage": {
+  "expected": 112,
+  "completed": 18,
+  "resumed": 15,
+  "new": 3,
+  "retried": 3,
+  "rate": 0.1607
+ },
+ "case_stats": [
+  {
+   "id": "no-advice-01",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-02",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-03",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-04",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-05",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "no-advice-06",
+   "category": "拒绝建议",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "silence-01",
+   "category": "沉默",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "silence-02",
+   "category": "沉默",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "silence-03",
+   "category": "沉默",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "silence-04",
+   "category": "沉默",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "silence-05",
+   "category": "沉默",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "silence-06",
+   "category": "沉默",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-01",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-02",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 2,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-03",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-04",
+   "category": "拒绝说话",
+   "passed": false,
+   "turns": 2,
+   "protocol_errors": 1,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 2,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": [
+    {
+     "case": "refuse-04",
+     "category": "拒绝说话",
+     "turn": 1,
+     "reason": "拒绝后仍翻旧账“工作”：那就不聊工作。\n\n团子今天自己玩毛线球，结果把自己缠住了，笑死我了。"
+    },
+    {
+     "case": "refuse-04",
+     "category": "拒绝说话",
+     "turn": 2,
+     "reason": "拒绝轮还在追问：好啊，最近有部新片子口碑不错。团子那团毛线最后解开了吗？"
+    }
+   ]
+  },
+  {
+   "id": "refuse-05",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  },
+  {
+   "id": "refuse-06",
+   "category": "拒绝说话",
+   "passed": true,
+   "turns": 1,
+   "protocol_errors": 0,
+   "advice_turns": 0,
+   "summary_empathy": 0,
+   "tic": {},
+   "session_turns": 1,
+   "repeat": 0,
+   "recall_checks": 0,
+   "recall_natural": 0,
+   "failures": []
+  }
+ ],
+ "passed_ids": [
+  "no-advice-01",
+  "no-advice-02",
+  "no-advice-03",
+  "no-advice-04",
+  "no-advice-05",
+  "no-advice-06",
+  "silence-01",
+  "silence-02",
+  "silence-03",
+  "silence-04",
+  "silence-05",
+  "silence-06",
+  "refuse-01",
+  "refuse-02",
+  "refuse-03",
+  "refuse-05",
+  "refuse-06"
+ ],
+ "failed_ids": [
+  "refuse-04"
+ ],
+ "rotation": {
+  "rotations": 0,
+  "providers": [
+   {
+    "name": "openrouter-free",
+    "model": "dots-studio/dots-3-note-preview:free",
+    "base": "https://openrouter.ai/api/v1",
+    "calls": 5,
+    "errors": 0,
+    "429": 0,
+    "first_429_at": "",
+    "status": "在用",
+    "reason": ""
+   },
+   {
+    "name": "pollinations",
+    "model": "openai",
+    "base": "https://text.pollinations.ai/openai",
+    "calls": 0,
+    "errors": 0,
+    "429": 0,
+    "first_429_at": "",
+    "status": "待用",
+    "reason": ""
+   }
+  ]
+ },
+ "backend_calls": 5,
+ "backend_errors": 0,
+ "backend_throttled": 0,
+ "model": "openrouter-free、pollinations",
+ "backend": "rotate",
+ "seconds": 35.3,
+ "notes": "断点续跑：历史带入 15 条、本次新跑 3 条（其中重试历史失败 3 条），完成 18/112（16.1%），剩余 94 条"
+}

@@ -350,7 +350,13 @@ class ResumeTest(unittest.TestCase):
             first = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(len(first["case_stats"]), 4)
             self.assertEqual(len(first["passed_ids"]), 4)
-            self.assertNotIn("coverage", first, "首次运行不应给出覆盖率假象")
+            # 首次整批运行也要如实写覆盖率，不能只给场景数
+            self.assertEqual(first["coverage"]["expected"], 112)
+            self.assertEqual(first["coverage"]["completed"], 4)
+            self.assertEqual(first["coverage"]["resumed"], 0)
+            self.assertEqual(first["coverage"]["new"], 4)
+            self.assertEqual(first["coverage"]["retried"], 0)
+            self.assertIn("覆盖率", first["notes"])
 
             rc2, _ = self._run(["--backend", "mock", "--limit", "4",
                                "--json", str(out), "--resume"])
@@ -375,6 +381,23 @@ class ResumeTest(unittest.TestCase):
             self.assertEqual(data["coverage"]["new"], 3)
             self.assertEqual(data["cases"], 5, "合并后按用例 id 去重")
             self.assertEqual(len(data["passed_ids"]) + len(data["failed_ids"]), 5)
+
+    def test_resume_retries_failed_case_and_counts_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "run.json"
+            self._run(["--backend", "mock", "--limit", "2", "--json", str(out)])
+            data = json.loads(out.read_text(encoding="utf-8"))
+            data["case_stats"][1]["passed"] = False  # 伪造历史失败
+            data["passed_ids"] = [s["id"] for s in data["case_stats"] if s["passed"]]
+            data["failed_ids"] = [s["id"] for s in data["case_stats"] if not s["passed"]]
+            out.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            self._run(["--backend", "mock", "--limit", "2", "--json", str(out),
+                       "--resume"])
+            again = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(again["coverage"]["resumed"], 1, "已通过的仍跳过")
+            self.assertEqual(again["coverage"]["new"], 1)
+            self.assertEqual(again["coverage"]["retried"], 1, "重试历史失败要能看出来")
+            self.assertIn("重试历史失败", again["notes"])
 
     def test_resume_without_json_returns_2(self):
         with tempfile.TemporaryDirectory() as td:
