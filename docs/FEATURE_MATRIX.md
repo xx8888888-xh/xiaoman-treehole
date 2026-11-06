@@ -49,7 +49,7 @@
 | 11 | 音色设置有效性与诚实提示 | README FAQ 4 | 🟡 | 音色只对服务端合成有效；旧 UI 无任何说明 | 🔧 设置页实时显示「实际发声是谁」，并标注音色是否生效 |
 | 12 | 语速设置 | README | ✅ | `speakRate(rate)` 对 native/browser/server 均生效 | — |
 | 13 | 关闭语音（只显示文字） | README | ✅ | `tts=off → ["none"]`；e2e ⑩ 静音 | — |
-| 14 | TTS 不可用时安静提示 | ANALYSIS P1-8 | ✅ | `voiceTip`，不弹窗、不出声 | — |
+| 14 | TTS 不可用时安静提示 | ANALYSIS P1-8 | ✅ | `voiceTip`，不弹窗、不出声；提示条 8s 后自动收起。失败日志写 `sessionStorage["xiaoman_voice_fail_log"]`，**上限 20 条，写满后挤掉最早记录**（真机排查时早期失败可能已不在日志里） | — |
 
 ### 2.3 提醒
 
