@@ -321,6 +321,24 @@ def ensure_landscape():
     return bool(size and size[0] > size[1]), size
 
 
+def input_bar_in_viewport(restored, margin=8):
+    """收起键盘后输入栏必须整条留在视口内（底部还留 margin px 余量）。"""
+    if not restored:
+        return False
+    bottom, vh = restored.get("inputBarBottom"), restored.get("viewportH")
+    if bottom is None or vh is None:
+        return False
+    return bottom <= vh - margin
+
+
+def hook_bar_single_line_ok(restored, floor=32):
+    """钩子条折单行后的实际高度 ≥ floor（19px=被 flex 压扁竖切，44px=正常单行）。"""
+    if not restored:
+        return False
+    h = restored.get("hookBarH")
+    return h is not None and h >= floor
+
+
 def main():
     ok, size = ensure_landscape()
     if not ok:
@@ -495,6 +513,13 @@ def main():
     chat_bottom_dev = wr2["y"] + metrics["chat"]["bottom"] * dpr if metrics.get("chat") else None
     last_clipped_by_chat = (max(0, round(last_bottom_dev - chat_bottom_dev))
                             if last_bottom_dev and chat_bottom_dev else None)
+    # 可视带 = chat.y ~ min(chat.bottom, inputBar.y)：列底 padding 预留给了浮层输入栏，
+    # 气泡高过这段可视带时，顶部滚出可视区属正常滚动，不算被裁。
+    chat_box = metrics.get("chat") or {}
+    chat_top = chat_box.get("y") or 0
+    chat_bottom = chat_box.get("bottom") or 0
+    band_bottom = min(chat_bottom, (inp or {}).get("y") or chat_bottom)
+    last_fits = bool(last) and last["h"] <= (band_bottom - chat_top) + 1
 
     metrics.update({
         "dpr": dpr,
@@ -511,9 +536,13 @@ def main():
         "topbarH": (metrics.get("topbar") or {}).get("h"),
         "chatH": (metrics.get("chat") or {}).get("h"),
         "inputBarBottom": (metrics.get("inputBar") or {}).get("bottom"),
+        # 「最后一条在可视区内」= 底部没被列表容器下沿截断；顶部条件只对"装得下"的气泡生效。
+        # 能看见的区域是 chat.y~inputBar.y（列底 68px 被浮层输入栏占掉），149px 视口实测只剩
+        # 81.1px；长回复气泡 109.6px 比它还高，顶部被滚出可视区是正常滚动（上滑能看全）。
+        # 不加这层判断，同一份代码会按回复长短随机红绿（run 42283269856 就是这么红的老 flaky）。
         "lastMessageVisible": bool(last and metrics["chat"]
                                    and last["bottom"] <= metrics["chat"]["bottom"] + 1
-                                   and last["y"] >= metrics["chat"]["y"] - 1)
+                                   and (not last_fits or last["y"] >= chat_top - 1))
     })
     with open("r5_ime_metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
@@ -539,7 +568,8 @@ def main():
     check("最后一条消息在聊天可视区内（未被列表容器裁掉）",
           bool(metrics["lastMessageVisible"]),
           f"lastBottomCSS={last and last['bottom']} chatBottomCSS={metrics['chat'] and metrics['chat']['bottom']} "
-          f"clippedByChat={last_clipped_by_chat}px")
+          f"clippedByChat={last_clipped_by_chat}px lastH={last and last['h']} "
+          f"band={chat_top}~{band_bottom} fits={last_fits}")
     check("输入框获得焦点", str(metrics.get("focused")) == "textInput", f"focused={metrics.get('focused')}")
 
     if not all(RESULTS):
@@ -556,11 +586,13 @@ def main():
         const t = document.querySelector(".topbar");
         const c = document.querySelector("#chatScroll");
         const b = document.querySelector(".inputbar");
+        const h = document.getElementById("hookBar");
         return {
             topbarDisplay: t ? getComputedStyle(t).display : null,
             topbarH: t ? +t.getBoundingClientRect().height.toFixed(1) : null,
             chatH: c ? +c.getBoundingClientRect().height.toFixed(1) : null,
             inputBarBottom: b ? +b.getBoundingClientRect().bottom.toFixed(1) : null,
+            hookBarH: h ? +h.getBoundingClientRect().height.toFixed(1) : null,
             viewportH: innerHeight,
             focused: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : null
         };
@@ -574,6 +606,27 @@ def main():
           f"topbar={restored and restored.get('topbarDisplay')} "
           f"topbarH={restored and restored.get('topbarH')} "
           f"viewportH={restored and restored.get('viewportH')}")
+    # 键盘收起后视口回到 363 CSS px，旁白/状态条全部回来：聊天区若被压到比一条气泡还矮，
+    # 最后一条消息就会被列表容器裁掉。单条气泡实测 48.5 CSS px（#chatScroll 194 轮实测）。
+    check("收起键盘后聊天区容得下一条完整气泡（≥48.5 CSS px）",
+          bool(restored and restored.get("chatH") and restored["chatH"] >= 48.5),
+          f"chatH={restored and restored.get('chatH')} "
+          f"viewportH={restored and restored.get('viewportH')} "
+          f"topbarH={restored and restored.get('topbarH')} "
+          f"inputBarBottom={restored and restored.get('inputBarBottom')}")
+
+    # ---- 护栏：88px 兜底会把列撑出 ~20.7px，输入栏跟着下移；但绝不能真的出屏 ----
+    # 真机实测 inputBarBottom=351 / viewportH=363（留 12px），阈值留 8px 余量。
+    check("输入栏未被挤出视口（inputBarBottom ≤ viewportH − 8）",
+          input_bar_in_viewport(restored),
+          f"inputBarBottom={restored and restored.get('inputBarBottom')} "
+          f"viewportH={restored and restored.get('viewportH')} limit=viewportH-8")
+    # ec0c8af 那版只设 max-height、没 flex-shrink:0，钩子条被 flex 压成 19px、句子竖切；
+    # 正常单行高度 = --tap = 44px，下限取 32px（留出 padding 取整的余量）。
+    check("钩子条折行后单行高度 ≥32px（防止被压成竖切）",
+          hook_bar_single_line_ok(restored),
+          f"hookBarH={restored and restored.get('hookBarH')} "
+          f"chatH={restored and restored.get('chatH')}")
 
     cdp.close()
     print("[IME] summary " + json.dumps({

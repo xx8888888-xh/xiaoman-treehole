@@ -1152,6 +1152,20 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   }
 }
 
+/* 键盘收起后视口回到 363~392 CSS px，旁白全部回来：钩子条两行实测 74.2px，会把聊天区
+ * 从 70.1px 压到 38.1px（比一条气泡 48.5px 还矮，最后一条被列表容器裁掉）。这里把钩子条
+ * 折成单行，并给聊天区兜底两条气泡高；voiceTip 不动——它是"为什么没声音"的唯一入口；
+ * 竖屏与 topbar 不受影响（topbar 只在键盘弹起的 ≤260px 里让位）。 */
+@media (orientation: landscape) and (max-height: 420px) {
+  .hook-bar { max-height: var(--tap); overflow: hidden; flex-shrink: 0; }
+  /* 只留一行也要收得干净：竖切会把句子从中间截断（实测末尾停在"我叫你什么"），
+   * 改成单行 + 省略号，读起来是"被收起"而不是"坏了"。 */
+  .hook-chip {
+    display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #chatScroll { min-height: calc(var(--tap) * 2); }
+}
+
 /* ---------- 记忆抽屉空态 ---------- */
 .drawer-empty {
   margin: var(--space-1) 0 var(--space-3);
