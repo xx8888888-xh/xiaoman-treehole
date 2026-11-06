@@ -1749,6 +1749,13 @@ const App = (() => {
   }
 
   // ---------- 主动开口（克制版） ----------
+  /* 周期说明（AVD 零渲染探针"t≈45s 一次重绘"的来源）：
+   * 首次空闲问候的间隔是 60s，从页面 init 起算；探针在页面就绪后静置 10s 才清零，
+   * 而 reload→就绪本身约 12–15s，于是清零后 45s 左右正好命中这一条 60s 定时器。
+   * 问候本身是产品行为（主动开口），不能删；问候里的 Stage.setEmotion("gentle")
+   * 与 TTS 收尾的 lipFrame(0) 只在零动画下各补一帧，且现在由 stage.js 的
+   * paintIfStillChanged 判重：开场白/上一次问候已经是 gentle 时不重绘（skip 日志）。
+   * 因此它是一次性、有业务语义的唤醒，不是 45s 周期的兜底刷新。 */
   function armIdle() {
     resetIdle();
     if (pings >= 2) return;
@@ -1765,6 +1772,7 @@ const App = (() => {
         晚上: "今天有什么想说的吗，我在呢"
       };
       const text = lines[band] || "在忙吗？我在呢";
+      console.log("[probe] idle-greet pings=" + pings);
       try {
         await sendSplit({ reply: text, emotion: "gentle", motion: "Greeting" });
       } catch (e) {

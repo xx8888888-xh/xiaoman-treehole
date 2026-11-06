@@ -28,6 +28,7 @@ const Stage = (() => {
   // 表情/动作先记下，挂载完成后补放一次，开场白的 Greeting 动作不会丢。
   let pendingEmotion = null;
   let pendingMotion = null;
+  let stillSig = "";          // 零动画：上一次真正画到画布上的冻结帧签名（见 stillFrameSig）
   // 极简模式/关动画：停 rAF，画面定格；默认值取外观（Appearance.motion=true 表示允许动效）
   let motionEnabled = typeof window !== "undefined" && window.Appearance
     ? Appearance.get().motion
@@ -367,7 +368,7 @@ const Stage = (() => {
     stopSharedTicker();
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = null;
-    if (puppet && mode === "layers") renderOnce();   // 定格在暂停瞬间的最后一帧
+    if (puppet && mode === "layers") renderOnce("env-pause");   // 定格在暂停瞬间的最后一帧
     console.log(`[probe] stage-pause=${why}`);
   }
 
@@ -375,7 +376,7 @@ const Stage = (() => {
     pausedByEnv = false;
     idleGov.show(nowMs());
     if (typeof document !== "undefined" && document.hidden) { idleGov.hide(); return; }
-    if (!puppet || mode !== "layers") { renderOnce(); return; }
+    if (!puppet || mode !== "layers") { renderOnce("env-resume"); return; }
     if (motionEnabled) {
       puppet.setAutoIdle(true);
       try { puppet.fit(); } catch (_e) { /* 布局尺寸可能刚恢复，fit 失败不阻断 */ }
@@ -494,9 +495,48 @@ const Stage = (() => {
     requestNext(0);
   }
 
-  function renderOnce() {
+  function renderOnce(src) {
     if (!puppet) return;
-    try { puppet.fit(); puppet.render(); } catch (_e) { /* 单帧失败不阻断 */ }
+    try { puppet.fit(); puppet.render(); } catch (_e) { /* 单帧失败不阻断 */ return; }
+    stillSig = stillFrameSig(puppet);
+    // 打点：Android 侧 MainActivity.onConsoleMessage 把 [probe] 行转到 logcat
+    // tag=XiaoManWeb，AVD 探针据 `[probe] stage-repaint src=...` 判定这次重绘的来源。
+    // 只在真的画了一帧时打一行，不随帧循环输出。
+    const tag = src || "manual";
+    if (typeof window !== "undefined") {
+      window.__stageRepaint = { src: tag, at: Math.round(nowMs()) };
+      console.log("[probe] stage-repaint src=" + tag);
+    }
+  }
+
+  /* ---------- 零动画的"空刷新"抑制 ----------
+   * motion=false 时 rAF 已停，画面只由 renderOnce 更新。冻结帧上真正会变的只有
+   * 表情/眼睛/嘴型/眨眼相位（呼吸、视线、lipSync 参数都停在上一帧）。
+   * 签名相同 = 重绘结果与屏上像素完全一致 → 不画。
+   * 典型场景：空闲问候与开场白用同一个 emotion=gentle，60s 后再 setEmotion 一次
+   * 属于"状态没变"；TTS 收尾的 lipFrame(0) 在零动画下也不会改动 params，
+   * 之前这两处各补一帧（AVD 实测 2×151,654px、14 次 drawImage）。 */
+  function stillFrameSig(p) {
+    if (!p) return "";
+    return [
+      p.emotion,
+      p.eye && p.eye.l,
+      p.eye && p.eye.r,
+      p.mouthFrame,
+      p.blink && p.blink.phase
+    ].join("|");
+  }
+
+  /** 零动画专用：签名没变就不重绘，变了只画一次 */
+  function paintIfStillChanged(src) {
+    if (!puppet) return false;
+    const next = stillFrameSig(puppet);
+    if (next === stillSig) {
+      if (typeof window !== "undefined") console.log("[probe] stage-repaint skip src=" + src);
+      return false;
+    }
+    renderOnce(src);
+    return true;
   }
 
   /** 零动画：停循环、冻结到同一帧；只保留一次延时补帧（纹理解码后）随后清零 */
@@ -506,12 +546,12 @@ const Stage = (() => {
     stopSharedTicker();
     if (!puppet) return;
     puppet.setAutoIdle(false);
-    renderOnce();
+    renderOnce("freeze");
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = setTimeout(() => {
       freezeTimer = null;
       if (motionEnabled) return;
-      renderOnce();
+      renderOnce("freeze+300ms");
     }, 300);
   }
 
@@ -560,7 +600,7 @@ const Stage = (() => {
     if (puppet.mode !== "layers") {
       // 引擎内部已按契约降级：这里只负责停帧、探针与提示
       setMode(puppet.mode, "纹理加载失败，已降级");
-      renderOnce();
+      renderOnce("fallback");
       try { puppet.stop(); } catch (_e) { /* 未启动 */ }
       bindResize();
       return;
@@ -649,7 +689,7 @@ const Stage = (() => {
       }
       puppet.fit();
       if (mode === "layers") updateVramProbe();
-      if (!motionEnabled || mode !== "layers") renderOnce();
+      if (!motionEnabled || mode !== "layers") renderOnce("resize");
     };
     if (window.ResizeObserver) {
       resizeObs = new ResizeObserver(onResize);
@@ -743,14 +783,18 @@ const Stage = (() => {
     // 疲惫再压一点肩颈，敷衍只比平静低一点，避免三张脸在视觉上又挤成一档
     const tilt = key === "sad" ? -0.6 : mood === "tired" ? -0.35 : mood === "flat" ? -0.18 : 0;
     puppet.setParam("headTilt", tilt);
-    // 零动画模式下 rAF 已停：状态切换后手动渲染一帧，否则画面停在旧表情
-    if (!motionEnabled) renderOnce();
-    const moodEl = document.getElementById("moodText");
-    if (moodEl) {
-      moodEl.textContent = MOODS[key] || "在听你说";
-      const chip = moodEl.parentElement;
-      chip.classList.add("pop");
-      setTimeout(() => chip.classList.remove("pop"), 350);
+    // 零动画模式下 rAF 已停：状态切换后手动渲染一帧，否则画面停在旧表情。
+    // 但"表情本来就没变"（例如 60s 空闲问候与开场白都是 gentle）时签名相同，
+    // 重绘结果与屏上像素一致，属于空刷新：这时代码只记一行 skip 日志，不画。
+    if (!motionEnabled) paintIfStillChanged("emotion");
+    if (typeof document !== "undefined") {
+      const moodEl = document.getElementById("moodText");
+      if (moodEl) {
+        moodEl.textContent = MOODS[key] || "在听你说";
+        const chip = moodEl.parentElement;
+        chip.classList.add("pop");
+        setTimeout(() => chip.classList.remove("pop"), 350);
+      }
     }
   }
 
@@ -802,7 +846,7 @@ const Stage = (() => {
     if (!host || !puppet) return;
     host.classList.add("stage-focus");
     try { puppet.fit(); } catch (_e) { /* 忽略 */ }
-    renderOnce();
+    renderOnce("focus-head");
   }
 
   /** 展开还原主界面视图 */
@@ -810,7 +854,7 @@ const Stage = (() => {
     if (!host || !puppet) return;
     host.classList.remove("stage-focus");
     try { puppet.fit(); } catch (_e) { /* 忽略 */ }
-    renderOnce();
+    renderOnce("restore-view");
   }
 
   /** 动画开关：关 → 停 rAF/漫游并定格当前帧；开 → 恢复呼吸/眨眼/视线漫游 */
@@ -843,11 +887,13 @@ const Stage = (() => {
     lipOpen = target;
     lipHold = target > 0 ? 6 : 0;
     if (!puppet) return;
-    // 零动画：直接落到目标值并渲染一帧（不启动循环）
+    // 零动画：直接落到目标值并渲染一帧（不启动循环）。
+    // 但零动画下没有 update(dt)，setParam 只改目标、不会进入 params，
+    // 这一帧的像素与上一帧完全相同（与 TTS 是否有声音无关）——签名不变即跳过。
     if (!motionEnabled) {
       puppet.setParam("lipSync", lipHold > 0 ? lipOpen : 0);
       if (lipHold > 0) lipHold = 0;
-      renderOnce();
+      paintIfStillChanged("lip");
     }
   }
 
@@ -871,7 +917,16 @@ const Stage = (() => {
     _idleState: () => idleGov.state(),
     /** 单测入口：口型目标纯函数与当前内部状态 */
     _lipFor: lipFor,
-    _lipState: () => ({ lipOpen, lipHold })
+    _lipState: () => ({ lipOpen, lipHold }),
+    /** 单测入口：零动画冻结帧签名 + 注入假 puppet（返回还原函数） */
+    _stillFrameSig: stillFrameSig,
+    _stillForTest(nextPuppet, motionOn) {
+      const prev = { puppet, motionEnabled, stillSig };
+      puppet = nextPuppet;
+      motionEnabled = !!motionOn;
+      stillSig = stillFrameSig(nextPuppet);   // 视作"该状态已经画在屏上"
+      return () => { puppet = prev.puppet; motionEnabled = prev.motionEnabled; stillSig = prev.stillSig; };
+    }
   };
 })();
 
