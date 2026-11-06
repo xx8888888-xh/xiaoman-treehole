@@ -1,0 +1,66 @@
+{
+  "source": "docs/HUMAN_FEEL_R5_CLOSURE.md §5-§7（R5 定向复测 429 中断后的待补清单）",
+  "note": "状态清单，不是模型回复或质量结果；仅用于 --only-missing 输入，明日额度恢复后照单补跑",
+  "partial": true,
+  "cases": 7,
+  "case_stats": [
+    {
+      "id": "followup-04",
+      "category": "追问",
+      "passed": false,
+      "turns": 1,
+      "status": "interrupted",
+      "interrupted": true,
+      "note": "只跑到第 1 轮即 429"
+    },
+    {
+      "id": "followup-05",
+      "category": "追问",
+      "passed": false,
+      "turns": 0,
+      "status": "missing",
+      "note": "429 未执行"
+    },
+    {
+      "id": "followup-06",
+      "category": "追问",
+      "passed": false,
+      "turns": 0,
+      "status": "missing",
+      "note": "429 未执行"
+    },
+    {
+      "id": "memory-01",
+      "category": "长期记忆",
+      "passed": false,
+      "turns": 0,
+      "status": "missing",
+      "note": "429 未执行（上一轮 0 数据）"
+    },
+    {
+      "id": "memory-02",
+      "category": "长期记忆",
+      "passed": false,
+      "turns": 0,
+      "status": "missing",
+      "note": "429 未执行（上一轮 0 数据）"
+    },
+    {
+      "id": "memory-03",
+      "category": "长期记忆",
+      "passed": false,
+      "turns": 0,
+      "status": "missing",
+      "note": "429 未执行（上一轮 0 数据）"
+    },
+    {
+      "id": "memory-04",
+      "category": "长期记忆",
+      "passed": false,
+      "turns": 0,
+      "status": "missing",
+      "note": "429 未执行（上一轮 0 数据）"
+    }
+  ],
+  "interrupted_ids": ["followup-04"]
+}

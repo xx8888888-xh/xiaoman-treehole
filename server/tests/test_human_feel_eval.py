@@ -10,6 +10,7 @@
 
 运行：python -m pytest server/tests -q
 """
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -205,6 +206,44 @@ class HumanFeelEvalTest(unittest.TestCase):
                             if t.index >= int(list(case["forget_after"])[0]):
                                 self.assertNotIn(v, t.text,
                                                  "%s 遗忘后仍提到“%s”" % (case["id"], v))
+
+
+class OnlyMissingSelectionTest(unittest.TestCase):
+    """--only-missing：只挑零数据/失败/429 中断，已通过的不重跑。"""
+
+    def setUp(self):
+        self.cases = ev.load_cases(CASES_FILE)["cases"]
+
+    def test_partial_archive_selects_exact_pending_list(self):
+        archive = json.loads(
+            (ROOT / "docs" / "eval_pending_w20.json").read_text(encoding="utf-8"))
+        ids, reasons = ev.select_missing(self.cases, archive)
+        self.assertEqual(ids, [
+            "followup-04", "followup-05", "followup-06",
+            "memory-01", "memory-02", "memory-03", "memory-04",
+        ])
+        self.assertEqual(reasons["followup-04"], "interrupted")
+        self.assertEqual(reasons["memory-01"], "missing")
+        self.assertNotIn("working-01", ids, "已通过的用例不许重跑")
+        self.assertEqual(len(ids), 7, "只允许选中待补的 7 条")
+
+    def test_full_archive_marks_unlisted_as_zero_data(self):
+        cases = [{"id": "a", "category": "x"},
+                 {"id": "b", "category": "x"},
+                 {"id": "c", "category": "x"}]
+        archive = {"case_stats": [
+            {"id": "a", "passed": True, "turns": 2},
+            {"id": "b", "passed": False, "turns": 1},
+        ]}
+        ids, reasons = ev.select_missing(cases, archive)
+        self.assertEqual(ids, ["b", "c"])
+        self.assertEqual(reasons, {"b": "failed", "c": "zero-data"})
+
+    def test_category_filter_applies_to_missing_list(self):
+        archive = json.loads(
+            (ROOT / "docs" / "eval_pending_w20.json").read_text(encoding="utf-8"))
+        ids, _ = ev.select_missing(self.cases, archive, ["长期记忆"])
+        self.assertEqual(ids, ["memory-01", "memory-02", "memory-03", "memory-04"])
 
 
 if __name__ == "__main__":

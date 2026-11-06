@@ -764,6 +764,57 @@ def load_cases(path: Path = CASES_FILE) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+MISSING_STATUSES = {"missing", "zero", "zero-data", "no-data", "skipped",
+                    "interrupted", "error", "429"}
+
+
+def _archive_missing_reason(stat: dict) -> str:
+    """归档里单条用例的缺失原因；已通过且有数据返回空串。"""
+    status = str(stat.get("status") or stat.get("state") or "").lower()
+    if status in MISSING_STATUSES:
+        return status
+    for key in ("interrupted", "aborted", "throttled", "error"):
+        if stat.get(key):
+            return "429-interrupted" if key == "throttled" else key
+    if not stat.get("passed", False):
+        return "failed"
+    try:
+        turns = int(stat.get("turns") or 0)
+    except (TypeError, ValueError):
+        turns = 0
+    if turns <= 0:
+        return "zero-data"
+    return ""
+
+
+def select_missing(cases: list, archive: dict, categories=None) -> tuple:
+    """从上次归档挑出“零数据 / 失败 / 429 中断”的用例。
+
+    - 完整归档（默认）：未出现在 case_stats 里的用例 = 零数据；
+    - `partial: true` 的归档：只含本次待补条目，未列出的视为“不在上次范围”，
+      不算缺失，避免把已归档通过的用例重跑一遍。
+    返回 (ids, reasons)；ids 保持用例集原顺序。
+    """
+    stats = {s["id"]: s for s in (archive.get("case_stats") or []) if s.get("id")}
+    partial = bool(archive.get("partial"))
+    wanted = {}
+    for cid, s in stats.items():
+        reason = _archive_missing_reason(s)
+        if reason:
+            wanted[cid] = reason
+    for cid in archive.get("failed_ids") or []:
+        wanted.setdefault(cid, "failed")
+    for cid in archive.get("interrupted_ids") or []:
+        wanted.setdefault(cid, "429-interrupted")
+    if not partial:
+        known = {c["id"] for c in cases}
+        for cid in known - set(stats):
+            wanted.setdefault(cid, "zero-data")
+    ids = [c["id"] for c in cases
+           if (not categories or c["category"] in categories) and c["id"] in wanted]
+    return ids, {cid: wanted[cid] for cid in ids}
+
+
 def run_case(case: dict, backend, universal: dict) -> tuple:
     """返回 (CaseResult, 建议轮次数)；后端请求上限触发时 result.limit_skipped 置位。"""
     backend.reset_case(case)
@@ -804,11 +855,14 @@ def run_case(case: dict, backend, universal: dict) -> tuple:
 
 
 def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
-             skip_ids=None,
+             skip_ids=None, only_ids=None,
              on_case=None) -> dict:
     data = load_cases(cases_file)
     universal = data["universal"]
     cases = data["cases"]
+    if only_ids is not None:
+        keep = set(only_ids)
+        cases = [c for c in cases if c["id"] in keep]
     if categories:
         cats = set(categories)
         cases = [c for c in cases if c["category"] in cats]
@@ -1166,6 +1220,13 @@ def main(argv=None) -> int:
     ap.add_argument("--resume", action="store_true",
                     help="断点续跑：读取 --json 里的逐条统计，跳过已通过的用例，"
                          "把新结果合并进同一份报告")
+    ap.add_argument("--only-missing", action="store_true",
+                    help="只跑上次归档里零数据/失败/429 中断的用例（配额恢复后补跑）")
+    ap.add_argument("--from-archive", default="",
+                    help="上次归档 JSON 路径，配合 --only-missing；partial=true 时"
+                         "只认列出且缺失的条目")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="只打印 --only-missing 选中的用例，不发起任何请求")
     args = ap.parse_args(argv)
 
     skipped = []
@@ -1179,6 +1240,39 @@ def main(argv=None) -> int:
         args.max_tokens = MAX_TOKENS_CAP
     if args.max_requests <= 0:
         args.max_requests = DEFAULT_MAX_REQUESTS
+
+    cats = [c for c in args.categories.split(",") if c]
+    only_ids = None
+    only_reasons = {}
+    if args.dry_run and not args.only_missing:
+        print("%s --dry-run 需配合 --only-missing（只做清单筛选，不发请求）" % LOG,
+              file=sys.stderr)
+        return 2
+    if args.only_missing:
+        if args.resume:
+            print("%s --only-missing 不能和 --resume 同时使用（一个是补缺，一个是续跑）"
+                  % LOG, file=sys.stderr)
+            return 2
+        if not args.from_archive or not Path(args.from_archive).exists():
+            print("%s --only-missing 需要 --from-archive 指定上次归档 JSON"
+                  % LOG, file=sys.stderr)
+            return 2
+        archive = json.loads(Path(args.from_archive).read_text(encoding="utf-8"))
+        all_cases = load_cases(Path(args.cases))["cases"]
+        only_ids, only_reasons = select_missing(all_cases, archive, cats)
+        counts = Counter(only_reasons.values())
+        detail = "、".join("%s %d" % (k, v) for k, v in sorted(counts.items()))
+        print("%s 只跑缺失清单：%s 选中 %d 条（%s）；用例集内其余 %d 条不重跑"
+              % (LOG, args.from_archive, len(only_ids), detail,
+                 len(all_cases) - len(only_ids)), flush=True)
+        if args.dry_run:
+            for cid in only_ids:
+                print("  - %-14s %s" % (cid, only_reasons[cid]), flush=True)
+            print("%s dry-run：未发起任何请求" % LOG, flush=True)
+            return 0
+        if not only_ids:
+            print("%s 归档里没有待补用例，无需运行" % LOG, flush=True)
+            return 0
 
     if args.auto_rotate:
         args.backend = "api"
@@ -1216,8 +1310,6 @@ def main(argv=None) -> int:
                              max_tokens=args.max_tokens, retries=args.retries,
                              max_requests=args.max_requests)
 
-    cats = [c for c in args.categories.split(",") if c]
-
     # 断点续跑：只认带逐条统计（case_stats）的旧结果，逐条合并、覆盖率如实算
     prior_stats = []
     if args.resume:
@@ -1235,7 +1327,7 @@ def main(argv=None) -> int:
         print("%s 续跑：跳过 %d 条已通过用例" % (LOG, len(skip_ids)), flush=True)
 
     order = {c["id"]: i for i, c in enumerate(load_cases(Path(args.cases))["cases"])}
-    expected = len(order)
+    expected = len(only_ids) if only_ids else len(order)
     started = time.time()
 
     def build(results, aborted=None, limit_skips=0, final=False):
@@ -1306,6 +1398,14 @@ def main(argv=None) -> int:
                         % (cov["new"], cov["completed"], cov["expected"],
                            cov["rate"] * 100, cov["expected"] - cov["completed"]))
             summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + note
+        if only_ids:
+            summary["only_missing"] = {
+                "archive": args.from_archive,
+                "ids": list(only_ids),
+                "reasons": dict(only_reasons),
+            }
+            summary["notes"] = (summary["notes"] + "；" if summary["notes"] else "") + \
+                ("只跑缺失清单 %d 条，其余用例未重跑" % len(only_ids))
         md = render_markdown(summary, summary["backend"], summary["model"], summary["notes"])
         if final:
             print(md)
@@ -1337,7 +1437,7 @@ def main(argv=None) -> int:
             build(flushed, final=False)  # 逐条落盘，超时/中断不丢进度
 
     data = evaluate(Path(args.cases), backend, limit=args.limit, categories=cats,
-                    skip_ids=skip_ids, on_case=on_case)
+                    skip_ids=skip_ids, only_ids=only_ids, on_case=on_case)
     summary = build(data["results"], data.get("aborted"),
                     data.get("limit_skips", 0), final=True)
     if args.json:
