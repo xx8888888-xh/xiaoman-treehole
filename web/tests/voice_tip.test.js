@@ -32,7 +32,7 @@ function fakeClock() {
   return {
     setTimeout: (fn) => { q.push(fn); return q.length - 1; },
     clearTimeout: (h) => { if (h != null) q[h] = null; },
-    tick: () => { const run = q.splice(0); run.forEach((f) => f && f()); },
+    tick: () => { const run = q.splice(0); run.forEach((f) => { if (f) f(); }); },
   };
 }
 
