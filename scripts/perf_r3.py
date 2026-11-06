@@ -96,6 +96,49 @@ INSTRUMENT = r"""
 })();
 """
 
+# 阶段埋点（opt-in，phase_probe=True 才注入）：只记录「首条自发消息」从填字到首帧可见的
+# 时间戳，供 perf_r4 把 firstSendMs 拆成 input→send / send 同步段 / DOM 提交 / 首帧渲染。
+# 只包一层 sendBtn.onclick 与 ChatPager.push（转发原函数，不改行为），无额外网络/延迟改动。
+PHASE_JS = r"""
+(() => {
+  const ph = window.__sendPhases = {
+    t0: null, tInputFilled: null, tSendEntry: null, tClickReturn: null,
+    tPushStart: null, tPushEnd: null, frame1: null, frame2: null, pushes: 0
+  };
+  const btn = document.getElementById('sendBtn');
+  if (btn && typeof btn.onclick === 'function' && !btn.onclick.__phaseWrapped) {
+    const orig = btn.onclick;
+    const wrapped = function (ev) {
+      if (ph.t0 != null && ph.tSendEntry == null) ph.tSendEntry = performance.now();
+      return orig.call(this, ev);
+    };
+    wrapped.__phaseWrapped = true;
+    btn.onclick = wrapped;
+  }
+  const pager = window.ChatPager;
+  if (pager && typeof pager.push === 'function' && !pager.push.__phaseWrapped) {
+    const push = pager.push;
+    const wrapped = function () {
+      if (ph.t0 != null && ph.tPushStart == null) {
+        ph.pushes += 1;
+        ph.tPushStart = performance.now();
+        const out = push.apply(this, arguments);
+        ph.tPushEnd = performance.now();
+        // push 内的 scrollTop 赋值会强制一次同步布局；真正的样式/绘制提交在下一帧
+        requestAnimationFrame(function () {
+          ph.frame1 = performance.now();
+          requestAnimationFrame(function () { ph.frame2 = performance.now(); });
+        });
+        return out;
+      }
+      return push.apply(this, arguments);
+    };
+    wrapped.__phaseWrapped = true;
+    pager.push = wrapped;
+  }
+})();
+"""
+
 CFG_OFFLINE = {"mode": "offline", "mockBase": MOCK, "tts": "off",
                "voice": "zh-CN-XiaoyiNeural", "ttsRate": "normal"}
 CFG_MOCK = dict(CFG_OFFLINE, mode="mock")
@@ -166,7 +209,8 @@ def lt_summary(tasks, since=0, until=None):
 
 
 # ---------------------------------------------------------------- 1) load
-async def measure_load_once(browser, throttle=1):
+async def measure_load_once(browser, throttle=1, phase_probe=False):
+    """phase_probe=True：只为 firstSendMs 追加阶段时间戳（默认关闭，口径/取值不变）。"""
     ctx, page = await new_page(browser, CFG_MOCK)
     session = await attach(ctx, page)
     if throttle > 1:
@@ -200,14 +244,31 @@ async def measure_load_once(browser, throttle=1):
         " return !!(b && t && b.onclick); }", timeout=15000, polling=25)
     input_ready = round(await page.evaluate("performance.now()"))
     ready_to_send = input_ready          # 发送就绪时刻＝输入可用时刻（互斥锁不再挡发送）
+    if phase_probe:
+        # bind 已完成（sendBtn.onclick 已挂）后再包一层，手写输入/点击顺序保持原样
+        await page.evaluate(PHASE_JS)
     await page.evaluate(
-        """() => { const t = document.getElementById('textInput');
+        """() => { const ph = window.__sendPhases;
+            if (ph) ph.t0 = performance.now();
+            const t = document.getElementById('textInput');
             t.value = '在吗'; t.dispatchEvent(new Event('input', { bubbles: true }));
-            document.getElementById('sendBtn').click(); }""")
+            if (ph) ph.tInputFilled = performance.now();
+            document.getElementById('sendBtn').click();
+            if (ph) ph.tClickReturn = performance.now(); }""")
     await page.wait_for_function(
         "() => document.querySelectorAll('#messages .msg-row.me').length >= 1",
         timeout=15000, polling=25)
     first_send = round(await page.evaluate("performance.now()"))
+    # 首帧时间戳在所有真实指标取完之后再读，不占用 firstSendMs 的观测窗口
+    phase_marks = None
+    if phase_probe:
+        try:
+            await page.wait_for_function(
+                "() => !!(window.__sendPhases && window.__sendPhases.frame1 != null)",
+                timeout=5000, polling=25)
+        except Exception as exc:
+            print("[warn] 阶段埋点首帧未就绪：%s" % exc, flush=True)
+        phase_marks = await page.evaluate("window.__sendPhases")
     bind = None
     for line in console:
         if "[probe] bind ok ms=" in line:
@@ -243,6 +304,7 @@ async def measure_load_once(browser, throttle=1):
         "dclMs": dcl, "bindMs": bind, "mountMs": mount,
         "inputReadyMs": input_ready, "readyToSendMs": ready_to_send,
         "firstSendMs": first_send,
+        "phaseMarks": phase_marks,
         "greetDeferred": any("greet deferred user-first" in c for c in console),
         "greetSkipped": any("greet skipped user-first" in c for c in console),
         "greetPlayed": any("greet played" in c for c in console),
