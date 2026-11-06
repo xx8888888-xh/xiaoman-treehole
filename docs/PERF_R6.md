@@ -225,6 +225,7 @@ python scripts/perf_gate.py --perf <r6.json> --require-sections firstsend
 | 拖动回归（3 轮，几何 27/27、拖动 3/3） | `42276909668` | `b2913b7` |
 | CI（合并前） | `42273891058`、`42274308454`、`42274321467` | — |
 | main CI / E2E | CI `42279265097` success / E2E `42279265101` success | `7a9ff27` |
+| 基线门 main CI / E2E | CI `42288302619` success / E2E `42288298847` success | `e7be10c` |
 
 ## 10. R6 基线门（CI 回归）
 
