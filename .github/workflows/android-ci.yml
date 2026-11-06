@@ -238,6 +238,11 @@ jobs:
             # ---- 悬浮窗完整交互验收（P2-4b v3：授权→球→拖动→展开→聊天→收起→关闭，产出 emulator_04~09） ----
             # v3 三通道证据：dumpsys window（窗口级）+ PIL 像素基线差分（像素级）+ logcat probe（链路级）。
             # uiautomator dump 对 TYPE_APPLICATION_OVERLAY 有盲区（run 38853971176 实锤：球已渲染但 dump 无节点）。
+            # 取图方式能力说明：3 条像素断言的判定源仍是 adb screencap（SurfaceFlinger 合成结果）；
+            # [FLOAT-PROBE] 另取 WebView 渲染层（CDP Page.captureScreenshot）与页内 canvas 读回，仅用于归因。
+            # run #121–#123 实测：该 AVD 的 WebView 83 不解析 inset:0 → 浮窗页 0×0，两路新源同样为空；
+            # 新源与 screencap 不一致时只用于归因，不得据此放宽/替换断言（详见 docs §3.6）。
+            echo "[CAPTURE] verdict=screencap; probes=CDP render-layer + canvas readback (evidence only, no threshold change)"
             python3 scripts/emulator_float_check.py || { echo "ERROR: float window check failed"; exit 1; }
 
       - name: Upload screenshots

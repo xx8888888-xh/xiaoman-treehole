@@ -17,12 +17,13 @@
 | 真机能不能出声，CI 能否证明 | **当前 CI 无法证明可闻性，而且原因有两条、彼此独立**：镜像没有 TTS 引擎（`available()=False` → `speak()` 直接返回 `False`，根本没创建 AudioTrack）；AVD 又带 `-no-audio`。CI 能证明的只是“三条 WebView 都注入了桥且可调用”，不是“有声音” | `[FLOAT-PASS] ... available()=False speak()返回=False(boolean) err=-`；AVD 参数 `-no-window -gpu swiftshader_indirect -no-snapshot -memory 3072 -no-audio` |
 | 浮窗 3 条像素断言仍红，是否是本次改动引入 | **不是。** 合并前的 `origin/main` 基线 #110（`2163963`）同 3 条、同 `diff=0px`、同 frame 坐标；这 3 条断言的代码在 `2163963` 与当前 HEAD 之间**逐字节一致**；AVD 配置也一致。定位到截图路径（`dumpsys` frame 存在 + `[probe] pet-ready` 通过，但 screencap 在该 frame 内的像素差恒 0） | #110 `[FLOAT-SUMMARY] 18/21`；#113 `19/22`；#114 `19/23`；#116 `23/26`；#120 `23/26`；各 run 的 3 条 `[FLOAT-FAIL]` 完全相同 |
 | 本轮是否改产品代码 | **没有**。未发现音频回归，产品代码/断言零改动；只改了 CI 取证脚本与 workflow（`4c7b557`，用于恢复判定能力） | `4c7b557` 只含 `scripts/emulator_noisy_check.py` + `.github/workflows/android-ci.yml` |
+| 浮窗 3 条像素红的真实根因 | **不是 screencap 抓不到，也不是 Live2D 没画**：浮窗页在 CI 的 WebView 83 上 `#petRoot/#petStage/canvas` 布局为 0x0（`inset:0` 不被解析），canvas 背板有 476,535 个非透明像素但元素无尺寸、从未合成到屏幕 → **屏幕上确实看不到桌宠，三条断言是真失败** | run #121–#123 `[FLOAT-PROBE]`：`Page.captureScreenshot` 385x495/819B/`unique=1`；canvas `alpha_gt16=476535/901440`；`#petRoot cw=ch=0`、主界面 `#puppet` 85x196 正常；`CSS.supports('inset')=false`，UA `Chrome/83.0.4103.120`（§3.6） |
 
-一句话：**#117–#119 的红是“新加的验收脚本自己没跑通”，不是“音频坏了”；#120 修复后 noisy 已 `PASS 3 / FAIL 0 / SKIP 0`、chat `11/11`，只剩既有的浮窗像素红。可闻性仍未证明，浮窗像素红在 `origin/main` 合并前就已存在。**
+一句话：**#117–#119 的红是“新加的验收脚本自己没跑通”，不是“音频坏了”；#120 修复后 noisy 已 `PASS 3 / FAIL 0 / SKIP 0`、chat `11/11`，只剩既有的浮窗像素红。可闻性仍未证明；浮窗像素红在 `origin/main` 合并前就已存在，#121–#123 已把根因证到「CI 的 WebView 83 不解析 `inset:0` → 浮窗页布局 0x0 → 屏幕上确实不可见」，断言保持原样，修复建议见 §4.3 P0-0（需授权）。**
 
 ---
 
-## 1. `android-ci` 真实结果（#110、#113–#120）
+## 1. `android-ci` 真实结果（#110、#113–#123）
 
 ### 1.1 run 总表（`gh run list --workflow android-ci.yml`）
 
@@ -133,6 +134,16 @@ ERROR: float window check failed
 
 - 这证明：依赖先装、noisy 三态、chat、float **确实按顺序执行了**；logcat 探针在 `logcat -c` + 重启触发 + `--pid` 拉取后**真的拿到了**（#118 的缺失是采集窗口问题，已在采集侧修好）。
 - 这仍然**不证明**可闻性（`available()=False` 未变，见 §2.1），也不代表浮窗像素红已解决（§3）。
+
+### 1.7 三路取图取证 run（#121–#123）
+
+| run | commit | 本轮加什么 | float 结果 | 关键结论 |
+|---|---|---|---|---|
+| #121 | `627b26a` | `[FLOAT-PROBE]`：screencap + CDP `Page.captureScreenshot` + canvas `getImageData` | `23/26`（仍 3 条像素红） | canvas 有 47.6 万非透明像素；CDP 截图 819B 全透明 → 两种取图源都空 |
+| #122 | `adfa963` | 补 `innerW/H`、`#petRoot/#petStage/canvas` 的 `clientWidth/Height` 与 rect；主界面 WebView 对照组 | `23/26` | 浮窗页视口 140x180 正常，但 `#petRoot/#petStage/canvas` 全为 0x0；主界面 `#puppet` 85x196 正常 |
+| #123 | `db544ff` | 补 `navigator.userAgent`、`CSS.supports('inset','0')`、`#petRoot` 计算样式 | `23/26` | UA `Chrome/83.0.4103.120`；`inset` 支持 `false`；`#petRoot` 无有效偏移 → 收缩为 0x0（根因，见 §3.6） |
+
+三次 run 的 `build-apk` / `web-tests` 均 success，`emulator-smoke` 仍只红在 §3.1 的 3 条；`[FLOAT-SUMMARY]` 三次都是 `23/26`，未因新增取证而改变任何断言。取证图随 `emulator-screenshots` artifact 上传（`emulator_04_float_layer.png`、`emulator_04_float_crop.png`、`emulator_04_float_sidebyside.png`）。
 
 ---
 
@@ -284,16 +295,91 @@ emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072
 
 - `docs/android-battery/ANDROID_BATTERY_REPORT.md` 记录的另一次 AVD 实测（api34 / 720×1280）同一断言得到 `diff=21138px`、frame `(424,426,704,786)`。也就是说 `region_diff` 在正常截图路径下能测到 Live2D 本体；CI 的 api30/pixel_4/swiftshader_indirect 组合才恒 0。
 
-推断（尚未证到具体一层）：
+~~推断（尚未证到具体一层）~~（已由 §3.6 落定）：
 
-- 最一致的解释是“透明 overlay 里的 Live2D 内容没有被 `screencap` 从软件 GL（swiftshader_indirect）读回”。脚本已内置 `refresh_screen()` 强制整屏重合成，仍为 0，说明不是简单的 damage 未刷新。
-- 具体是 SurfaceFlinger 的 damage、WebView 合成层、还是 GL 读回路径，需要再做一次分层取证（见 §4.3 P2-7），本轮不下断言。
+- ~~最一致的解释是“透明 overlay 里的 Live2D 内容没有被 `screencap` 从软件 GL（swiftshader_indirect）读回”~~：**§3.6 已推翻**——CDP 渲染层截图同样全透明，且浮窗页自身布局为 0×0；不是 GL 读回路径的问题。
+- 真因见 §3.6：`web/css/pet.css` 的 `inset: 0` 在 CI 的 WebView 83 上不被解析，浮窗页收缩为 0×0，屏幕上确实没有桌宠。
 
 ### 3.5 未放宽、未 skip
 
 - 三条断言仍在，阈值仍为 `6000`，失败仍计 `[FLOAT-FAIL]` 并使 job 退出 1。
 - 本轮只在“像素失败”时增加了一条 `[FLOAT-DEGRADE]` 分支：**跳过依赖像素差的拖动/面板尺寸等交互步骤**，改用 dumpsys 结构继续验证；**§3.1 这 3 条目标断言仍然执行、仍然照常 FAIL**，没有改成 PASS、没有 `xfail`、没有提前 return。
 - #110 与 #116 的对比可直接复现：`gh run view 42045722234 --log`、`gh run view 42126103792 --log`。
+
+### 3.6 三路取图对照与根因（run #121–#123，2026-11-06）
+
+**结论先说**：`diff=0px` 既不是“Live2D 图层没画”，也不是“screencap 抓不到该图层”，而是**浮窗页在 CI 的 WebView 83 上整体布局成 0×0**：canvas 背板里画了 47.6 万非透明像素，但 canvas 元素的 CSS 尺寸是 0×0，从未参与合成。屏幕上确实看不到桌宠，所以 3 条断言是**真失败**——不改断言、不换阈值、不 skip。
+
+#### 3.6.1 同一时刻的三路取证（#123，`[FLOAT-PROBE]` 原文）
+
+```text
+[FLOAT-PROBE] screencap: full=1080x2280 crop=385x495 changed_vs_base=0px unique=447
+[FLOAT-PROBE] layer: src=Page.captureScreenshot 385x495 mode=RGBA content=0px unique=1 819B
+[FLOAT-PROBE] canvas: {"ua": "... Chrome/83.0.4103.120 ...", "cssSupport": {"inset": false, "top": true},
+  "rootCss": {"top": "0px", "left": "0px", "right": "140px", "bottom": "180px", "w": "0px", "h": "0px",
+              "display": "block", "position": "fixed"},
+  "viewport": {"innerW": 140, "innerH": 180, ..., "dpr": 2.75, "vis": "visible", "hasFocus": false},
+  "root": {"cw": 0, "ch": 0, "rect": [0,0,0,0]}, "stage": {"cw": 0, "ch": 0, "rect": [0,0,0,0]},
+  "canvasEl": {"cw": 0, "ch": 0, "rect": [0,8,0,0]},
+  "present": true, "w": 626, "h": 1440,
+  "state": {"mounted": true, "ready": true, "mode": "preview", ...},
+  "alpha_gt0": 480979, "alpha_gt16": 476535, "total": 901440, "alpha_ratio": 0.5286, "dataurl_len": 720150}
+[FLOAT-PROBE] control(main index.html): {"innerW": 393, "innerH": 751, "dpr": 2.75, "vis": "hidden",
+  "canvases": [{"id": "puppet", "w": 170, "h": 392, "cw": 85, "ch": 196}]}
+[FLOAT-PROBE] compare: size=385x495 layer_content=0px screencap_changed=0px overlap=0px -> 两源一致
+[FLOAT-PROBE] recovery-before: layer_content=0px src=Page.captureScreenshot ... 819B
+[FLOAT-PROBE] recovery-after: layer_content=0px src=Page.captureScreenshot ... 819B
+```
+
+（为可读性省略了重复字段；完整原文见 run `42150649869` 的 `emulator-smoke` 日志。）
+
+#### 3.6.2 三路数据怎么读
+
+| 证据源 | 数据 | 说明 |
+|---|---|---|
+| `adb exec-out screencap` | frame `385×495` 与基线 `changed=0px` | SurfaceFlinger 合成结果里该区域只有壁纸 |
+| CDP `Page.captureScreenshot` | `385×495` RGBA、`819B`、`unique=1`、`content=0px` | 直接取 WebView 渲染层也**全透明** → 不是 screencap 单方面盲 |
+| 页内 canvas `getImageData` | `alpha_gt16=476535/901440`（52.86%），`dataURL` 720150 字符 | Live2D **确实画进了 canvas 背板**，`ready=true` |
+| 布局 | `innerW/H=140/180` 正常；`#petRoot/#petStage/canvas` 全部 `cw=ch=0`；canvas rect `[0,8,0,0]` | 视口正常，但浮窗页根节点被压成 0×0 |
+| 对照组主界面 | `#puppet` canvas `cw=85 ch=196` | 同一 WebView 引擎，主界面布局正常 → 不是引擎整体坏 |
+| 引擎能力 | `CSS.supports('inset','0')=false`；UA `Chrome/83.0.4103.120` | `inset` 简写自 Chrome 87 才支持 |
+
+#### 3.6.3 根因链
+
+1. `web/css/pet.css:19-30` 的 `#petRoot { position: fixed; inset: 0 }` 与 `#petStage { position: absolute; inset: 0 }` 依赖 CSS `inset` 简写；
+2. CI 的 AVD（api30 / pixel_4）自带 WebView 为 `Chrome/83.0.4103.120`，**不解析 `inset`**（`CSS.supports` 为 false），两条声明被整条丢弃 → 元素没有 `top/right/bottom/left` 偏移；
+3. `#petRoot` 是 `position:fixed` 且子元素全是绝对定位 → shrink-to-fit 收缩成 `0×0`（计算样式实测 `w/h=0px`）；`#petStage` 同理；
+4. `#petStage canvas { height: 300% }` 的百分比高度基于 0 高度父级 → canvas 元素也是 `0×0`（rect `[0,8,0,0]`）；
+5. `puppet.fit()` 里 `this.canvas.clientHeight || 720` 的兜底让背板按 720px 画了 `626×1440`，`visibleRect()` 在 `cw/chh=0` 时退回全画布 → 背板里有 47.6 万非透明像素；
+6. 但元素没有布局盒 → Chromium 不合成、SurfaceFlinger 也没有内容 → 两个取图源都空。
+
+#### 3.6.4 因此不能走的两条“捷径”
+
+- 不能把 3 条断言改成 CDP 截图判定：CDP 实测 `content=0px`，改了仍红，只是把同一层失败换个说法。
+- 不能改成 canvas alpha 判定：`alpha_gt16=476535` 会让断言变绿，但屏幕上桌宠**确实不可见**——这等于用“背板画了”掩盖“没合成”，属于放宽断言强度，禁止。
+
+#### 3.6.5 复现步骤（云端，无需真机）
+
+```bash
+gh workflow run android-ci.yml --ref docs/audio-verifiability
+gh run view 42150649869 --log | grep -E "FLOAT-PROBE|FLOAT-FAIL|FLOAT-SUMMARY"
+```
+
+期望输出（节选）：`layer: ... content=0px unique=1 819B`、`canvas ... "alpha_gt16": 476535`、`root/stage/canvasEl ... cw/ch=0`、`cssSupport.inset=false`、`UA ... Chrome/83.0.4103.120`、`[FLOAT-SUMMARY] 23/26`。
+
+本地同规格 AVD（api30/x86_64/pixel_4，`-gpu swiftshader_indirect`）跑 `python3 scripts/emulator_float_check.py` 可复现同一组 `[FLOAT-PROBE]`；也可用 CDP 直接核：
+
+```bash
+adb forward tcp:9225 localabstract:webview_devtools_remote_<app-pid>
+curl -s localhost:9225/json/list          # 找到 pet.html
+# 在页面执行：CSS.supports('inset','0') / getComputedStyle(petRoot).width / canvas.clientWidth
+```
+
+#### 3.6.6 修复建议（产品代码，本轮未改，需授权）
+
+- 最小修复：`web/css/pet.css` 两处 `inset: 0` 改为显式 `top: 0; right: 0; bottom: 0; left: 0`（WebView 83 可用，对现代 WebView 等价）。
+- 或 CI 侧升级：让 AVD 使用 WebView ≥ 87（或换带新 WebView 的系统镜像）。
+- 任一修复落地后，这 3 条像素断言应自然转绿；**断言与 `PET_MIN_DIFF=6000` 均不动**。
 
 ---
 
@@ -323,7 +409,9 @@ emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072
 | 注册探针日志可被采集 | **能（#120）/ 采不到时只记 SKIP** | #[120] `[NOISY-PASS] logcat`；#118 的缺失已定位为采集窗口问题 |
 | 三条 WebView 注入了 `AndroidTTS` 且可调用 | **能** | `speak/available` 为 `function`，调用返回 boolean |
 | 浮窗服务、窗口、进程恢复链 | **能** | #[120] `23/26` 中除 3 条像素外的结构断言全过 |
-| 桌宠 Live2D 在 `screencap` 截图上可见 | **不能** | 3 条像素断言恒 `diff=0px`（§3） |
+| 桌宠 Live2D 画布是否真的绘制 | **能（背板）/ 不能（屏幕）** | #123 canvas `alpha_gt16=476535`（52.86%，`ready=true`）；但 canvas 元素 `cw=ch=0`，从未合成 → 屏幕上不可见（§3.6） |
+| WebView 渲染层能否取到桌宠内容（CDP `Page.captureScreenshot`） | **不能** | #121/#123 均为 385×495、819B、`unique=1`、`content=0px`（全透明） |
+| 浮窗页布局是否正常（CI 的 WebView） | **不能** | #123 `#petRoot/#petStage` 均 0×0；`CSS.supports('inset','0')=false`、UA `Chrome/83.0.4103.120`；主界面 `#puppet` 85×196 正常 |
 | TTS 引擎可用（能合成） | **不能** | `available()=False`（`queryIntentServices(TTS_SERVICE)` 为空） |
 | 真机可闻 | **不能** | 无引擎 + `-no-audio`，无 AudioTrack、无输出设备 |
 | 拔耳机后立即停读的行为闭环 | **不能** | CI 只能证明 receiver 注册；物理拔插必须真机 |
@@ -340,6 +428,7 @@ emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072
 
 **P0（已完成，云端）**
 
+0. **[需授权 · 产品代码] 修浮窗页 `inset` 兼容**：`web/css/pet.css:21,28` 的 `inset: 0` → `top:0; right:0; bottom:0; left:0`（CI 的 WebView 83 不支持 `inset` 简写，导致页面 0×0）。这是 §3.6 已验证的根因；本轮按约束**未改产品代码**，修复需另行授权。修完这 3 条像素断言应自然转绿，断言/阈值不动。可选替代：CI 换 WebView ≥ 87 的镜像。
 1. **[云端] `4c7b557`**：noisy 三态 + 依赖前置 + logcat 采集窗口，验收 run #120。
 2. **[云端] 下次复跑用**：`gh workflow run android-ci.yml --ref docs/audio-verifiability`，确认 noisy 仍为 `PASS`、chat 仍 `11/11`；float 的 3 条像素红按 §3 保留。
 
@@ -352,7 +441,7 @@ emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072
 **P2（可云端，补齐证据链；不替换现有断言）**
 
 6. **[云端] 带 TTS 引擎的镜像上做信号链探针（路径 A）**：换 `google_apis` 镜像或预装引擎，断言 `available()==True`、`speak()==True`、`dumpsys audio` / `media.audio_flinger` 出现 active track。**不要移除 `-no-audio`**：它只能把问题缩到“输出设备”一段，仍不证明可闻。
-7. **[云端] 用 CDP `Page.captureScreenshot` 补桌宠 WebView 的像素证据**：绕开 `screencap`/SurfaceFlinger，统计非透明像素，用来分层判定 §3.4 的“推断”；这是新增证据，屏幕级三条断言保持原样。
+7. **[云端·已完成] 用 CDP `Page.captureScreenshot` + canvas 读回补桌宠 WebView 的像素证据**：已接入 `[FLOAT-PROBE]`（`627b26a`/`adfa963`/`db544ff`，验收 #121–#123）。结论见 §3.6：**不是 screencap 盲，而是页面 0×0 布局**；两条替代取图源实测同样为空，因此**没有替换**三条屏幕级断言。
 8. **[云端] “全程静音”断言与浮窗发声的冲突**：`emulator_float_check.py` 末尾的“全程静音”当前 PASS（浮窗流程未触发 TTS）；一旦浮窗真的发声，它会与“浮窗有声”冲突。需单独立项决定作用域，**不允许静默删掉或放宽**。
 
 ### 4.4 明确不建议做的事
@@ -385,6 +474,11 @@ git diff 2163963c4330b7459132a00c1415c6301da960b4 HEAD -- scripts/emulator_float
 # 5) P0 修复后的云端复跑（#120 就是这条）
 gh workflow run android-ci.yml --ref docs/audio-verifiability
 gh run view 42146247414 --log | grep -E "NOISY-|NoisyGuard 注册验收|CHAT-SUMMARY|FLOAT-SUMMARY|FLOAT-FAIL"
+
+# 6) 三路取图取证（#121–#123，§3.6）
+gh run view 42148539464 --log | grep -E "FLOAT-PROBE|FLOAT-FAIL|FLOAT-SUMMARY"
+gh run view 42149633564 --log | grep -E "FLOAT-PROBE"
+gh run view 42150649869 --log | grep -E "FLOAT-PROBE"
 ```
 
 本地复现（可选，需要同规格 AVD，当前不主动启动）：
@@ -394,7 +488,7 @@ gh run view 42146247414 --log | grep -E "NOISY-|NoisyGuard 注册验收|CHAT-SUM
 # emulator -avd <name> -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072 -no-audio
 adb install -r app-debug.apk
 adb shell am start -n com.xiaoman.treehole/.MainActivity --ez autostart_float true -f 0x20000000
-python scripts/emulator_float_check.py   # 预期同样 3 条 [FLOAT-FAIL]，diff=0px
+python scripts/emulator_float_check.py   # 预期同样 3 条 [FLOAT-FAIL]；另见 [FLOAT-PROBE] 三路取证
 ```
 
 ---
@@ -402,7 +496,8 @@ python scripts/emulator_float_check.py   # 预期同样 3 条 [FLOAT-FAIL]，dif
 ## 6. 约束与声明
 
 - 本轮未改产品代码、未改测试断言、未放宽阈值、未加 skip/xfail。
-- 本轮只改 `scripts/emulator_noisy_check.py` 与 `.github/workflows/android-ci.yml`（`4c7b557`）：引入的是“取证失败→SKIP（无法判定）”三态，不是把产品断言 skip 掉；三条像素断言仍是硬 FAIL。
-- 未移除 `-no-audio`，未新增 AVD 静音豁免。
-- 脚本与文档分两个 commit（`4c7b557` CI 修复、本次文档），都推在同一分支 `docs/audio-verifiability`；未 force push、未动他人分支。
-- 交付物：本文档 + `scripts/emulator_noisy_check.py` / `.github/workflows/android-ci.yml` 的取证层修复。
+- 2026-11-06 取证轮（#121–#123）：只改 `scripts/emulator_float_check.py` 与 `scripts/android_cdp.py`（新增 `[FLOAT-PROBE]` 三路取证：screencap / CDP `Page.captureScreenshot` / canvas `getImageData`），**三条像素断言的代码、`PET_MIN_DIFF=6000` 与判定式均未改**。
+- 取证结论：不是 screencap 盲，也不是 Live2D 没画，而是 CI 的 WebView 83 不解析 `inset:0` → 浮窗页 0×0 → 屏幕确实不可见（§3.6）。因此**没有把断言换成 CDP/canvas 源**：CDP 实测同样 0px，canvas alpha 判定会让断言假绿。`web/css/pet.css` 的修复属产品代码，按约束未动，已列入 §4.3 P0-0 待授权。
+- 本轮未移除 `-no-audio`，未新增 AVD 静音豁免。
+- commit 划分：取证脚本 `627b26a` / `adfa963` / `db544ff`；文档（本次）。都推在同一分支 `docs/audio-verifiability`；未 force push、未动他人分支。
+- 交付物：本文档 + `scripts/android_cdp.py`（新增 `screenshot()`）/ `scripts/emulator_float_check.py`（新增 `[FLOAT-PROBE]` 取证与对照组）。
