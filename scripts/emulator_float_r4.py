@@ -936,6 +936,40 @@ def logcat_summary():
     return {"fatal": fatal[-5:], "petProbes": pet[-12:], "scannedLines": len(lines)}
 
 
+def anr_evidence():
+    """采集 ANR 证据：系统 ANR 记录 / 窗口状态 / 最近 logcat 关键行。
+
+    只取证、不改判据；任何一步失败都记进 queries，不抛异常。
+    R5 曾在一张浮窗截图里看到系统 ANR 对话框，因此把证据固化进 JSON。
+    """
+    out = {"queries": {}, "matches": {}, "anrDetected": False}
+
+    def run(label, cmd, timeout=40):
+        try:
+            rc, txt = sh(cmd, timeout=timeout)
+            out["queries"][label] = {"rc": rc, "bytes": len(txt or "")}
+            return txt or ""
+        except Exception as exc:
+            out["queries"][label] = {"error": str(exc)[:120]}
+            return ""
+
+    anr_dump = run("dumpsys_activity_anr", "adb shell dumpsys activity anr")
+    window = run("dumpsys_window", "adb shell dumpsys window windows")
+    log_lines = run("logcat_recent", "adb logcat -d -v brief -t 4000")
+    matches = {
+        "anr_dump": [ln.strip()[:240] for ln in anr_dump.splitlines()
+                     if ("ANR" in ln or PKG in ln)][:12],
+        "window": [ln.strip()[:240] for ln in window.splitlines()
+                   if ("Not Responding" in ln or "ANR" in ln)][:8],
+        "logcat": [ln.strip()[:240] for ln in log_lines.splitlines()
+                   if ("ANR in" in ln or "am_anr" in ln or "Input dispatching timed out" in ln
+                       or "Application Not Responding" in ln)][:12],
+    }
+    out["matches"] = {k: v for k, v in matches.items() if v}
+    out["anrDetected"] = bool(out["matches"])
+    return out
+
+
 def run_preset(name, seconds, out_dir):
     """单预设全流程：写 localStorage → 拉起桌宠 → HOME → CDP 探针 → 采样 → 判据。"""
     rec = {"name": name, "preset": PRESETS[name], "checks": {}, "reasons": [],
@@ -973,6 +1007,9 @@ def run_preset(name, seconds, out_dir):
         rec["gaps"] = gaps
         rec["probeReinjects"] = reinj
         rec["logcat"] = logcat_summary()
+        rec["anr"] = anr_evidence()
+        if rec["anr"].get("anrDetected"):
+            rec["warnings"].append("检测到 ANR 证据（见 rec.anr.matches）")
 
         name_png = f"emulator_float_r4_{name}.png"
         ok_shot = shot(name_png)

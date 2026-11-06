@@ -22,6 +22,10 @@ on:
         description: "background 段秒数（默认 300）"
         required: false
         default: "300"
+      float_only:
+        description: "只跑浮窗探针（true 时跳过 idle/background 耗电段）"
+        required: false
+        default: "false"
 
 concurrency:
   group: avd-r4-${{ github.ref }}
@@ -133,7 +137,7 @@ jobs:
             for i in 1 2 3; do adb shell pidof com.xiaoman.treehole && { echo "process alive (attempt $i)"; break; }; echo "attempt $i: relaunching"; adb shell am start -n com.xiaoman.treehole/.MainActivity || true; sleep 10; done
             adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found after 3 attempts — crash evidence follows"; adb logcat -d | rg -i "xiaoman|FATAL|AndroidRuntime|lowmemorykiller" | tail -100 || adb logcat -d | tail -200 || true; exit 1; }
             mkdir -p artifacts/avd
-            IDLE="${{ inputs.idle_seconds }}"; BG="${{ inputs.bg_seconds }}"; python3 scripts/emulator_power_r4.py --idle-seconds "${IDLE:-60}" --bg-seconds "${BG:-300}" --out artifacts/avd/power_r4.json || echo 1 > /tmp/r4_power_failed
+            IDLE="${{ inputs.idle_seconds }}"; BG="${{ inputs.bg_seconds }}"; if [ "${{ inputs.float_only }}" != "true" ]; then python3 scripts/emulator_power_r4.py --idle-seconds "${IDLE:-60}" --bg-seconds "${BG:-300}" --out artifacts/avd/power_r4.json || echo 1 > /tmp/r4_power_failed; fi
             if [ -f scripts/emulator_float_r4.py ]; then python3 scripts/emulator_float_r4.py || echo 1 > /tmp/r4_float_failed; fi
             [ ! -f /tmp/r4_power_failed ] || { echo "ERROR: power r4 判据未全部成立（见 artifacts/avd/power_r4.json 与 power_r4_*.txt）"; exit 1; }
             if [ -f /tmp/r4_float_failed ]; then echo "WARN: emulator_float_r4.py 非零退出（不影响本 job 的耗电判据）"; fi
@@ -152,7 +156,9 @@ jobs:
 
       - name: Upload logcat on failure
         if: failure()
-        run: adb logcat -d > logcat_avd_r4.txt || true
+        # adb logcat -d 在 emulator-runner 里偶发不退出（R4/R5 两次 run 卡住后被取消），加超时兜底
+        run: timeout 20s adb logcat -d > logcat_avd_r4.txt || true
+        timeout-minutes: 1
 
       - name: Upload logcat artifact
         if: failure()

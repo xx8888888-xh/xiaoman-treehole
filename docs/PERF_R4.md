@@ -182,7 +182,7 @@
 - `stage.js` / `heartbeat.js` 未触碰，w22 的 lint 债务（0/0）未回退；`ci.yml` 的 `compileall` 在本轮 commit 上通过。
 - 性能回归：1x `firstSendMs` 186ms（r3 174ms，+12ms，在 3 次采样的噪声带内）；4x 415ms（r3 458ms，-43ms）；开场白 1250ms（r3 1241ms，+9ms）。堆增长 +0.06MB（r3 +0.09MB）。
 - 回退风险：两个 AVD 探针的阈值按 60fps 真机标定，在 2 核 swiftshader 上必然红；它们只用于测数字，不建议接入阻断式 CI。若后续接入，应把“数据完整”作为 job 成败，把“目标是否达到”留在 JSON/报告里。
-- 第一轮 AVD run `42239553338` 因探针 WebSocket 20s 假掉线导致 idle_default/background 未采到，已废弃；修复（`android_cdp` ping off + 重连重注入）后重跑为 `42243175947`。
+- 第一轮 AVD run `42239553338` 因探针 WebSocket 20s 假掉线导致 idle_default/background 未采到，已废弃；修复（`android_cdp` ping off + 重连重注入）后重跑为 `42243175947`。该 run 的两段采样与 `power_r4.json`/`float_r4.json`/截图均完整上传，但最后一步 `Upload logcat on failure` 长时间无响应，run 最终状态为 **cancelled**（不是采样失败）。
 
 ## 8. 复现命令
 
