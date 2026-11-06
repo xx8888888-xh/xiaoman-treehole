@@ -8,6 +8,7 @@
  *  - reminderDecision / recordNotice：提醒节流（全局冷却 + 单条冷却 + 每小时上限）
  *  - suppressByPresence：主 App 在前台时让主程序负责提醒，避免双弹
  *  - clampPosition / bubbleLayout：拖动边界与气泡卡片定位（像素）
+ *  - clipRect：桌宠画布的取景 clip（可见区 + 抗锯齿余量）
  *  - interactionFor：点头部/身体 → 表情、动作与一句短话
  * 所有函数无副作用、不读写 localStorage（持久化由调用方负责）。
  * ============================================================ */
@@ -141,6 +142,38 @@
   }
 
   /**
+   * 取景 clip：在画布后备像素坐标里框出"窗口真正看得见的一段"，四边各留 margin。
+   * 可见矩形按 floor/ceil 向外取整后再加 margin，保证 clip 完整包含可见区；
+   * margin 只需覆盖抗锯齿与取整误差，越大约会为看不见的像素白付光栅成本。
+   * @param box {modelW,modelH, canvasW,canvasH, stageW,stageH, canvasTop, margin}
+   */
+  function clipRect(box) {
+    const b = box || {};
+    const mw = num(b.modelW);
+    const mh = num(b.modelH);
+    const cw = num(b.canvasW);
+    const ch = num(b.canvasH);
+    const sw = num(b.stageW);
+    const sh = num(b.stageH);
+    if (!mw || !mh || !cw || !ch || !sw || !sh) return { x: 0, y: 0, w: mw, h: mh };
+    const top = num(b.canvasTop, 8);
+    const margin = Math.max(0, num(b.margin, 2));
+    const k = mh / ch;                               // 后备像素 / CSS 像素
+    const vw = Math.min(cw, sw);                     // 可见宽度（CSS）
+    const vh = Math.min(ch, Math.max(0, sh - top));  // 可见高度（CSS）
+    const left = (cw - vw) / 2;                      // 画布在 stage 内水平居中
+    const x = Math.max(0, Math.floor(left * k) - margin);
+    const right = Math.ceil((left + vw) * k) + margin;
+    const y = 0;                                     // 画布顶边已在 stage 内，y=0 起均可见
+    return {
+      x: x,
+      y: y,
+      w: Math.min(mw - x, right - x),
+      h: Math.min(mh - y, Math.ceil(vh * k) + margin),
+    };
+  }
+
+  /**
    * 气泡卡片定位：优先放在宠物上方，空间不足放下方；水平居中对齐宠物并钳制。
    * @param pet    {x,y,width,height} 像素
    * @param screen {width,height} 像素
@@ -190,7 +223,7 @@
     KEYS, TAP_SLOP_PX, DOUBLE_MS, LONG_MS, NOTICE,
     appearance, gesture, isDoubleTap, suppressByPresence,
     reminderDecision, recordNotice, bubbleText,
-    clampPosition, bubbleLayout, interactionFor,
+    clampPosition, bubbleLayout, clipRect, interactionFor,
   };
 
   root.PetCore = api;
