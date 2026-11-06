@@ -45,7 +45,9 @@ CLI：python3 scripts/emulator_float_r4.py --seconds 60 --rounds 5 \
 退出码：0=所有轮次都拿到数据且三档/预设判据成立；1=有轮次失败（已得数据仍写 JSON）。
 """
 import argparse
+import base64
 import json
+import math
 import os
 import re
 import shutil
@@ -65,6 +67,18 @@ MAIN_CDP_PORT = 9223        # 主界面 index.html（写 localStorage 用）
 PET_CDP_PORT = 9225         # 桌宠 pet.html（沿用 scripts/emulator_float_check.py 的约定）
 APPEARANCE_KEY = "xiaoman_appearance_v1"
 PET_W_DP, PET_H_DP = 140, 180
+
+# ---- 尺寸 × DPI 几何矩阵（R6 canvas 后备缩到可见区后的回归） ----------------
+GEOM_SIZES = ((140, 180), (180, 180), (240, 160))   # 窗口 CSS 尺寸（dp）
+GEOM_DPRS = (2.0, 2.75, 3.0)                         # deviceScaleFactor
+GEOM_SETTLE_S = 0.35                                 # resize debounce 120ms + 重绘余量
+GEOM_ALPHA_MIN = 16                                  # 与 emulator_float_check 同口径
+GEOM_BG_DIFF = 6                                     # 截图无 alpha 时的背景差分阈值
+GEOM_CONTENT_MIN_RATIO = 0.02                        # 可见区内容占比下限（判整块空白）
+GEOM_EDGE_OFFCENTER = 0.20                           # 左右自然透明边：内容偏中心阈值
+GEOM_MIN_CONTENT_WIDTH = 0.30                        # 内容 bbox 至少占可见区宽度的比例
+GEOM_COVER_TOL_PX = 1.0                              # 后备覆盖可见区的取整容差
+GEOM_ASPECT_TOL = 0.02                               # 后备/CSS 宽高比偏差上限（2%）
 
 PRESETS = {
     "minimal": {"preset": "minimal", "motion": False, "font": "large",
@@ -410,6 +424,65 @@ ANCHOR_JS = r"""
 })()
 """
 
+# ---- 尺寸 × DPI 几何矩阵：读画布/后备/可见区/变换，并与 PetCore 的期望值对照 ----
+# 期望值按 pet.js logicalBox() + PetCore.backingRect() 的同参数重算：
+# cssH=stage.clientHeight*3、dpr 上限 2、canvasTop=8、margin=2。
+GEOM_JS = r"""
+(function () {
+  var stage = document.getElementById("petStage");
+  var c = document.getElementById("petCanvas");
+  if (!stage || !c) return { ok: false, reason: "no-stage-or-canvas" };
+  var mf = window.PUPPET_MANIFEST || {};
+  var art = mf.canvas || {};
+  var artW = +art.width || 0, artH = +art.height || 0;
+  var cssH = (stage.clientHeight * 3) || 720;
+  var dprCap = Math.min(2, window.devicePixelRatio || 1);
+  var H = Math.max(240, Math.min(1600, Math.round(cssH * dprCap)));
+  var W = Math.max(120, Math.round(H * artW / (artH || 1)));
+  var cssW = cssH * W / H;
+  var k = H / cssH;                       // 后备像素 / CSS 像素
+  var exp = null;
+  try {
+    if (window.PetCore && PetCore.backingRect) {
+      exp = PetCore.backingRect({
+        fullW: W, fullH: H, canvasCssW: cssW, canvasCssH: cssH,
+        windowCssW: stage.clientWidth, windowCssH: stage.clientHeight,
+        canvasTop: 8, dpr: k, margin: 2
+      });
+    }
+  } catch (e) { /* 期望值失败由 Python 侧记 error */ }
+  var r = c.getBoundingClientRect();
+  var t = null;
+  try {
+    var ctx = c.getContext("2d");
+    var m = ctx.getTransform();
+    t = { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e, f: m.f };
+  } catch (e) { /* 忽略 */ }
+  return {
+    ok: true,
+    innerW: window.innerWidth, innerH: window.innerHeight,
+    dpr: window.devicePixelRatio || 0,
+    stage: { w: stage.clientWidth, h: stage.clientHeight },
+    logical: { W: W, H: H, cssW: cssW, cssH: cssH, k: k, artW: artW, artH: artH },
+    expected: exp,
+    canvas: { w: c.width, h: c.height, clientW: c.clientWidth, clientH: c.clientHeight },
+    css: { left: r.left, top: r.top, width: r.width, height: r.height },
+    transform: t
+  };
+})()
+"""
+
+CANVAS_PNG_JS = r"""
+(() => {
+  const c = document.getElementById('petCanvas');
+  if (!c) return '';
+  try {
+    const url = c.toDataURL('image/png');
+    return url.length > 8000000 ? '' : url;
+  } catch (e) { return ''; }
+})()
+"""
+
 # ---- 基础命令（口径同 emulator_float_check.py，此处自带实现避免导入副作用）----
 def sh(cmd, timeout=60):
     """跑 adb/host 命令，返回 (rc, stdout+stderr)。"""
@@ -675,6 +748,459 @@ def attach_again(cdp):
     except Exception:
         pass
     return cdp.attach(url_filter="pet.html", timeout=30)
+
+
+# ---- 尺寸 × DPI 几何矩阵 -----------------------------------------------------
+def geometry_groups():
+    """3 窗口尺寸 × 3 deviceScaleFactor = 9 组（尺寸外层、DPI 内层，顺序固定）。"""
+    return [{"size": [int(w), int(h)], "dpr": float(d)}
+            for w, h in GEOM_SIZES for d in GEOM_DPRS]
+
+
+def geom_shot_name(w, h, dpr):
+    """截图命名：geom_<w>x<h>_dpr<dpr>.png（dpr 保留 Python 浮点字面量）。"""
+    return f"geom_{int(w)}x{int(h)}_dpr{float(dpr)}.png"
+
+
+def _geom_eval(cdp, timeout=10):
+    """矩阵专用 eval：断线自动重连（sample() 的 fast_eval 不重连是为了保时间线）。"""
+    try:
+        val = cdp.eval(GEOM_JS, timeout=timeout)
+        return (val, None) if isinstance(val, dict) and val.get("ok") else (None, str(val)[:160])
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:150]}"
+
+
+def geom_metrics(data, expect_dpr=None):
+    """把一次 GEOM_JS 读数换算成断言：后备覆盖可见区 / 宽高比一致 / 无 0 负尺寸 / DPI 生效。"""
+    canvas = data.get("canvas") or {}
+    css = data.get("css") or {}
+    exp = data.get("expected") or {}
+    tr = data.get("transform") or {}
+    vis = exp.get("visible") or {}
+    cw, ch = _num(canvas.get("w")), _num(canvas.get("h"))
+    css_w, css_h = _num(css.get("width")), _num(css.get("height"))
+    kx, ky = _num(tr.get("a")), _num(tr.get("d"))
+    bx = -_num(tr.get("e")) / kx if kx else 0.0
+    by = -_num(tr.get("f")) / ky if ky else 0.0
+    problems = []
+
+    positive = bool(cw > 0 and ch > 0 and css_w > 0 and css_h > 0
+                    and _num(vis.get("w")) > 0 and _num(vis.get("h")) > 0)
+    if not positive:
+        problems.append(f"尺寸非正：canvas={cw}x{ch} css={css_w}x{css_h} "
+                        f"visible={vis.get('w')}x{vis.get('h')}")
+
+    cover = bool(positive
+                 and bx <= _num(vis.get("x")) + GEOM_COVER_TOL_PX
+                 and by <= _num(vis.get("y")) + GEOM_COVER_TOL_PX
+                 and bx + cw >= _num(vis.get("x")) + _num(vis.get("w")) - GEOM_COVER_TOL_PX
+                 and by + ch >= _num(vis.get("y")) + _num(vis.get("h")) - GEOM_COVER_TOL_PX)
+    if not cover:
+        problems.append(f"后备未覆盖可见区：backing=({bx:.1f},{by:.1f},{cw}x{ch}) "
+                        f"visible=({vis.get('x')},{vis.get('y')},{vis.get('w')},{vis.get('h')})")
+
+    stretch = None
+    aspect_ok = False
+    css_scale = {}
+    projection_ok = False
+    if positive:
+        stretch = round((cw / ch) / (css_w / css_h), 4)
+        aspect_ok = abs(stretch - 1) <= GEOM_ASPECT_TOL
+        css_scale = {"x": round(cw / css_w, 4), "y": round(ch / css_h, 4),
+                     "k": _num(exp.get("k"))}
+        k = css_scale["k"]
+        projection_ok = bool(k > 0
+                             and abs(css_scale["x"] / k - 1) <= GEOM_ASPECT_TOL
+                             and abs(css_scale["y"] / k - 1) <= GEOM_ASPECT_TOL)
+        if not aspect_ok:
+            problems.append(f"宽高比不一致（拉伸）：canvas={stretch} css="
+                            f"{round((css_w / css_h) / 1.0, 4)}")
+        if not projection_ok:
+            problems.append(f"CSS 盒未按 1:1 投影后备：scale={css_scale}")
+    transform_ok = bool(kx and ky and abs(kx - 1) <= GEOM_ASPECT_TOL
+                        and abs(ky - 1) <= GEOM_ASPECT_TOL
+                        and abs(_num(tr.get("b"))) <= 0.01 and abs(_num(tr.get("c"))) <= 0.01)
+    if not transform_ok:
+        problems.append(f"ctx 变换含缩放/错切：{tr}")
+
+    matches = bool(positive and abs(cw - _num(exp.get("w"))) <= 2
+                   and abs(ch - _num(exp.get("h"))) <= 2
+                   and abs(bx - _num(exp.get("x"))) <= 2
+                   and abs(by - _num(exp.get("y"))) <= 2)
+    if not matches:
+        problems.append(f"后备与 PetCore.backingRect 期望不一致：actual=({bx:.1f},{by:.1f},"
+                        f"{cw}x{ch}) expected=({exp.get('x')},{exp.get('y')},"
+                        f"{exp.get('w')}x{exp.get('h')})")
+
+    dpr_applied = None
+    if expect_dpr is not None:
+        dpr_applied = abs(_num(data.get("dpr")) - float(expect_dpr)) <= 0.01
+        if not dpr_applied:
+            problems.append(f"deviceScaleFactor 未生效：{data.get('dpr')} != {expect_dpr}")
+
+    return {
+        "canvas": {"w": int(cw), "h": int(ch),
+                   "clientW": _num(canvas.get("clientW")), "clientH": _num(canvas.get("clientH"))},
+        "css": {"left": round(_num(css.get("left")), 2), "top": round(_num(css.get("top")), 2),
+                 "width": round(css_w, 2), "height": round(css_h, 2),
+                 "scale": css_scale},
+        "backing": {"x": round(bx, 2), "y": round(by, 2), "w": int(cw), "h": int(ch),
+                    "fullW": int(_num(exp.get("fullW"))), "fullH": int(_num(exp.get("fullH"))),
+                    "matchesExpected": matches},
+        "visible": {"x": round(_num(vis.get("x")), 2), "y": round(_num(vis.get("y")), 2),
+                    "width": round(_num(vis.get("w")), 2), "height": round(_num(vis.get("h")), 2),
+                    "inBacking": {"x": round(_num(vis.get("x")) - bx, 2),
+                                  "y": round(_num(vis.get("y")) - by, 2),
+                                  "width": round(_num(vis.get("w")), 2),
+                                  "height": round(_num(vis.get("h")), 2)}},
+        "transform": {k: (round(v, 4) if isinstance(v, (int, float)) else v)
+                      for k, v in tr.items()} if tr else None,
+        "stretchRatio": stretch,
+        "checks": {"positive": positive, "cover": cover, "aspect": aspect_ok,
+                   "cssProjection": projection_ok, "transformUnit": transform_ok,
+                   "backingMatches": matches, "dprApplied": dpr_applied},
+        "ok": bool(positive and cover and aspect_ok and projection_ok
+                   and transform_ok and matches
+                   and (dpr_applied is not False)),
+        "problems": problems,
+        "viewport": {"w": _num(data.get("innerW")), "h": _num(data.get("innerH")),
+                     "dpr": data.get("dpr")},
+        "logical": data.get("logical") or {},
+    }
+
+
+def _num(v):
+    try:
+        n = float(v)
+        return n if math.isfinite(n) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def visible_css_rect(data):
+    """画布 CSS 盒 ∩ 视口 = 木偶真正可见的 CSS 区域（截图取景用）。"""
+    css = data.get("css") or {}
+    iw, ih = _num(data.get("innerW")), _num(data.get("innerH"))
+    left = max(0.0, _num(css.get("left")))
+    top = max(0.0, _num(css.get("top")))
+    right = min(iw, _num(css.get("left")) + _num(css.get("width")))
+    bottom = min(ih, _num(css.get("top")) + _num(css.get("height")))
+    if right <= left or bottom <= top:
+        return None
+    return {"left": left, "top": top, "width": right - left, "height": bottom - top}
+
+
+def blank_edges_png(path, region):
+    """PIL 检查截图可见区四边：整条边 100% 透明（或与背景同色）→ 空白边。
+
+    透明页按 alpha>16 计；Page.captureScreenshot 若出白底/黑底，退回
+    「与左上角背景色的灰度差」同一口径（emulator_float_check.content_mask）。
+    左右两条边允许自然透明（立绘比可见窗窄），只有内容 bbox 明显偏心/过窄
+    时才把该侧计为空白边；上下两条边透明即判红。
+    """
+    from PIL import Image, ImageChops
+
+    try:
+        im = Image.open(path)
+    except Exception as e:
+        return {"ok": False, "error": f"open: {str(e)[:120]}"}
+    W, H = im.size
+    x0 = max(0, min(W - 1, int(round(_num(region.get("left"))))))
+    y0 = max(0, min(H - 1, int(round(_num(region.get("top"))))))
+    x1 = max(0, min(W, int(round(_num(region.get("left")) + _num(region.get("width"))))))
+    y1 = max(0, min(H, int(round(_num(region.get("top")) + _num(region.get("height"))))))
+    if x1 <= x0 or y1 <= y0:
+        return {"ok": False, "error": f"region 非法：{region} image={W}x{H}"}
+
+    rgba = im.convert("RGBA")
+    has_alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+    if has_alpha:
+        alpha = rgba.getchannel("A")
+        if alpha.getextrema()[0] > GEOM_ALPHA_MIN:
+            has_alpha = False                      # 通体不透明 → 没有可用的 alpha 通道
+    if has_alpha:
+        mask = rgba.getchannel("A").point(lambda v: 255 if v > GEOM_ALPHA_MIN else 0)
+        mode = "alpha"
+        bg = None
+    else:
+        rgb = rgba.convert("RGB")
+        bg = rgb.getpixel((0, 0))
+        diff = ImageChops.difference(rgb, Image.new("RGB", rgb.size, bg)).convert("L")
+        mask = diff.point(lambda v: 255 if v > GEOM_BG_DIFF else 0)
+        mode = "bg-diff"
+
+    crop = mask.crop((x0, y0, x1, y1))
+    w, h = crop.size
+    total = w * h
+    content = crop.histogram()[255]
+    ratio = round(content / float(total), 4) if total else 0.0
+    edge = {
+        "top": crop.crop((0, 0, w, 1)).histogram()[255],
+        "bottom": crop.crop((0, h - 1, w, h)).histogram()[255],
+        "left": crop.crop((0, 0, 1, h)).histogram()[255],
+        "right": crop.crop((w - 1, 0, w, h)).histogram()[255],
+    }
+    edge_len = {"top": w, "bottom": w, "left": h, "right": h}
+    raw = [k for k, n in edge.items() if n == 0]
+    bbox = crop.getbbox()
+    margins = {"left": 0, "right": 0, "top": 0, "bottom": 0}
+    fail = []
+    if not bbox or ratio < GEOM_CONTENT_MIN_RATIO:
+        fail = ["top", "bottom", "left", "right"]
+    else:
+        bx0, by0, bx1, by1 = bbox
+        margins = {"left": bx0, "right": w - bx1, "top": by0, "bottom": h - by1}
+        if edge["top"] == 0:
+            fail.append("top")
+        if edge["bottom"] == 0:
+            fail.append("bottom")
+        bw = bx1 - bx0
+        off = (abs(margins["left"] - margins["right"]) > max(8, GEOM_EDGE_OFFCENTER * w)
+               or bw < GEOM_MIN_CONTENT_WIDTH * w)
+        if edge["left"] == 0 and off:
+            fail.append("left")
+        if edge["right"] == 0 and off:
+            fail.append("right")
+    def px(x, y):
+        return 1 if crop.getpixel((x, y)) else 0
+    samples = {  # 四角 + 四边中点（诊断用，1=可见区内有内容）
+        "tl": px(0, 0), "tr": px(w - 1, 0),
+        "bl": px(0, h - 1), "br": px(w - 1, h - 1),
+        "topMid": px(w // 2, 0), "bottomMid": px(w // 2, h - 1),
+        "leftMid": px(0, h // 2), "rightMid": px(w - 1, h // 2),
+    }
+    return {
+        "ok": not fail,
+        "mode": mode,
+        "background": list(bg) if bg else None,
+        "image": {"w": W, "h": H},
+        "region": {"left": x0, "top": y0, "width": w, "height": h},
+        "contentPx": content,
+        "contentRatio": ratio,
+        "contentBBox": list(bbox) if bbox else None,
+        "margins": margins,
+        "edgeOpaque": edge,
+        "edgeLength": edge_len,
+        "edgeSamples": samples,
+        "blankEdges": fail,
+        "blankEdgesRaw": raw,
+    }
+
+
+def capture_geom_png(cdp, path):
+    """几何矩阵截图：Page.captureScreenshot 优先，失败退回 canvas.toDataURL。
+    返回 (ok, source, detail)；source 决定可见区在图片里的坐标口径。"""
+    detail = ""
+    try:
+        data = cdp.screenshot(path, timeout=20)
+        if data and len(data) > 100:
+            return True, "Page.captureScreenshot", f"{len(data)}B"
+        detail = "Page.captureScreenshot 空"
+    except Exception as e:
+        detail = f"Page.captureScreenshot 不支持: {str(e)[:90]}"
+    try:
+        url = cdp.eval(CANVAS_PNG_JS, timeout=20) or ""
+        if isinstance(url, str) and url.startswith("data:image/png;base64,"):
+            raw = base64.b64decode(url.split(",", 1)[1])
+            if len(raw) > 100:
+                with open(path, "wb") as f:
+                    f.write(raw)
+                return True, "canvas.toDataURL", f"{len(raw)}B | {detail}"
+        detail += " | canvas.toDataURL 空"
+    except Exception as e:
+        detail += f" | canvas 读回失败: {str(e)[:80]}"
+    return False, "", detail
+
+
+def _shot_region(data, source, image):
+    """截图里「可见区」的像素矩形：页截图按 CSS→图片缩放，canvas 图按后备坐标。"""
+    iw, ih = _num(image.get("w")), _num(image.get("h"))
+    if source == "canvas.toDataURL":
+        vis = ((geom_metrics(data).get("visible") or {}).get("inBacking") or {})
+        return {"left": _num(vis.get("x")), "top": _num(vis.get("y")),
+                "width": _num(vis.get("width")), "height": _num(vis.get("height"))}
+    rect = visible_css_rect(data)
+    vw, vh = _num(data.get("innerW")), _num(data.get("innerH"))
+    if not rect or vw <= 0 or vh <= 0:
+        return None
+    sx, sy = iw / vw, ih / vh
+    return {"left": rect["left"] * sx, "top": rect["top"] * sy,
+            "width": rect["width"] * sx, "height": rect["height"] * sy}
+
+
+def _restored_equal(before, after):
+    """clearDeviceMetricsOverride 后视口/画布是否回到矩阵前。"""
+    if not before or not after:
+        return False
+    bc, ac = before.get("canvas") or {}, after.get("canvas") or {}
+    return (abs(_num(before.get("innerW")) - _num(after.get("innerW"))) <= 2
+            and abs(_num(before.get("innerH")) - _num(after.get("innerH"))) <= 2
+            and abs(_num(before.get("dpr")) - _num(after.get("dpr"))) <= 0.01
+            and abs(_num(bc.get("w")) - _num(ac.get("w"))) <= 2
+            and abs(_num(bc.get("h")) - _num(ac.get("h"))) <= 2)
+
+
+def geometry_matrix_summary(groups, supported=True, restored=None, notes=None):
+    """矩阵汇总：ok 只由「组是否 ok」和「是否支持/恢复」决定。"""
+    failed = [{"size": g.get("size"), "dpr": g.get("dpr"),
+               "reasons": g.get("problems") or ([g.get("error")] if g.get("error") else [])}
+              for g in groups if not g.get("ok")]
+    blank = [{"size": g.get("size"), "dpr": g.get("dpr"), "blankEdges": g.get("blankEdges")}
+             for g in groups if g.get("blankEdges")]
+    stretch = [{"size": g.get("size"), "dpr": g.get("dpr"),
+                "stretchRatio": g.get("stretchRatio")}
+               for g in groups if (g.get("checks") or {}).get("aspect") is False]
+    shots = sum(1 for g in groups if (g.get("screenshot") or {}).get("ok"))
+    planned = len(geometry_groups())
+    return {
+        "enabled": True,
+        "supported": bool(supported),
+        "restored": restored,
+        "sizes": [list(s) for s in GEOM_SIZES],
+        "dprs": [float(d) for d in GEOM_DPRS],
+        "groups": planned,
+        "groupsExecuted": len(groups),
+        "ok": bool(supported and restored is not False and len(groups) == planned
+                   and not failed),
+        "failed": failed,
+        "blankEdgeGroups": blank,
+        "stretchFailedGroups": stretch,
+        "screenshots": shots,
+        "warnings": list(notes or []),
+    }
+
+
+def geometry_matrix(cdp, round_no, out_dir):
+    """每轮 minimal 采样后跑 3×3 几何矩阵；结束必须 clear 覆盖，避免污染主采样。"""
+    groups, notes = [], []
+    supported = True
+    before, be = _geom_eval(cdp)
+    if before is None:
+        notes.append(f"矩阵前读不到几何：{be}")
+    for spec in geometry_groups():
+        w, h = spec["size"]
+        dpr = spec["dpr"]
+        g = {"round": round_no, "size": [w, h], "dpr": dpr, "ok": False,
+             "blankEdges": [], "stretchRatio": None}
+        try:
+            cdp._send("Emulation.setDeviceMetricsOverride",
+                      {"width": w, "height": h, "deviceScaleFactor": dpr,
+                       "mobile": False}, timeout=12)
+            time.sleep(GEOM_SETTLE_S)          # 覆盖 resize 的 120ms debounce
+            data, err = _geom_eval(cdp)
+            if data is None:
+                raise RuntimeError(f"几何读数失败：{err}")
+            m = geom_metrics(data, expect_dpr=dpr)
+            g.update(m)
+            png = os.path.join(out_dir, geom_shot_name(w, h, dpr))
+            ok_shot, source, detail = capture_geom_png(cdp, png)
+            g["screenshot"] = {"path": geom_shot_name(w, h, dpr), "ok": ok_shot,
+                               "source": source, "detail": detail}
+            blank_ok = None
+            if ok_shot:
+                try:
+                    from PIL import Image
+                    iw, ih = Image.open(png).size
+                except Exception as e:
+                    g["screenshot"]["ok"] = False
+                    g["screenshot"]["detail"] = f"PIL 读图失败：{str(e)[:100]}"
+                else:
+                    g["screenshot"].update({"image": {"w": iw, "h": ih}})
+                    region = _shot_region(data, source, {"w": iw, "h": ih})
+                    if region:
+                        bl = blank_edges_png(png, region)
+                        g["blank"] = bl
+                        g["blankEdges"] = bl.get("blankEdges") or []
+                        blank_ok = bool(bl.get("ok"))
+                        if not bl.get("ok"):
+                            if bl.get("error"):
+                                g["problems"].append(f"空白边取证失败：{bl['error']}")
+                            else:
+                                g["problems"].append(
+                                    f"空白边：{','.join(g['blankEdges'])} "
+                                    f"(contentRatio={bl.get('contentRatio')})")
+                            blank_ok = False
+                    else:
+                        g["problems"].append("可见区映射为 0，无法做空白边检查")
+                        blank_ok = False
+            else:
+                g["blankUnverified"] = True
+                notes.append(f"{w}x{h}@dpr{dpr} 截图不可用：{detail}")
+            g["ok"] = bool(m["ok"] and blank_ok is not False)
+        except Exception as e:
+            msg = f"{type(e).__name__}: {str(e)[:170]}"
+            g["error"] = msg
+            g["problems"] = [msg]
+            low = msg.lower()
+            if "not found" in low or "unknown method" in low or "not supported" in low:
+                supported = False
+                notes.append("Emulation.setDeviceMetricsOverride 不被当前 WebView 支持")
+            groups.append(g)
+            if not supported:
+                break
+            continue
+        groups.append(g)
+    clear_err = None
+    try:
+        cdp._send("Emulation.clearDeviceMetricsOverride", {}, timeout=12)
+    except Exception as e:
+        clear_err = f"{type(e).__name__}: {str(e)[:150]}"
+        notes.append(f"恢复原始 metrics 失败：{clear_err}")
+    time.sleep(0.3)
+    after, ae = _geom_eval(cdp)
+    restored = _restored_equal(before, after)
+    if clear_err is None and not restored:
+        notes.append(f"clearDeviceMetricsOverride 后未回到矩阵前：{ae or ''}")
+    summary = geometry_matrix_summary(groups, supported, restored, notes)
+    summary["clearError"] = clear_err
+    summary["before"] = {"viewport": {"w": _num((before or {}).get("innerW")),
+                                      "h": _num((before or {}).get("innerH")),
+                                      "dpr": (before or {}).get("dpr")},
+                         "canvas": (before or {}).get("canvas")}
+    summary["after"] = {"viewport": {"w": _num((after or {}).get("innerW")),
+                                     "h": _num((after or {}).get("innerH")),
+                                     "dpr": (after or {}).get("dpr")},
+                        "canvas": (after or {}).get("canvas")}
+    return {"groups": groups, "summary": summary}
+
+
+def geometry_matrix_overview(rounds_all, enabled):
+    """跨轮顶层 JSON：每组附 round，汇总所有轮次的矩阵结论。"""
+    if not enabled:
+        return {"enabled": False, "ok": True, "groups": 0, "rounds": [],
+                "note": "已用 --no-size-matrix 关闭"}
+    groups, summaries = [], []
+    for rr in rounds_all:
+        for n, rec in (rr.get("presets") or {}).items():
+            if n != "minimal":
+                continue
+            for g in rec.get("geometryMatrix") or []:
+                groups.append(dict(g, round=rr.get("round"))
+                              if "round" not in g else g)
+            if rec.get("geometryMatrixSummary"):
+                summaries.append(dict(rec["geometryMatrixSummary"],
+                                      round=rr.get("round")))
+    failed = [{"round": g.get("round"), "size": g.get("size"), "dpr": g.get("dpr"),
+               "reasons": g.get("problems") or [g.get("error")]}
+              for g in groups if not g.get("ok")]
+    ok = bool(groups) and not failed and all(s.get("ok") for s in summaries)
+    return {
+        "enabled": True,
+        "ok": ok,
+        "groups": len(geometry_groups()),
+        "groupsExecuted": len(groups),
+        "failed": failed,
+        "blankEdgeGroups": [{"round": g.get("round"), "size": g.get("size"),
+                            "dpr": g.get("dpr"), "blankEdges": g.get("blankEdges")}
+                           for g in groups if g.get("blankEdges")],
+        "stretchFailedGroups": [{"round": g.get("round"), "size": g.get("size"),
+                                 "dpr": g.get("dpr"), "stretchRatio": g.get("stretchRatio")}
+                                for g in groups
+                                if (g.get("checks") or {}).get("aspect") is False],
+        "screenshots": sum(1 for g in groups if (g.get("screenshot") or {}).get("ok")),
+        "rounds": summaries,
+    }
 
 
 def sample(cdp, seconds):
@@ -1099,8 +1625,9 @@ def anr_evidence(round_no=None, preset=None, out_dir=None):
     return out
 
 
-def run_preset(name, seconds, out_dir, round_no=1):
-    """单预设全流程：写 localStorage → 拉起桌宠 → HOME → CDP 探针 → 采样 → 判据 → ANR 取证。"""
+def run_preset(name, seconds, out_dir, round_no=1, size_matrix=True):
+    """单预设全流程：写 localStorage → 拉起桌宠 → HOME → CDP 探针 → 采样 → 判据
+    →（minimal 采样后）尺寸×DPI 几何矩阵 → ANR 取证。"""
     rec = {"name": name, "round": round_no, "seconds": seconds,
            "preset": PRESETS[name], "checks": {}, "reasons": [],
            "warnings": [], "ok": False}
@@ -1136,6 +1663,34 @@ def run_preset(name, seconds, out_dir, round_no=1):
         rec.update(verdict)
         rec["gaps"] = gaps
         rec["probeReinjects"] = reinj
+        # 几何矩阵只放在 minimal 的 60s 采样之后：不进入 fill/raster 计数窗口，
+        # 结束前 clear 覆盖，default 预设/下一轮仍按原始窗口采样。
+        if size_matrix and name == "minimal":
+            try:
+                gm = geometry_matrix(cdp, round_no, out_dir)
+                rec["geometryMatrix"] = gm["groups"]
+                rec["geometryMatrixSummary"] = gm["summary"]
+                s = gm["summary"]
+                for g in gm["groups"]:
+                    if not g.get("ok"):
+                        print(f"[FLOAT-R4] geom FAIL round={round_no} "
+                              f"{g.get('size')}@dpr{g.get('dpr')} "
+                              f"{'; '.join(g.get('problems') or [str(g.get('error'))])}"[:240])
+                print(f"[FLOAT-R4] geometry-matrix round={round_no} ok={s.get('ok')} "
+                      f"{s.get('groupsExecuted')}/{s.get('groups')} "
+                      f"restored={s.get('restored')} shots={s.get('screenshots')}")
+                if not s.get("ok"):
+                    rec["reasons"].append(
+                        "尺寸×DPI 几何矩阵未通过："
+                        f"{len(s.get('failed') or [])} 组失败 / {s.get('groups')} 组")
+                    rec["ok"] = False
+                rec["warnings"] += list(s.get("warnings") or [])
+            except Exception as e:
+                rec["geometryMatrixSummary"] = {
+                    "enabled": True, "ok": False,
+                    "error": f"{type(e).__name__}: {str(e)[:180]}"}
+                rec["reasons"].append(f"几何矩阵执行异常：{str(e)[:180]}")
+                rec["ok"] = False
         rec["logcat"] = logcat_summary()
         rec["anr"] = anr_evidence(round_no, name, out_dir)
         if rec["anr"].get("anrDetected"):
@@ -1209,6 +1764,7 @@ def key_metrics(rec):
     w = rec.get("windows") or {}
     inv = rec.get("invalid_rasterization") or {}
     anr = rec.get("anr") or {}
+    gsum = rec.get("geometryMatrixSummary") or {}
     out = {
         "dataSeconds": len([r for r in (rec.get("samples") or []) if not r.get("gap")]),
         "gaps": rec.get("gaps"),
@@ -1218,6 +1774,11 @@ def key_metrics(rec):
         "visibleRatio": inv.get("visibleRatio"),
         "rasterOutsideRatio": inv.get("rasterOutsideRatio"),
         "anrDetected": bool(anr.get("anrDetected")),
+        "geometryMatrixOk": gsum.get("ok"),
+        "geometryMatrixGroups": gsum.get("groupsExecuted"),
+        "geometryMatrixFailed": len(gsum.get("failed") or []),
+        "geometryMatrixBlankEdges": len(gsum.get("blankEdgeGroups") or []),
+        "geometryMatrixRestored": gsum.get("restored"),
     }
     if w.get("full"):
         out.update({
@@ -1317,6 +1878,8 @@ def main():
                     help="两预设各重复轮数（默认 5；小于 1 按 1 处理）")
     ap.add_argument("--out", default=os.path.join("artifacts", "avd", "float_r4.json"))
     ap.add_argument("--presets", default="minimal,default")
+    ap.add_argument("--no-size-matrix", action="store_true",
+                    help="关闭每轮 minimal 采样后的 3 窗口尺寸 × 3 DPI 几何矩阵（默认开启）")
     args = ap.parse_args()
     rounds_n = max(1, args.rounds)
     args.rounds = rounds_n                     # meta 与实际执行轮数保持一致
@@ -1346,6 +1909,15 @@ def main():
             "seconds": args.seconds, "presets": names, "rounds": rounds_n,
             "windowNote": window_note,
             "appearanceKey": APPEARANCE_KEY,
+            "sizeMatrix": {
+                "enabled": not args.no_size_matrix,
+                "sizes": [[w, h] for w, h in GEOM_SIZES],
+                "dprs": [float(d) for d in GEOM_DPRS],
+                "combinations": len(geometry_groups()),
+                "settleMs": int(GEOM_SETTLE_S * 1000),
+                "method": "Emulation.setDeviceMetricsOverride(mobile=false)",
+                "shot": "geom_<w>x<h>_dpr<dpr>.png",
+            },
             "anrPattern": "ANR in|Input dispatching timed out|am_anr|Application Not Responding",
             "thresholds": {
                 "fullRafPerSec": [FULL_RAF_LO, FULL_RAF_HI],
@@ -1385,7 +1957,8 @@ def main():
                     payload["errors"].append(f"跳过未知预设 {name}")
                     continue
                 sh("adb logcat -c", timeout=30)      # logcat 摘要只覆盖本预设窗口
-                rec = run_preset(name, args.seconds, out_dir, r)
+                rec = run_preset(name, args.seconds, out_dir, r,
+                                 size_matrix=not args.no_size_matrix)
                 rrec["presets"][name] = rec
                 payload["presets"][name] = rec        # 顶层保留最后一轮，便于旧消费方
                 print(f"[FLOAT-R4] round={r} " + summary_line(rec)[len("[FLOAT-R4] "):],
@@ -1431,6 +2004,19 @@ def main():
         occurrences = anr_occurrences(rounds_all)
         payload["roundsSummary"] = rounds_summary(rounds_all, names)
         payload["anrOccurrences"] = occurrences
+        geom_enabled = not args.no_size_matrix
+        geom_overview = geometry_matrix_overview(rounds_all, geom_enabled)
+        if geom_enabled and "minimal" not in names:
+            geom_overview.update({"ok": True, "groupsExecuted": 0,
+                                  "note": "preset minimal 未启用，几何矩阵未执行"})
+        elif geom_enabled and not geom_overview.get("groupsExecuted"):
+            geom_overview["ok"] = False
+            geom_overview.setdefault("note", "未拿到任何几何矩阵组数据")
+        payload["geometryMatrix"] = [
+            g for rr in rounds_all
+            for g in ((rr.get("presets") or {}).get("minimal") or {}).get("geometryMatrix") or []
+        ]
+        payload["geometryMatrixSummary"] = geom_overview
 
         collected_rounds = [rr.get("round") for rr in rounds_all]
         missing_rounds = [r for r in range(1, rounds_n + 1) if r not in collected_rounds]
@@ -1442,7 +2028,8 @@ def main():
                          if (rec.get("invalid_rasterization") or {}).get("verdict") == "yes"})
         ok_all = (bool(rounds_all) and len(rounds_all) == rounds_n
                   and not failed_rounds and not failed and not missing
-                  and not payload["errors"])
+                  and not payload["errors"]
+                  and (not geom_enabled or geom_overview.get("ok") is True))
         if occurrences:
             anr_conclusion = (f"{rounds_n} 轮 × {args.seconds}s/预设复现 ANR {len(occurrences)} 次："
                               + "、".join(f"第{o['round']}轮/{o['preset']}" for o in occurrences))
@@ -1469,6 +2056,9 @@ def main():
             "missing": missing,
             "invalidRasterization": "yes" if raster else "no",
             "invalidRasterizationPresets": raster,
+            "geometryMatrixOk": geom_overview.get("ok"),
+            "geometryMatrixFailed": len(geom_overview.get("failed") or []),
+            "geometryMatrixNote": geom_overview.get("note"),
             "presetChecks": {n: (presets[n] or {}).get("checks") for n in presets},
         }
         payload["logcat"] = {n: (presets[n] or {}).get("logcat") for n in presets}
