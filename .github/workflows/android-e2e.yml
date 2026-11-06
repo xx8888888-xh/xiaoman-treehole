@@ -113,6 +113,7 @@ jobs:
           path: |
             e2e_*.png
             e2e_walk_metrics.json
+            e2e_walk_summary.md
             e2e_dump.xml
             window_dump.xml
           if-no-files-found: warn

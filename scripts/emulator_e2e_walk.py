@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-emulator_e2e_walk.py · 端到端真机走查（云端 AVD，六态截图 + 实测值）
+emulator_e2e_walk.py · 全链路回归走查（云端 AVD，单 run 一条链跑完）
 --------------------------------------------------------------------
-六个状态，各一张 screencap（SurfaceFlinger 合成结果，不是 CSS 推算）：
-  ① 冷启动首屏      e2e_01_cold.png
-  ② 发一条消息后    e2e_02_chat.png
-  ③ 语音播放中      e2e_03_voice.png   （口型/表情：采样 Stage 的真实 lipSync）
-  ④ 浮窗模式        e2e_04_float.png   （appops 授权 + autostart_float 意图）
-  ⑤ 横→竖→横回切    e2e_05_landscape.png / e2e_05_back_portrait.png
-  ⑥ 20 轮后滚到底   e2e_06_rounds20.png
+链序（同一 run 内顺序执行，每步一行 metrics + 一条汇总表行）：
+  ① 冷启动首屏        e2e_01_cold.png
+  ② 发一条消息后      e2e_02_chat.png
+  ③ 语音播放 + 口型    e2e_03_voice.png       （默认极简 motion=false）
+  ③b 同段语音满帧对照  e2e_03b_voice_motion.png（motion=true）
+  ④ 浮窗模式          e2e_04_float.png       （appops 授权 + autostart_float 意图）
+  ④b 同日重入          （杀进程再开：不得追加第二次时段问候）
+  ⑤ 横→竖→回横屏       e2e_05_landscape.png / e2e_05_portrait.png / e2e_05_back_landscape.png
+  ⑥ 20 轮后滚到底      e2e_06_rounds20.png
+  ⑦ 语音失败提示       （出现 → 存活期自动收起 → 重绘不复活）
 
 实测值全部来自运行时：CDP DOM rect、uiautomator WebView bounds、dumpsys window、
 Stage._lipState()、screencap PNG 尺寸。
 
-硬门（GateFail → metrics + exit 1，CI 变红）：
+硬门（GateFail → metrics + 汇总表 + exit 1，CI 变红）：
   - replyArrived=false / 没有新的 speakSafe 事件 → 该步骤 FAIL，不允许对静音采样；
-  - 同日重启后 total 增加或末条又是时段问候 → FAIL（重入不该重复问候）。
-其余仍是「采集 + 归因」，问题清单按实测值排序（见 e2e_walk_metrics.json）。
+  - 口型 0 帧（motion=false / motion=true 各测一次）；
+  - 浮窗没有 APPLICATION_OVERLAY 窗口；
+  - 同日重启后 total 增加或时段问候变多（重入不该重复问候）；
+  - 键盘收起后横屏 chatH < 48.5（放不下一颗气泡）；
+  - 20 轮里有任何一轮回复没到齐；
+  - 语音失败提示不出现 / 到期不消失 / 重绘又复活 / 失败日志丢失。
+汇总表写到 e2e_walk_summary.md（artifact 一并上传），失败也写。
 
 用法：python3 scripts/emulator_e2e_walk.py（App 已启动、TTS server 已在 8903 起）
 依赖：requests、websockets
@@ -49,8 +57,41 @@ def dump_metrics():
         json.dump(METRICS, f, ensure_ascii=False, indent=2)
 
 
+# 汇总表：每步一行（步骤 / 通过与否 / 关键数字）；同一 step 重复写就原地更新
+SUMMARY = []
+
+
+def set_row(step, ok, key):
+    row = {"step": step, "ok": bool(ok), "key": str(key)}
+    for i, r in enumerate(SUMMARY):
+        if r["step"] == step:
+            SUMMARY[i] = row
+            break
+    else:
+        SUMMARY.append(row)
+    log(f"[{'PASS' if ok else 'FAIL'}] {step} · {key}")
+
+
+def summary_text():
+    lines = ["| 步骤 | 结果 | 关键数字 |", "|---|---|---|"]
+    for r in SUMMARY:
+        lines.append("| %s | %s | %s |" % (r["step"], "PASS" if r["ok"] else "FAIL", r["key"]))
+    return "\n".join(lines)
+
+
+def write_summary():
+    text = summary_text()
+    try:
+        with open("e2e_walk_summary.md", "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except Exception as e:
+        log(f"写汇总表失败: {e}")
+    log("汇总表:\n" + text)
+    return text
+
+
 def gate(step, fn, *args):
-    """硬门：回复没到达 → 写 metrics + 非零退出。
+    """硬门：失败 → 写 metrics + 汇总表 + 非零退出。
 
     上一轮的 0/143 是"消息没发出去、流程继续跑、对静音采样还判过"造成的；
     这里让该步骤直接 FAIL（workflow 不吞退出码，CI 随之为红）。
@@ -60,7 +101,9 @@ def gate(step, fn, *args):
     except GateFail as e:
         METRICS["ok"] = False
         METRICS.setdefault("failures", []).append({"step": step, "reason": str(e)})
+        set_row(step, False, str(e))
         dump_metrics()
+        write_summary()
         log("FAIL " + str(e))
         raise SystemExit(1)
 
@@ -145,6 +188,7 @@ STATE_JS = r"""
     topbar: rect(q('.topbar')),
     stage: rect(q('#stage')),
     area: rect(area),
+    chatScroll: rect(q('#chatScroll')),
     inputbar: rect(q('.inputbar')),
     lastBubble: rect(lastB),
     scroll: area ? {top: Math.round(area.scrollTop), h: area.scrollHeight,
@@ -579,6 +623,13 @@ def wm_size():
     return (int(m.group(1)), int(m.group(2))) if m else None, int(d.group(1)) if d else None
 
 
+def ime_state():
+    """软键盘是否弹起（收键盘前先确认，避免 BACK 被 WebView 当成返回）。"""
+    _, out = sh("adb shell dumpsys input_method")
+    return {"inputShown": bool(re.search(r"mInputShown\s*=\s*true", out)),
+            "inputViewShown": bool(re.search(r"mIsInputViewShown\s*=\s*true", out))}
+
+
 def main():
     dev, dens = wm_size()
     METRICS["device"] = {"screenPx": dev, "densityDpi": dens}
@@ -618,6 +669,10 @@ def main():
     METRICS["states"]["01_cold"] = {"shot": "e2e_01_cold.png", "bytes": b1,
                                      "png": png_size("e2e_01_cold.png"),
                                      "probe": s1, "webview": vb}
+    set_row("01_cold", b1 > 0,
+            f"rows={s1.get('rows')} empty={s1.get('emptyVisible')} "
+            f"vw={s1.get('iw')}x{s1.get('ih')} shot={b1}B")
+    gate("01_cold", require_true, "01_cold", b1 > 0, "冷启动截图失败（bytes=%s）" % b1)
 
     # ---------------- ② 发一条消息后 ----------------
     rows0 = s1.get("rows") or 0
@@ -633,6 +688,21 @@ def main():
     METRICS["states"]["02_chat"] = {"shot": "e2e_02_chat.png", "bytes": b2,
                                     "png": png_size("e2e_02_chat.png"),
                                     "replyArrived": grew, "sent": sent2, "probe": s2}
+    set_row("02_chat", grew,
+            f"replyArrived={grew} rows={s2.get('rows')} "
+            f"gap={(s2.get('scroll') or {}).get('gap')}p")
+
+    def _mid(lip):
+        return (lip.get("midSecond") or {})
+
+    def _dur(events, ev):
+        """语音时长取收尾后的 tts 日志（wait_voice 抓的是开始瞬间快照，那时 endAt 还没写）。"""
+        t = (ev or {}).get("txt")
+        for e in reversed(events or []):
+            e = e or {}
+            if e.get("endAt") and (t is None or e.get("txt") == t):
+                return e["endAt"] - (e.get("at") or 0)
+        return None
 
     # ---------------- ③ 语音播放中（口型/表情） ----------------
     try:
@@ -687,6 +757,11 @@ def main():
     gate("03_voice", require_true, "03_voice", lip_ok,
          "语音播放期间口型帧为 0（maxLipSync=%s nonZeroLipSync=%s event=%s）"
          % (voice.get("maxLipSync"), voice.get("nonZeroLipSync"), ev))
+    _v3m = voice.get("midSecond") or {}
+    set_row("03_voice_motion_false", True,
+            f"maxLipSync={voice.get('maxLipSync')} nz={voice.get('nonZeroLipSync')} "
+            f"paint/feed={_v3m.get('paintFrames')}/{_v3m.get('feedFrames')} "
+            f"durationMs={_dur(events, ev)}")
 
     # ---------------- ③b 非默认预设（motion=true）同段语音对照 ----------------
     # 同一段 TTS fixture（text 不影响 cmd provider 的 WAV）：比较满帧路径的
@@ -729,6 +804,11 @@ def main():
     gate("03b_motion", require_true, "03b_motion", lip_ok_b,
          "motion=true 语音期间口型帧为 0（maxLipSync=%s nonZero=%s event=%s）"
          % (voice_b.get("maxLipSync"), voice_b.get("nonZeroLipSync"), ev_b))
+    _v3bm = voice_b.get("midSecond") or {}
+    set_row("03b_voice_motion_true", lip_ok_b,
+            f"maxLipSync={voice_b.get('maxLipSync')} nz={voice_b.get('nonZeroLipSync')} "
+            f"paint/feed={_v3bm.get('paintFrames')}/{_v3bm.get('feedFrames')} "
+            f"durationMs={_dur(events_b, ev_b)}")
     # 还原默认极简：后续 ④⑤⑥ 口径与之前一致
     try:
         motion_off = cdp.eval(
@@ -737,18 +817,6 @@ def main():
         motion_off = f"err {e}"[:80]
     log(f"③b motion 还原 → {motion_off}")
     time.sleep(0.5)
-
-    def _mid(lip):
-        return (lip.get("midSecond") or {})
-
-    def _dur(events, ev):
-        """语音时长取收尾后的 tts 日志（wait_voice 抓的是开始瞬间快照，那时 endAt 还没写）。"""
-        t = (ev or {}).get("txt")
-        for e in reversed(events or []):
-            e = e or {}
-            if e.get("endAt") and (t is None or e.get("txt") == t):
-                return e["endAt"] - (e.get("at") or 0)
-        return None
 
     METRICS["lipCompare"] = {
         # 默认极简（零动画）：只省帧（≈15fps），幅度不削
@@ -799,6 +867,9 @@ def main():
     METRICS["states"]["04_float"] = {"shot": "e2e_04_float.png", "bytes": b4,
                                       "png": png_size("e2e_04_float.png"),
                                       "overlayWindows": n_over}
+    gate("04_float", require_true, "04_float", n_over >= 1,
+         "浮窗模式没有 APPLICATION_OVERLAY 窗口（overlayWindows=%s）" % n_over)
+    set_row("04_float", n_over >= 1, f"overlayWindows={n_over} shot={b4}B")
 
     # 回到主界面（浮窗先落到后台；后续口径都在主界面）
     sh(f"adb shell am force-stop {PKG}")
@@ -823,66 +894,73 @@ def main():
     gate("05_reentry", require_true, "05_reentry", reentry_ok,
          "同日重启后不应再追加时段问候（before=%s after=%s greetLike=%s）"
          % (reentry_before, reentry.get("total"), reentry.get("greetLike")))
+    METRICS["states"]["04b_reentry"] = {
+        "beforeTotal": reentry_before, "afterTotal": reentry.get("total"),
+        "preGreetCount": reentry_pre.get("greetCount"),
+        "afterGreetCount": reentry.get("greetCount"),
+        "greetLike": reentry.get("greetLike"), "ok": reentry_ok}
+    set_row("04b_reentry", reentry_ok,
+            f"total {reentry_before}→{reentry.get('total')} "
+            f"greet {reentry_pre.get('greetCount')}→{reentry.get('greetCount')}")
 
-    # ---------------- ⑤ 横屏 → 竖屏 → 切回 ----------------
+    # ---------------- ⑤ 横屏 → 竖屏 → 回横屏（键收起后 chatH 硬门） ----------------
     sh("adb shell settings put system accelerometer_rotation 0")
-    sh("adb shell settings put system user_rotation 0")
-    time.sleep(2)
-    s5a = cdp.eval(STATE_JS) or {}
-    vb5a = webview_bounds(ui_dump())
-    sh("adb shell settings put system user_rotation 1")
-    time.sleep(3)
-    s5b = cdp.eval(STATE_JS) or {}
-    vb5b = webview_bounds(ui_dump())
-    b5a = shot("e2e_05_landscape.png")
-    sh("adb shell settings put system user_rotation 0")
-    time.sleep(3)
-    s5c = cdp.eval(STATE_JS) or {}
-    vb5c = webview_bounds(ui_dump())
-    b5c = shot("e2e_05_back_portrait.png")
-    METRICS["states"]["05_rotate"] = {
-        "reentry": {"beforeTotal": reentry_before, "ok": reentry_ok,
-                    "after": reentry, "preGreetCount": reentry_pre.get("greetCount")},
-        "portraitBefore": {"probe": s5a, "webview": vb5a},
-        "landscape": {"probe": s5b, "webview": vb5b, "shot": "e2e_05_landscape.png", "bytes": b5a},
-        "portraitBack": {"probe": s5c, "webview": vb5c,
-                         "shot": "e2e_05_back_portrait.png", "bytes": b5c}
-    }
+    sh("adb shell input keyevent 111")           # 先确保键盘收起
+    time.sleep(1.0)
 
-    # ---------------- ⑤b 语音失败提示：出现 → 存活期自动收起 → 重绘不复活 ----------------
-    VOICE_TIP_JS = r"""
-(() => {
-  const el = document.getElementById('voiceTip');
-  let logs = [];
-  try { logs = JSON.parse(sessionStorage.getItem('xiaoman_voice_fail_log') || '[]'); } catch (e) {}
-  const ctl = window.__voiceTip ? window.__voiceTip() : null;
-  return {
-    visible: !!el && !el.classList.contains('hidden'),
-    text: (document.getElementById('voiceTipText') || {}).textContent || '',
-    logs: logs.length,
-    last: logs.length ? logs[logs.length - 1].reason : null,
-    ttl: ctl ? ctl.ttlMs : null,
-  };
-})()
-"""
-    # 走生产同一条入口（TTS 失败回调调用的就是它），不另外造失败
-    cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
-    time.sleep(0.4)
-    vt0 = cdp.eval(VOICE_TIP_JS) or {}
-    ttl_ms = vt0.get("ttl") or 8000
-    time.sleep(ttl_ms / 1000.0 + 1.2)
-    vt1 = cdp.eval(VOICE_TIP_JS) or {}
-    cdp.eval("window.__voiceTip && window.__voiceTip().render(), 1")   # 模拟一次重绘
-    time.sleep(0.3)
-    vt2 = cdp.eval(VOICE_TIP_JS) or {}
-    vt_ok = (bool(vt0.get("visible")) and int(vt0.get("logs") or 0) >= 1
-             and not vt1.get("visible") and int(vt1.get("logs") or 0) == int(vt0.get("logs") or 0)
-             and not vt2.get("visible") and int(vt2.get("logs") or 0) >= 1)
-    METRICS["states"]["05b_voice_tip"] = {"shown": vt0, "afterTtl": vt1,
-                                          "afterRender": vt2, "ok": vt_ok}
-    gate("05b_voice_tip", require_true, "05b_voice_tip", vt_ok,
-         "语音失败提示应出现并在 %sms 后自动收起、重绘不复活且失败日志仍保留（%r）"
-         % (ttl_ms, {"shown": vt0, "afterTtl": vt1, "afterRender": vt2}))
+    def rot_snap(name):
+        s = cdp.eval(STATE_JS) or {}
+        return {"probe": s, "chatH": (s.get("chatScroll") or {}).get("h"),
+                "webview": webview_bounds(ui_dump()),
+                "shot": name, "bytes": shot(name)}
+
+    sh("adb shell settings put system user_rotation 1")   # 横屏
+    time.sleep(3)
+    # 横屏弹键盘再收起：验证极矮视口规则在键盘收起后恢复，chatH 至少放得下一颗气泡（48.5px）
+    ime = {"tapped": False, "shown": False, "collapsed": None}
+    vb_l = webview_bounds(ui_dump())
+    p_l = cdp.eval(PROBE_JS) or {}
+    if vb_l and p_l.get("input"):
+        box, dpr = p_l["input"], (p_l.get("dpr") or 1)
+        sh("adb shell input tap %d %d" % (
+            int(vb_l["l"] + (box["left"] + box["right"]) / 2 * dpr),
+            int(vb_l["t"] + (box["top"] + box["bottom"]) / 2 * dpr)))
+        ime["tapped"] = True
+        time.sleep(2.0)
+        st = ime_state()
+        ime["shown"] = bool(st.get("inputShown") and st.get("inputViewShown"))
+        if ime["shown"]:                         # 已确认弹起才按 BACK，避免被当成页面返回
+            sh("adb shell input keyevent 4")
+            time.sleep(2.0)
+        st2 = ime_state()
+        ime["collapsed"] = not (st2.get("inputShown") and st2.get("inputViewShown"))
+    land1 = rot_snap("e2e_05_landscape.png")
+    sh("adb shell settings put system user_rotation 0")   # 竖屏
+    time.sleep(3)
+    port = rot_snap("e2e_05_portrait.png")
+    sh("adb shell settings put system user_rotation 1")   # 回横屏
+    time.sleep(3)
+    land2 = rot_snap("e2e_05_back_landscape.png")
+
+    def _orient(snap):
+        s = snap["probe"]
+        return bool((s.get("iw") or 0) > (s.get("ih") or 0))
+
+    def _chat_ok(snap):
+        return (snap.get("chatH") or 0) >= 48.5
+
+    rot_ok = _orient(land1) and _chat_ok(land1) and _chat_ok(port) and _orient(land2) and _chat_ok(land2)
+    METRICS["states"]["05_rotate"] = {
+        "ime": ime, "landscape": land1, "portrait": port, "backLandscape": land2,
+        "chatHmin": 48.5, "ok": rot_ok}
+    set_row("05_rotate", rot_ok,
+            f"landscape {land1['probe'].get('iw')}x{land1['probe'].get('ih')} chatH={land1['chatH']}"
+            f" | portrait chatH={port['chatH']}"
+            f" | backLandscape {land2['probe'].get('iw')}x{land2['probe'].get('ih')} chatH={land2['chatH']}"
+            f" | IME shown={ime['shown']} collapsed={ime['collapsed']}")
+    gate("05_rotate", require_true, "05_rotate", rot_ok,
+         "横→竖→回横屏后 chatH 必须 ≥48.5（landscape=%s portrait=%s backLandscape=%s ime=%s）"
+         % (land1["chatH"], port["chatH"], land2["chatH"], ime))
 
     # ---------------- ⑥ 连续 20 轮后滚到底 ----------------
     _, tot0 = wait_total(cdp, 0, timeout=2)
@@ -916,24 +994,65 @@ def main():
                                          "baseTotal": base_total, "baseRows": base_rows,
                                          "total": t6.get("total"), "domRows": t6.get("rows"),
                                          "probe": s6}
+    gate("06_rounds20", require_true, "06_rounds20", fails == 0,
+         "20 轮长会话里有 %s 轮回复没到齐（baseTotal=%s total=%s）"
+         % (fails, base_total, t6.get("total")))
+    set_row("06_rounds20", fails == 0,
+            f"rounds=20 fails={fails} total {base_total}→{t6.get('total')} "
+            f"domRows={t6.get('rows')} gap={(s6.get('scroll') or {}).get('gap')}p")
 
-    METRICS["ok"] = True
-    dump_metrics()
-    summary = {
-        "cold_rows": rows0,
-        "cold_empty": (s1.get("emptyVisible")),
-        "chat_rows": s2.get("rows"),
-        "chat_gap": (s2.get("scroll") or {}).get("gap"),
-        "voice_maxLip": voice.get("maxLip"),
-        "voice_nz": voice.get("nonZeroFrames"),
-        "voice_shot": bool(voice.get("shotBytes")),
-        "float_overlay_windows": n_over,
-        "landscape_iw": s5b.get("iw"), "landscape_ih": s5b.get("ih"),
-        "back_portrait_ih": s5c.get("ih"),
-        "rounds_total": s6.get("rows"), "rounds_fails": fails,
-        "rounds_gap": (s6.get("scroll") or {}).get("gap")
+    # ---------------- ⑦ 语音失败提示：出现 → 存活期自动收起 → 重绘不复活 ----------------
+    VOICE_TIP_JS = r"""
+(() => {
+  const el = document.getElementById('voiceTip');
+  let logs = [];
+  try { logs = JSON.parse(sessionStorage.getItem('xiaoman_voice_fail_log') || '[]'); } catch (e) {}
+  const ctl = window.__voiceTip ? window.__voiceTip() : null;
+  return {
+    visible: !!el && !el.classList.contains('hidden'),
+    text: (document.getElementById('voiceTipText') || {}).textContent || '',
+    logs: logs.length,
+    last: logs.length ? logs[logs.length - 1].reason : null,
+    ttl: ctl ? ctl.ttlMs : null,
+  };
+})()
+"""
+    # 走生产同一条入口（TTS 失败回调调用的就是它），不另外造失败
+    cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
+    time.sleep(0.4)
+    vt0 = cdp.eval(VOICE_TIP_JS) or {}
+    ttl_ms = vt0.get("ttl") or 8000
+    time.sleep(ttl_ms / 1000.0 + 1.2)
+    vt1 = cdp.eval(VOICE_TIP_JS) or {}
+    cdp.eval("window.__voiceTip && window.__voiceTip().render(), 1")   # 模拟一次重绘
+    time.sleep(0.3)
+    vt2 = cdp.eval(VOICE_TIP_JS) or {}
+    vt_ok = (bool(vt0.get("visible")) and int(vt0.get("logs") or 0) >= 1
+             and not vt1.get("visible") and int(vt1.get("logs") or 0) == int(vt0.get("logs") or 0)
+             and not vt2.get("visible") and int(vt2.get("logs") or 0) >= 1)
+    METRICS["states"]["07_voice_tip"] = {"shown": vt0, "afterTtl": vt1,
+                                          "afterRender": vt2, "ok": vt_ok}
+    gate("07_voice_tip", require_true, "07_voice_tip", vt_ok,
+         "语音失败提示应出现并在 %sms 后自动收起、重绘不复活且失败日志仍保留（%r）"
+         % (ttl_ms, {"shown": vt0, "afterTtl": vt1, "afterRender": vt2}))
+    set_row("07_voice_tip", vt_ok,
+            f"shown={vt0.get('visible')} logs={vt0.get('logs')} ttl={ttl_ms}ms"
+            f" → afterTtl visible={vt1.get('visible')}"
+            f" → afterRender visible={vt2.get('visible')} logs={vt2.get('logs')}")
+
+    # ---------------- 汇总 ----------------
+    METRICS["keyChecks"] = {
+        "reentryNoDuplicateGreeting": reentry_ok,
+        "chatHAfterImeClose": {"min": 48.5,
+                               "landscape": land1["chatH"], "portrait": port["chatH"],
+                               "backLandscape": land2["chatH"],
+                               "ok": _chat_ok(land1) and _chat_ok(port) and _chat_ok(land2)},
+        "voiceTipNoRevive": vt_ok,
     }
-    log("汇总: " + json.dumps(summary, ensure_ascii=False))
+    METRICS["ok"] = all(r["ok"] for r in SUMMARY)
+    dump_metrics()
+    write_summary()
+    log("关键三项: " + json.dumps(METRICS["keyChecks"], ensure_ascii=False))
     try:
         cdp.close()
     except Exception:
