@@ -69,6 +69,17 @@ html, body {
   transition: opacity 160ms ease;
 }
 
+/* 小窗兜底气泡：最多 4 行，超出省略。
+ * 140×180 时 44 字 + 16px 大字号会占满整窗并把脸盖住；封顶 4 行后
+ * 气泡高度 ≤ ~70px（窗口 39%），脸仍是第一视觉焦点。 */
+#petTip {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
 #petTip.hidden {
   opacity: 0;
   visibility: hidden;
@@ -127,6 +138,20 @@ html[data-flat="true"] #petTip,
 html[data-flat="true"] #petMenu {
   box-shadow: none !important;
   background: #FFFFFF;
+}
+
+/* 窄窗（140×180 竖向极小）与矮窗（240×160 横向宽）：
+ * 字号不跟着窗口一起缩到看不清，也不让菜单压住下巴。
+ * 11px 时 140 宽约有 9-10 字/行，仍高于"一眼能读"的下限。 */
+@media (max-width: 160px) {
+  #petTip { font-size: 11px; padding: 5px 7px; }
+  html[data-font="large"] #petTip { font-size: 12px; }
+  #petMenu button { font-size: 12px; }
+  html[data-font="large"] #petMenu button { font-size: 15px; }
+}
+@media (max-height: 175px) {
+  #petMenu { bottom: 6px; padding: 5px; }
+  html[data-font="large"] #petMenu button { min-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

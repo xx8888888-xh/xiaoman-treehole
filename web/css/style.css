@@ -1068,8 +1068,10 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
 @media (min-width: 560px) {
   #app { border-left: 1px solid var(--line-soft); border-right: 1px solid var(--line-soft); }
 }
-/* 宽屏：舞台与对话并排，左"人"右"话"，不是把手机竖条放在大片空白里 */
-@media (min-width: 900px) {
+/* 宽屏：舞台与对话并排，左"人"右"话"，不是把手机竖条放在大片空白里。
+ * 横屏手机（844×390 等）宽度够但高度只有 390，旧规则只给舞台 120px；
+ * 这里复用同一套左右分栏，舞台拿满整行高度，输入框仍在右下可达。 */
+@media (min-width: 900px), (orientation: landscape) and (min-width: 560px) and (max-height: 480px) {
   #app {
     display: grid;
     grid-template-columns: minmax(320px, 40%) minmax(0, 1fr);
@@ -1079,7 +1081,9 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
     padding: 0 var(--space-6) 0 var(--space-6);
   }
   .topbar { grid-column: 1 / -1; min-height: 64px; padding: calc(env(safe-area-inset-top, 0px) + var(--space-3)) 0 var(--space-3); }
-  #stage {
+  /* 同时压过 899px 以下"有消息就缩到 23vh"的 :has 规则（0,2,0 特指度） */
+  #stage,
+  #app:has(#emptyState.hidden) #stage {
     grid-column: 1;
     grid-row: 2;
     align-self: stretch;
@@ -1106,8 +1110,9 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   .msg-row.them .bubble:hover { border-color: var(--line); }
 }
 
-/* ---------- 矮视口 / 横屏：避免舞台挤压聊天区 ---------- */
-@media (max-height: 480px) {
+/* ---------- 矮视口：只在无法分栏的窄窗里压舞台 ----------
+ * 横屏（≥560 宽）已走上方的左右分栏，不能再被这里按 120px 压扁。 */
+@media (max-height: 480px) and (max-width: 559px) {
   #stage { height: 120px; min-height: 120px; }
 }
 

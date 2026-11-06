@@ -25,6 +25,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 第四轮要"改前/改后"同机对比：把 main 的 web/ 也拉下来，另起 8912。
+      # 只比较布局，不比较本轮新增的表情/口型代码。
+      - name: Checkout main (before-state)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: before
+          fetch-depth: 1
+
       - name: Resolve short SHA
         id: sha
         run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
@@ -39,11 +48,14 @@ jobs:
       - name: Serve web/ statically
         run: |
           python -m http.server 8911 --bind 127.0.0.1 --directory web >/tmp/http.log 2>&1 &
+          python -m http.server 8912 --bind 127.0.0.1 --directory before/web >/tmp/http-before.log 2>&1 &
           for i in $(seq 1 40); do
-            curl -sf http://127.0.0.1:8911/index.html >/dev/null && break
+            curl -sf http://127.0.0.1:8911/index.html >/dev/null && \
+            curl -sf http://127.0.0.1:8912/index.html >/dev/null && break
             sleep 0.5
           done
-          curl -sf http://127.0.0.1:8911/index.html >/dev/null && echo "server ok"
+          curl -sf http://127.0.0.1:8911/index.html >/dev/null && echo "server ok (after)"
+          curl -sf http://127.0.0.1:8912/index.html >/dev/null && echo "server ok (before)"
 
       - name: Render shots
         run: |
@@ -170,6 +182,207 @@ jobs:
                   f,
                   ensure_ascii=False,
                   indent=2,
+              )
+          PY
+
+      # 第四轮：浮窗三尺寸、表情最小集、竖/横屏改前改后，全部同机渲染
+      - name: Render R4 shots
+        run: |
+          python - <<'PY'
+          import json, os
+          from playwright.sync_api import sync_playwright
+
+          AFTER = "http://127.0.0.1:8911/index.html"
+          BEFORE = "http://127.0.0.1:8912/index.html"
+          PET = "http://127.0.0.1:8911/pet.html"
+          OUT = "shots"
+          METRICS = {}
+
+          CFG = {"mode": "offline", "heartbeatOn": False, "tts": "off", "allowFreePersonal": False}
+          MEM = {"称呼": "阿禾", "在意的人": "妈妈", "在意的事": "周三复诊", "最近": "在准备换工作"}
+          LONG_TIP = "今天降温了，出门记得把围巾带上；回来的时候我给你留了热水，别急着做别的。"
+
+          SEED_JS = """([cfg, mem, theme, appearance]) => {
+              localStorage.clear();
+              localStorage.setItem("xiaoman_cfg", JSON.stringify(cfg));
+              localStorage.setItem("xiaoman_memory", JSON.stringify(mem));
+              localStorage.setItem("xiaoman_theme", theme);
+              localStorage.setItem("xiaoman_appearance_v1", JSON.stringify(appearance));
+              localStorage.setItem("xiaoman_told_v", "999");
+              sessionStorage.setItem("xiaoman_degrade_off", "1");
+              sessionStorage.setItem("xiaoman_voice_tip_off", "1");
+          }"""
+
+          def seed(page, base, theme="light", font="normal"):
+              page.goto(base, wait_until="domcontentloaded")
+              appearance = {"preset": "default"}
+              if font == "large":
+                  appearance = {"preset": "custom", "font": "large", "motion": True, "iconsGray": True, "flat": False}
+              page.evaluate(SEED_JS, [CFG, MEM, theme, appearance])
+              page.reload(wait_until="domcontentloaded")
+
+          def settle(page):
+              page.wait_for_timeout(2800)
+              page.wait_for_timeout(500)
+
+          def shot(page, name):
+              page.screenshot(path=os.path.join(OUT, name + ".png"))
+              print("shot", name)
+
+          MAIN_METRICS_JS = """() => {
+              const rect = (el) => {
+                  if (!el) return null;
+                  const b = el.getBoundingClientRect();
+                  return {x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width),
+                          h: Math.round(b.height), bottom: Math.round(b.bottom), right: Math.round(b.right)};
+              };
+              const stage = document.querySelector("#stage");
+              const input = document.querySelector(".inputbar");
+              const chat = document.querySelector("#chatScroll");
+              const app = document.querySelector("#app");
+              const ib = rect(input);
+              return {
+                  viewport: {w: innerWidth, h: innerHeight},
+                  app: rect(app),
+                  stage: rect(stage),
+                  stageRatio: +(stage.getBoundingClientRect().height / innerHeight).toFixed(3),
+                  chat: rect(chat),
+                  input: ib,
+                  inputVisible: ib.y >= -0.5 && ib.bottom <= innerHeight + 0.5,
+                  inputBottomGap: Math.round(innerHeight - ib.bottom),
+                  mode: window.__stageMode || null,
+                  tier: window.__stageTier || null,
+                  fallback: stage.classList.contains("is-fallback")
+              };
+          }"""
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(args=["--mute-audio"])
+
+              # ---------- 竖屏 / 横屏，改前（main）与改后 ----------
+              for label, base, vp, name in [
+                  ("portrait-before", BEFORE, {"width": 390, "height": 844}, "41-portrait-before-light"),
+                  ("portrait-after", AFTER, {"width": 390, "height": 844}, "40-portrait-after-light"),
+                  ("landscape-before", BEFORE, {"width": 844, "height": 390}, "43-landscape-before-light"),
+                  ("landscape-after", AFTER, {"width": 844, "height": 390}, "42-landscape-after-light"),
+              ]:
+                  ctx = browser.new_context(viewport=vp, device_scale_factor=1, locale="zh-CN")
+                  page = ctx.new_page()
+                  seed(page, base)
+                  settle(page)
+                  page.fill("#textInput", "今天有点累，但还撑得住。")
+                  page.click("#sendBtn")
+                  page.wait_for_function("() => document.querySelectorAll('.bubble').length >= 2", timeout=15000)
+                  page.wait_for_timeout(1200)
+                  shot(page, name)
+                  METRICS[label] = page.evaluate(MAIN_METRICS_JS)
+                  ctx.close()
+
+              # ---------- 浮窗三尺寸（140×180 竖向极小 / 180×180 方形 / 240×160 横向宽） ----------
+              PET_JS = """() => {
+                  const rect = (el) => {
+                      if (!el) return null;
+                      const b = el.getBoundingClientRect();
+                      return {x: +b.x.toFixed(1), y: +b.y.toFixed(1), w: +b.width.toFixed(1),
+                              h: +b.height.toFixed(1), bottom: +b.bottom.toFixed(1)};
+                  };
+                  const tip = document.querySelector("#petTip");
+                  const menu = document.querySelector("#petMenu");
+                  const stage = document.querySelector("#petStage");
+                  const cv = document.querySelector("#petStage canvas");
+                  const cs = getComputedStyle(tip);
+                  const fontPx = parseFloat(cs.fontSize) || 13;
+                  const lhPx = parseFloat(cs.lineHeight) || fontPx * 1.35;
+                  const cr = cv ? cv.getBoundingClientRect() : null;
+                  const head = cr ? {
+                      x: cr.x + (349 / 1235) * cr.width,
+                      y: cr.y,
+                      w: (540 / 1235) * cr.width,
+                      h: (550 / 2841) * cr.height
+                  } : null;
+                  let visible = 0;
+                  if (head) {
+                      const ix = Math.max(0, Math.min(innerWidth, head.x + head.w) - Math.max(0, head.x));
+                      const iy = Math.max(0, Math.min(innerHeight, head.y + head.h) - Math.max(0, head.y));
+                      visible = (ix * iy) / (head.w * head.h);
+                  }
+                  const tr = rect(tip);
+                  return {
+                      viewport: {w: innerWidth, h: innerHeight},
+                      tip: {
+                          rect: tr,
+                          fontPx,
+                          lineHeightPx: +lhPx.toFixed(1),
+                          linesShown: Math.round(tip.clientHeight / lhPx),
+                          lineClamp: cs.webkitLineClamp || null,
+                          textLen: tip.textContent.length,
+                          charsPerLine: Math.round((tip.clientWidth - 14) / fontPx * 10) / 10,
+                          clipped: tip.scrollHeight > tip.clientHeight + 1,
+                          coverRatio: +(tip.clientHeight / innerHeight).toFixed(3),
+                      },
+                      menu: rect(menu),
+                      stage: rect(stage),
+                      canvas: rect(cv),
+                      head: head ? {x: +head.x.toFixed(1), y: +head.y.toFixed(1),
+                                    w: +head.w.toFixed(1), h: +head.h.toFixed(1)} : null,
+                      headVisibleRatio: +visible.toFixed(3),
+                      headHeightRatio: head ? +(head.h / innerHeight).toFixed(3) : 0,
+                      headWidthRatio: head ? +(head.w / innerWidth).toFixed(3) : 0,
+                      mode: window.__stageMode || null,
+                      fallback: stage.classList.contains("is-fallback")
+                  };
+              }"""
+
+              for w, h in [(140, 180), (180, 180), (240, 160)]:
+                  ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=2, locale="zh-CN")
+                  page = ctx.new_page()
+                  seed(page, PET)
+                  settle(page)
+                  page.evaluate("(t) => window.__pet && window.__pet.tip(t)", LONG_TIP)
+                  page.evaluate("() => window.__pet && window.__pet.menu(true)")
+                  page.wait_for_timeout(300)
+                  name = "20-pet-%dx%d" % (w, h)
+                  shot(page, name)
+                  METRICS[name] = page.evaluate(PET_JS)
+                  ctx.close()
+
+              # ---------- 表情最小集：同机同角度裁舞台 ----------
+              ctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="zh-CN")
+              page = ctx.new_page()
+              seed(page, AFTER)
+              settle(page)
+              EXPR = ["happy", "tired", "flat", "surprised", "neutral"]
+              METRICS["expressions"] = {}
+              for emo in EXPR:
+                  page.evaluate("(n) => window.Stage && window.Stage.setEmotion(n)", emo)
+                  page.wait_for_timeout(550)
+                  box = page.locator("#stage").bounding_box()
+                  name = "3%d-stage-%s" % (EXPR.index(emo), emo)
+                  page.screenshot(path=os.path.join(OUT, name + ".png"), clip=box)
+                  print("shot", name)
+                  METRICS["expressions"][emo] = page.evaluate(
+                      """() => ({
+                          mode: window.__stageMode || null,
+                          tier: window.__stageTier || null,
+                          fallback: document.querySelector("#stage").classList.contains("is-fallback"),
+                          mood: (document.querySelector("#moodText") || {}).textContent || null
+                      })"""
+                  )
+              ctx.close()
+
+              browser.close()
+
+          with open(os.path.join(OUT, "metrics.json"), "w", encoding="utf-8") as f:
+              json.dump(METRICS, f, ensure_ascii=False, indent=2)
+
+          with open(os.path.join(OUT, "manifest.json"), "w", encoding="utf-8") as f:
+              json.dump(
+                  sorted(
+                      ({"file": n, "bytes": os.path.getsize(os.path.join(OUT, n))}
+                       for n in os.listdir(OUT) if n.endswith(".png")),
+                      key=lambda item: item["file"],
+                  ),
+                  f, ensure_ascii=False, indent=2,
               )
           PY
 
