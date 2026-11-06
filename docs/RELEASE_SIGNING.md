@@ -121,7 +121,7 @@ sha256sum -c app-release.apk.sha256
 
 ## 6. CI 注入（GitHub Actions）
 
-`.github/workflows/android-ci.yml` 的 `assemble-release` job 已接好，缺 secrets 时自动跳过。
+签名出包统一由 `.github/workflows/android-release.yml` 承担（`android-ci.yml` 不再包含 release 装配 job）；缺 secrets 时该流程产 unsigned APK 并在摘要标 `signed=NO`。
 在仓库 Settings → Secrets and variables → Actions 中配置：
 
 | Secret 名称 | 内容 |

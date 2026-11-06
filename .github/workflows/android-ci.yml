@@ -1,7 +1,7 @@
 name: android-ci
 
 # 小满树洞 CI/CD · 出包 + 模拟器真机级验证 + UI 截图
-# 触发：push 到 main 或 zhiqiu/**（知秋的分支）/ PR / 手动。公开仓库免费（Linux runner）。
+# 触发：仅 workflow_dispatch（手动）。公开仓库免费（Linux runner）。
 # 多AI协同分支策略：知秋=zhiqiu/**，另一协作者用其自己的分支，main 保持稳定。
 # 说明：GitHub ubuntu runner 自带 /dev/kvm，模拟器可硬件加速启动（约1-2分钟冷启）。
 # 前提：仓库根放本项目（含 android/ 与 scripts/build_apk.sh）。
@@ -32,8 +32,6 @@ env:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    outputs:
-      keystore_present: ${{ steps.keystore_check.outputs.present }}
     steps:
       - uses: actions/checkout@v4
 
@@ -92,63 +90,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  assemble-release:
-    runs-on: ubuntu-latest
-    needs: build-apk
-    if: needs.build-apk.outputs.keystore_present == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: gradle
-
-      - name: Cache Android SDK
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.android
-            /opt/hostedtoolcache/android-sdk
-          key: android-sdk-${{ runner.os }}-${{ hashFiles('android/gradle.properties') }}
-          restore-keys: |
-            android-sdk-${{ runner.os }}-
-
-      - name: Ensure Android SDK components
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
-
-      - name: Decode keystore for release signing
-        run: |
-          echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/release.keystore
-          echo "ANDROID_KEYSTORE_PATH=/tmp/release.keystore" >> $GITHUB_ENV
-
-      - name: Sync web assets into android assets/www (single source of truth)
-        run: bash scripts/build_assets.sh
-
-      - name: Build Release APK
-        run: |
-          if [ -f android/gradlew ]; then
-            (cd android && ./gradlew assembleRelease --no-daemon)
-          else
-            echo "Gradle wrapper missing; cannot build release via script (no release signing support)"
-            exit 1
-          fi
-
-      - name: Verify Release APK signature
-        run: |
-          apksigner verify android/app/build/outputs/apk/release/*.apk
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: xiaoman-treehole-apk-release
-          path: android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
-          retention-days: 30
+  # 说明：原 `assemble-release` job 已删除（其 if 依赖不存在的 keystore_check 输出，恒跳过、永远不跑）。
+  # 签名出包统一由 `android-release.yml` 承担（缺 secrets 时产 unsigned 并在摘要标 signed=NO），勿在此加回。
 
   emulator-smoke:
     runs-on: ubuntu-latest
