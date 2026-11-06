@@ -888,6 +888,11 @@ def main():
                 panel_box = big
                 break
             print(f"[FLOAT-RETRY] 迷你窗未就绪(第{i+1}轮) diff={cnt6}px", flush=True)
+        # 诊断（不改断言/阈值）：把 ⑥ 期间的 pet 探针原样打印（logcat 带毫秒时间戳），
+        # 用于区分「两枪没有都到位」与「两枪间隔超过 380ms 双击窗口」。
+        diag = [ln for ln in probe_lines().splitlines()
+                if "pet-tap" in ln or "pet-double" in ln or "pet-panel" in ln or "pet-drag" in ln]
+        print("[FLOAT-DIAG] after-double: " + " || ".join(diag[-8:]), flush=True)
         check("双击展开迷你窗（大窗口 frame 宽高>500px）", big is not None,
               f"frame={big} diff={cnt6}px")
         check("双击触发探针（[probe] pet-double / pet-panel）",
