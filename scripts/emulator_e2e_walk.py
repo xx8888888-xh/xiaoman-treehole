@@ -381,7 +381,7 @@ def main():
     # 归零。第 ③ 项要拍"语音播放中的口型/表情"，这里按用户手动开启动效的路径打开
     # （Appearance.motion=true 等价于设置页关掉"减少动效"），仅影响本次走查截图。
     try:
-        motion = cdp.eval("(() => { const c = API.loadCfg(); c.motion = true; API.saveCfg(c);"
+        motion = cdp.eval("(() => { if (Appearance.setSwitch) Appearance.setSwitch('motion', true);"
                           " Stage.setMotionEnabled(true);"
                           " return (window.Appearance && Appearance.get) ? Appearance.get().motion : 'n/a'; })()")
     except Exception as e:
