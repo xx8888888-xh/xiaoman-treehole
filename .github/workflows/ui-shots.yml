@@ -462,7 +462,7 @@ jobs:
               w.close()
           PY
           python -u - <<'PY'
-          import json, os, statistics, time
+          import json, os, shutil, statistics, time
           from PIL import Image, ImageChops, ImageOps
           from playwright.sync_api import sync_playwright
 
@@ -661,21 +661,32 @@ jobs:
               # 改成"页内打点 + 外部轮询"，不依赖 await Promise。
               START_JS = """(t) => {
                   window.__latT0 = performance.now();
-                  window.__latFirst = 0;
+                  window.__latFirst = 0;      // 首个 ≥0.12 的包络帧（R5 有包络）
+                  window.__latAny = 0;        // 首个任何非零帧（R4 只有呼吸 0.05~0.09 时的等价口径）
                   window.__latEnd = 0;
-                  const cb = (lv) => { if (!window.__latFirst && lv >= 0.12)
-                                          window.__latFirst = performance.now(); };
+                  window.__latRes = null;
+                  window.__latErr = "";
+                  const cb = (lv) => {
+                      if (!window.__latAny && lv > 0.02) window.__latAny = performance.now();
+                      if (!window.__latFirst && lv >= 0.12) window.__latFirst = performance.now();
+                  };
                   const done = () => { window.__latEnd = performance.now(); };
-                  // main（R4 基线）的出口是 speak(text, opts)，本分支是 speak(text, onFrame, onEnd)；
-                  // 基线传错签名会导致回调永远不触发（上一轮 latency_before 全是 timeout）。
-                  if (TTS.speak.length >= 3) TTS.speak(t, cb, done);
-                  else TTS.speak(t, {cfg: API.loadCfg(), onFrame: cb, onEnd: done});
+                  try {
+                      const ret = (TTS.speak.length >= 3)
+                          ? TTS.speak(t, cb, done)
+                          : TTS.speak(t, {cfg: API.loadCfg(), onFrame: cb, onEnd: done});
+                      Promise.resolve(ret).then(r => { window.__latRes = r; })
+                                          .catch(e => { window.__latErr = String(e && e.message || e); });
+                  } catch (e) { window.__latErr = "sync:" + String(e && e.message || e); }
                   return true;
               }"""
               READ_JS = """() => ({
                   t0: window.__latT0 || 0,
                   first: window.__latFirst || 0,
+                  any: window.__latAny || 0,
                   end: window.__latEnd || 0,
+                  res: window.__latRes || null,
+                  err: window.__latErr || "",
                   timing: (window.TTS && TTS._lastTiming) ? TTS._lastTiming() : null,
                   audio: (window.TTS && TTS._probeAudio) ? TTS._probeAudio() : null,
                   chain: (window.TTS && TTS.chain) ? TTS.chain() : null,
@@ -687,6 +698,11 @@ jobs:
 
               def latency(base, tag, texts, server):
                   rows = []
+                  # 每次对照组开跑前清空两个服务端缓存目录：TTS server 以文本做磁盘缓存，
+                  # 上一组跑完会把音频缓存住，下一组直接命中 → 慢网 fixture 的 sleep 不会执行。
+                  for d in ("/tmp/tts-cache-fast", "/tmp/tts-cache-slow"):
+                      shutil.rmtree(d, ignore_errors=True)
+                      os.makedirs(d, exist_ok=True)
                   for text in texts:
                       ctx = browser.new_context(viewport={"width": 390, "height": 844},
                                                 device_scale_factor=1, locale="zh-CN")
@@ -700,21 +716,26 @@ jobs:
                       while time.time() < deadline:
                           r = page.evaluate(READ_JS) or {}
                           tm0 = r.get("timing") or {}
-                          if r.get("first") or r.get("end") or tm0.get("firstNonZeroAt"):
+                          if r.get("first") or r.get("any") or r.get("end") or tm0.get("firstNonZeroAt"):
                               break
                           page.wait_for_timeout(120)
                       t0, first, end = r.get("t0") or 0, r.get("first") or 0, r.get("end") or 0
+                      anyt = r.get("any") or 0
                       tm = r.get("timing") or {}
                       total = round(first - t0, 1) if (first and t0) else None
+                      anyMs = round(anyt - t0, 1) if (anyt and t0) else None
                       # 页内回调（__latFirst/__latEnd）走 window，若被页面 CSP/降级吞掉，
                       # 用引擎自记的 timing 兜底：speakAt → 首个非零包络帧，同一时间轴。
                       if total is None and tm.get("firstNonZeroAt") and tm.get("speakAt"):
                           total = round(tm["firstNonZeroAt"] - tm["speakAt"], 1)
-                      why = ("first-nonzero" if (total is not None or first) else
-                             ("end-no-frame" if end else "timeout"))
-                      rows.append({"why": why,
-                                   "totalMs": total,
+                      if anyMs is None and tm.get("firstNonZeroAt") and tm.get("speakAt"):
+                          anyMs = round(tm["firstNonZeroAt"] - tm["speakAt"], 1)
+                      why = ("first-nonzero" if total is not None else
+                             ("first-any" if anyMs is not None else
+                              ("end-no-frame" if end else "timeout")))
+                      rows.append({"why": why, "totalMs": total, "anyMs": anyMs,
                                    "timing": tm, "audio": r.get("audio"),
+                                   "res": r.get("res"), "err": r.get("err"),
                                    "chain": r.get("chain"), "provider": r.get("provider"),
                                    "muted": r.get("muted"), "cfg": r.get("cfg")})
                       page.evaluate("() => window.TTS && TTS.stop()")
@@ -724,6 +745,10 @@ jobs:
                   m["medianMs"] = round(statistics.median(vals), 1) if vals else None
                   m["maxMs"] = round(max(vals), 1) if vals else None
                   m["runsN"] = len(vals)
+                  anys = [x["anyMs"] for x in rows if x["anyMs"] is not None]
+                  m["anyMedianMs"] = round(statistics.median(anys), 1) if anys else None
+                  m["anyMaxMs"] = round(max(anys), 1) if anys else None
+                  m["anyRunsN"] = len(anys)
                   # 分段中位数（毫秒，相对 speak() 入口）
                   seg = {"preDecode": [], "decode": [], "play": [], "envReady": [], "firstFrame": []}
                   for x in rows:
