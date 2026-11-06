@@ -1122,10 +1122,9 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
  * 挤出可视区（溢出 36 设备 px），聊天区只剩 12px。这里只在"键盘弹起后的极矮视口"
  * 收紧：无键盘的横屏（392 CSS px）不触发，设计稿不变。 */
 @media (orientation: landscape) and (max-height: 260px) {
-  .topbar {
-    min-height: 32px;
-    padding: 0;
-  }
+  /* 32px 顶栏仍会挤掉最后一条气泡（实测聊天区只剩 38px，气泡 48.5px 装不满）；
+   * 键盘弹起的横屏里标题栏让位给消息本身，键盘收起（392 CSS px）自动恢复。 */
+  .topbar { display: none; }
   #chatArea { margin: 0; }
   .inputbar { padding: var(--space-1) 0 calc(var(--space-1) + env(safe-area-inset-bottom, 0px)); }
 }

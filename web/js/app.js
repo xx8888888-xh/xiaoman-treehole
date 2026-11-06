@@ -2292,14 +2292,26 @@ const App = (() => {
     // 1.6) 软键盘/旋转导致可视高度骤减时，若用户原本贴在底部就继续贴底：
     // 否则 adjustResize 缩短后 scrollTop 不变，最后一条消息会被列表容器裁掉。
     // 用"缩放前的 gap"判断意图（resize 之后的 scroll 事件会把 gap 变大，不能事后判断）。
+    // 真机（横屏 2280×1080 + 键盘）实测：只设 scrollTop=scrollHeight 不够——
+    // #chatScroll 末尾还有 emptyState/占位块，滚到底后最后一条仍可能停在容器上方。
+    // 所以贴底后把"最后一条可见气泡"再 scrollIntoView 一次（nearest，不打断用户）。
     try {
       const s = $("chatScroll");
       if (s) {
         const gap = () => s.scrollHeight - s.scrollTop - s.clientHeight;
+        const lastVisibleRow = () => {
+          const rows = Array.from(s.querySelectorAll(".msg-row")).filter(
+            (el) => !el.classList.contains("hidden") && el.getBoundingClientRect().height > 0);
+          return rows.length ? rows[rows.length - 1] : null;
+        };
         let lastGap = gap();
         s.addEventListener("scroll", () => { lastGap = gap(); }, { passive: true });
         window.addEventListener("resize", () => {
-          if (lastGap <= 60) s.scrollTop = s.scrollHeight;
+          if (lastGap <= 60) {
+            s.scrollTop = s.scrollHeight;
+            const row = lastVisibleRow();
+            if (row) row.scrollIntoView({ block: "nearest" });
+          }
           lastGap = gap();
         });
       }
