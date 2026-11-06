@@ -33,6 +33,7 @@ import xml.etree.ElementTree as ET
 from android_cdp import PKG, Cdp, sh
 
 PORT = 9226
+APP_URL = "https://appassets.androidplatform.net/www/index.html"
 RESULTS = []
 
 
@@ -138,8 +139,11 @@ def main():
     print(f"[IME] landscape screenshot {size[0]}x{size[1]}", flush=True)
 
     cdp = Cdp(PORT)
+    # 锁屏/息屏时 Activity 可能在前台但不 draw，WebView 不 commit（实测 target url 恒空）。
+    sh("adb shell input keyevent KEYCODE_WAKEUP")
+    sh("adb shell wm dismiss-keyguard")
     try:
-        cdp.attach("index.html", timeout=120)
+        cdp.attach("index.html", timeout=120, fallback_url=APP_URL)
     except Exception as e:
         print(f"[IME-FAIL] CDP attach: {e}", flush=True)
         _, logs = sh("adb logcat -d -t 200")

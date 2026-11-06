@@ -219,3 +219,11 @@ test("包络帧下标：越界钳制在 [0, len-1]", () => {
   assert.equal(idx(0, 50, 0), 0);
   assert.ok(TTS._breathLevel(0) >= 0.01 && TTS._breathLevel(0) <= 0.1, "呼吸极轻微");
 });
+
+test("延迟探针入口 _lastTiming 在引擎作用域内可取（回归：曾 ReferenceError）", () => {
+  // 真机 CI 里 TTS._lastTiming() 抛 ReferenceError: lastTiming is not defined，
+  // 因为旧的导出写在 IIFE 外层作用域；单测此前没调用过这个入口。
+  const engine = TTS._create(fakeWin());
+  assert.equal(typeof engine._lastTiming, "function");
+  assert.equal(engine._lastTiming(), null, "未播放时应为 null");
+});

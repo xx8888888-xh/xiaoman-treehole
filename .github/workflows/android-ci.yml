@@ -321,10 +321,13 @@ jobs:
             # 所以整段压成一行：取值 → 兜底默认 IME → enable/set，变量同 shell 生效。
             IME_ID=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | head -1); if [ -z "$IME_ID" ]; then IME_ID=$(adb shell settings get secure default_input_method | tr -d '\r'); fi; if [ -z "$IME_ID" ]; then IME_ID="com.android.inputmethod.latin/.LatinIME"; fi; echo "IME=$IME_ID"; adb shell ime enable "$IME_ID" || true; adb shell ime set "$IME_ID" || true; adb shell settings put secure default_input_method "$IME_ID" || true; echo "default_ime=$(adb shell settings get secure default_input_method | tr -d '\r')"
 
+            adb shell input keyevent KEYCODE_WAKEUP || true
             adb shell wm dismiss-keyguard || true
+            adb shell input keyevent 82 || true
             adb shell wm user-rotation lock 1 || true
-            adb shell am start -n com.xiaoman.treehole/.MainActivity
+            adb shell am start -W -n com.xiaoman.treehole/.MainActivity
             sleep 12
+            for i in 1 2 3 4 5; do adb shell dumpsys window | grep -q "mCurrentFocus.*treehole" && { echo "focus=ok try=$i"; break; }; echo "focus=retry$i"; adb shell input keyevent KEYCODE_WAKEUP || true; adb shell wm dismiss-keyguard || true; sleep 3; done
             echo "rotation=$(adb shell dumpsys window displays | grep -o 'mRotation=ROTATION_[0-9]*' | head -1)"
             adb shell pidof com.xiaoman.treehole || { echo "ERROR: app not running"; adb logcat -d | tail -150; exit 1; }
 

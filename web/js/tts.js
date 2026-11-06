@@ -570,6 +570,8 @@ const TTS = (() => {
         return muted;
       },
       isMuted: () => muted,
+      /** 探针：上一次服务端播放的分段耗时（毫秒，性能时间轴；不参与播放逻辑） */
+      _lastTiming: () => lastTiming,
       /** provider 对象（单测用：直接校验 available/speak/stop 接口与参数） */
       providerObjects: providers,
       providers: Object.keys(providers),
@@ -590,8 +592,6 @@ const TTS = (() => {
     _speechPlan: speechPlan,
     _speechLevel: speechLevel,
     _charMs: CHAR_MS,
-    /** 探针：上一次服务端播放的分段耗时（毫秒，性能时间轴；不参与播放逻辑） */
-    _lastTiming: () => lastTiming,
     /** 单测入口：注入 fake window 造独立引擎（不触碰真实浏览器/音频） */
     _create: createEngine
   });

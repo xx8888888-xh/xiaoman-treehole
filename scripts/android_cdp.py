@@ -41,7 +41,7 @@ class Cdp:
         self.n = 0
         self.url_filter = "index.html"
 
-    def attach(self, url_filter="index.html", timeout=90):
+    def attach(self, url_filter="index.html", timeout=90, fallback_url=None):
         """等到 page 真正 commit（/json/list 里 url 非空且匹配）再连。
         WebView 冷启动 + assets 首次加载在慢 runner 上可能要十几秒，
         之前只查一次会拿到 url="" 的空 target，直接把"页面还没起"误判成"注入失败"。"""
@@ -57,6 +57,7 @@ class Cdp:
         # 真机上曾连到 URL 为空的悬浮窗 target，120s 误判"页面没起"。
         # 逐个 socket 轮询，直到出现 URL 匹配的 target。
         end = time.time() + timeout
+        t_start = time.time()
         last = []
         while time.time() < end:
             for sk in list(sockets):
@@ -76,6 +77,23 @@ class Cdp:
                     print("[cdp] attach", target.get("type"), target.get("url"), flush=True)
                     self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024)
                     return target["url"]
+                # 兜底：只有一个 target 且 url 为空（WebView 已创建但页面没 commit，
+                # 锁屏/冷启动时见过），主动 Page.navigate 拉一次同一入口再等它自己 commit。
+                if (fallback_url and time.time() - t_start > 30
+                        and len(lst) == 1 and not (lst[0].get("url") or "")):
+                    try:
+                        print("[cdp] blank target → Page.navigate", fallback_url, flush=True)
+                        self.ws = connect(lst[0]["webSocketDebuggerUrl"],
+                                          max_size=8 * 1024 * 1024)
+                        self._send("Page.navigate", {"url": fallback_url}, timeout=10)
+                    except Exception as e:
+                        print("[cdp] navigate fallback 失败:", str(e)[:120], flush=True)
+                    finally:
+                        try:
+                            self.ws.close()
+                        except Exception:
+                            pass
+                        self.ws = None
             time.sleep(1)
         raise RuntimeError(f"{timeout}s 内没有匹配 {url_filter} 的 WebView target，"
                            f"最近一次 url 列表={last}")
