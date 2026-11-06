@@ -24,6 +24,9 @@ const Stage = (() => {
   let mode = "idle";          // idle | layers | static | silhouette | hidden
   let lipOpen = 0;            // 当前口型目标值
   let lipHold = 0;            // 剩余保持帧（无分析器时的兜底）
+  let lipWasOpen = false;     // 零动画：上一帧是否张着嘴（用于收尾立即合嘴）
+  let lipPaintAt = 0;         // 零动画：口型重绘节流时间戳（ms）
+  const LIP_STILL_MS = 66;    // 零动画口型上限 ~15fps，只覆盖说话那几秒
   // 舞台改为"聊天落屏后再挂载"（见 app.js requestStageMount）：挂载前收到的
   // 表情/动作先记下，挂载完成后补放一次，开场白的 Greeting 动作不会丢。
   let pendingEmotion = null;
@@ -514,16 +517,21 @@ const Stage = (() => {
    * 表情/眼睛/嘴型/眨眼相位（呼吸、视线、lipSync 参数都停在上一帧）。
    * 签名相同 = 重绘结果与屏上像素完全一致 → 不画。
    * 典型场景：空闲问候与开场白用同一个 emotion=gentle，60s 后再 setEmotion 一次
-   * 属于"状态没变"；TTS 收尾的 lipFrame(0) 在零动画下也不会改动 params，
-   * 之前这两处各补一帧（AVD 实测 2×151,654px、14 次 drawImage）。 */
+   * 属于"状态没变"；TTS 收尾重复 setEmotion 同理。签名相同 = 不画。 */
   function stillFrameSig(p) {
     if (!p) return "";
+    // lipSync 是零动画里唯一"说话时会变"的引擎参数（嘴型 7 档量化），必须进签名，
+    // 否则合嘴后的下一次 setEmotion 会误判"画面没变"而跳过重绘。
+    const lip = typeof p.getParam === "function"
+      ? Math.round((Number(p.getParam("lipSync")) || 0) * 8)
+      : 0;
     return [
       p.emotion,
       p.eye && p.eye.l,
       p.eye && p.eye.r,
       p.mouthFrame,
-      p.blink && p.blink.phase
+      p.blink && p.blink.phase,
+      lip
     ].join("|");
   }
 
@@ -872,10 +880,11 @@ const Stage = (() => {
     }
   }
 
-  /** 纯函数：TTS 包络 level → 口型目标（<0=无音频 → 静止；零动画连呼吸都停） */
-  function lipFor(level, motion) {
+  /** 纯函数：TTS 包络 level → 口型目标（<0=无音频 → 静止）。
+   *  口型是"正在说话"的事实反馈，不跟装饰动效开关走：motion 只决定用什么节奏画
+   *  （满帧平滑 / 零动画 ≤15fps 限频定格），不决定嘴要不要动。 */
+  function lipFor(level) {
     if (typeof level !== "number" || !Number.isFinite(level) || level <= 0) return 0;
-    if (!motion) return 0;
     return Math.min(1, 0.04 + Math.min(1, level) * 0.55);
   }
 
@@ -883,18 +892,32 @@ const Stage = (() => {
   function lipFrame(level) {
     // TTS/音频每喂一帧（含静音段 level=0）都是"正在播放"的真实信号
     markActive();
-    const target = lipFor(level, motionEnabled);
+    const target = lipFor(level);
     lipOpen = target;
     lipHold = target > 0 ? 6 : 0;
-    if (!puppet) return;
-    // 零动画：直接落到目标值并渲染一帧（不启动循环）。
-    // 但零动画下没有 update(dt)，setParam 只改目标、不会进入 params，
-    // 这一帧的像素与上一帧完全相同（与 TTS 是否有声音无关）——签名不变即跳过。
-    if (!motionEnabled) {
-      puppet.setParam("lipSync", lipHold > 0 ? lipOpen : 0);
-      if (lipHold > 0) lipHold = 0;
-      paintIfStillChanged("lip");
+    if (!puppet || mode !== "layers") { lipWasOpen = target > 0.02; return; }
+    if (motionEnabled) {
+      // 动画开：tick 每帧读 lipOpen/lipHold，经 update(dt) 平滑过渡到 7 档嘴型
+      lipWasOpen = target > 0.02;
+      return;
     }
+    // 零动画：不启动 rAF/呼吸/眨眼/视线漫游，只在说话这几秒以 ≤15fps 推进口型参数。
+    if (target <= 0.02) {
+      lipHold = 0;
+      if (!lipWasOpen) return;               // 本来就没张嘴：不产生空刷新
+      puppet.setParam("lipSync", 0);
+      if (typeof puppet.update === "function") puppet.update(0.12);
+      renderOnce("lip-close");               // 收尾立即合嘴，避免定格在张嘴
+      lipWasOpen = false;
+      return;
+    }
+    const t = nowMs();
+    if (t - lipPaintAt < LIP_STILL_MS) return;
+    lipPaintAt = t;
+    lipWasOpen = true;
+    puppet.setParam("lipSync", target);
+    if (typeof puppet.update === "function") puppet.update(LIP_STILL_MS / 1000);
+    renderOnce("lip");
   }
 
   return {
@@ -948,11 +971,17 @@ const Stage = (() => {
     /** 单测入口：零动画冻结帧签名 + 注入假 puppet（返回还原函数） */
     _stillFrameSig: stillFrameSig,
     _stillForTest(nextPuppet, motionOn) {
-      const prev = { puppet, motionEnabled, stillSig };
+      const prev = { puppet, motionEnabled, stillSig, mode, lipWasOpen, lipPaintAt };
       puppet = nextPuppet;
       motionEnabled = !!motionOn;
+      mode = "layers";                        // 注入的假 puppet 视作已挂载的 layer 模式
+      lipWasOpen = false;
+      lipPaintAt = 0;
       stillSig = stillFrameSig(nextPuppet);   // 视作"该状态已经画在屏上"
-      return () => { puppet = prev.puppet; motionEnabled = prev.motionEnabled; stillSig = prev.stillSig; };
+      return () => {
+        puppet = prev.puppet; motionEnabled = prev.motionEnabled; stillSig = prev.stillSig;
+        mode = prev.mode; lipWasOpen = prev.lipWasOpen; lipPaintAt = prev.lipPaintAt;
+      };
     }
   };
 })();

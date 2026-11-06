@@ -138,14 +138,19 @@ test("零动画：表情真的变化只重绘一次，之后再调同值不重�
   } finally { undo(); }
 });
 
-test("零动画：lipFrame(0) 不改 params，签名不变 → 不重绘", () => {
+test("零动画：说话时按 ≤15fps 把口型推进引擎，收尾立即合嘴", () => {
   const p = fakePuppet("smile");
-  p.params.lipSync = 0.6;                 // 动画期留下的口型（零动画无 update 不会回 0）
+  p.params.lipSync = 0.6;                 // 动画期留下的口型
   const undo = Stage._stillForTest(p, false);
   try {
-    Stage.lipFrame(0.53);                 // TTS 收尾/无 provider 的 frame(0)
+    Stage.lipFrame(0.53);
+    assert.equal(p.paints, 1, "首帧口型必须画出来（默认极简预设下也要动）");
+    assert.ok(p.params.lipSync > 0.3, `口型目标要进引擎参数，实际 ${p.params.lipSync}`);
+    Stage.lipFrame(0.53);                 // 66ms 节流窗口内 → 不重绘
+    assert.equal(p.paints, 1, "零动画口型限频 ≤15fps");
     Stage.lipFrame(0);
-    assert.equal(p.paints, 0, "零动画的 lipFrame 不该产生画布重绘");
+    assert.equal(p.paints, 2, "说话结束立即合嘴重绘一次，不定格在张嘴");
+    assert.equal(p.params.lipSync, 0);
   } finally { undo(); }
 });
 
