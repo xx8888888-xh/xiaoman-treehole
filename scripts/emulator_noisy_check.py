@@ -24,6 +24,7 @@ emulator_noisy_check.py · AVD「NoisyGuard 真的注册了」证据（ADB / dum
 """
 import re
 import sys
+import time
 
 from android_cdp import PKG, sh
 
@@ -68,10 +69,27 @@ def receiver_blocks(text):
 
 
 def main():
-    pid = pid_of()
-    check(f"应用进程存活（pid={pid or '无'}）", bool(pid), f"{PKG} pid={pid}" if pid else "进程不在")
+    # 注册发生在 MainActivity 建 WebView 时（TtsController.shared → 构造函数），
+    # 但冷启动到进程就绪有几百毫秒到几秒的抖动，这里带重试，避免"刚启动还没注册"的假红。
+    pid = ""
+    matched = ""
+    sources = []
+    for attempt in range(8):
+        pid = pid_of()
+        if pid:
+            sources = dumpsys_sources()
+            for cmd, out in sources:
+                for block in receiver_blocks(out):
+                    if ACTION in block and (PKG in block or re.search(rf"[\s{{]{re.escape(pid)}\s", block)):
+                        matched = f"{cmd} | " + " ".join(block.split())[:220]
+                        break
+                if matched:
+                    break
+        if matched:
+            break
+        time.sleep(1.5)
 
-    sources = dumpsys_sources()
+    check(f"应用进程存活（pid={pid or '无'}）", bool(pid), f"{PKG} pid={pid}" if pid else "进程不在")
     check("dumpsys 有输出", bool(sources), "来源=" + ", ".join(c for c, _ in sources))
 
     try:
@@ -82,15 +100,6 @@ def main():
         print(f"[NOISY-WARN] 写 {DUMP_FILE} 失败: {e}", flush=True)
 
     # ---- 证据 1：ReceiverList 块里有这个 action，并且是本进程的接收器 ----
-    matched = ""
-    for cmd, out in sources:
-        for block in receiver_blocks(out):
-            if ACTION in block and (PKG in block or (pid and re.search(rf"[\s{{]{re.escape(pid)}\s", block))):
-                matched = f"{cmd} | " + " ".join(block.split())[:220]
-                break
-        if matched:
-            break
-
     # 失败时给出最接近的原文摘录，方便一眼判断是环境（dumpsys 段落缺失）还是产品问题
     excerpt = ""
     if not matched:
@@ -107,8 +116,15 @@ def main():
           bool(matched), matched or excerpt)
 
     # ---- 证据 2：应用自己打的注册探针（交叉印证，不单独作为通过依据）----
-    rc, log = sh("adb logcat -d", timeout=120)
-    has_probe = PROBE in log
+    # 本步骤紧跟在应用冷启动之后（chat check 之前），此时 logcat 里还能看到注册那一行；
+    # 仍留 3 次重试，避免日志落盘延迟导致的假红。
+    has_probe = False
+    for _ in range(3):
+        rc, log = sh("adb logcat -d", timeout=120)
+        has_probe = PROBE in log
+        if has_probe:
+            break
+        time.sleep(2)
     check("logcat：[probe] noisy-receiver registered", has_probe,
           PROBE if has_probe else "logcat 里没有该探针（可能缓冲区已滚动）")
 

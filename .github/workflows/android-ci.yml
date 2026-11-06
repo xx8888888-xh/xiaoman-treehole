@@ -202,6 +202,13 @@ jobs:
             # Check for FATAL in logcat
             adb logcat -d | grep -i "AndroidRuntime" | grep -qi "xiaoman" && { echo "ERROR: App FATAL crash in logcat"; adb logcat -d | rg -A15 "FATAL EXCEPTION" | tail -40; exit 1; } || true
 
+            # ---- NoisyGuard 注册（ADB/dumpsys 级证据，不靠 JVM 单测）----
+            # TtsController 构造（MainActivity 建 WebView 时）就 registerReceiver(ACTION_AUDIO_BECOMING_NOISY)；
+            # 这里从 dumpsys 的 Registered Receivers 里核实它确实挂在当前进程上，
+            # 再用 logcat [probe] noisy-receiver registered 交叉印证。
+            # 必须紧跟冷启动跑：logcat 是 2M 环形缓冲，跑完聊天链路后注册那一行可能已被 Chromium 日志挤掉。
+            python3 scripts/emulator_noisy_check.py || { echo "ERROR: NoisyGuard registration check failed"; exit 1; }
+
             # Screenshot: home screen
             adb exec-out screencap -p > emulator_01_home.png
 
@@ -214,12 +221,6 @@ jobs:
             pip3 install --quiet --user requests websockets 2>/dev/null || pip3 install --quiet requests websockets || true
             python3 -c "import websockets, requests; print('cdp deps ok')" || { echo "ERROR: requests/websockets unavailable"; exit 1; }
             python3 scripts/emulator_chat_check.py || { echo "ERROR: main chat check failed"; exit 1; }
-
-            # ---- NoisyGuard 注册（ADB/dumpsys 级证据，不靠 JVM 单测）----
-            # TtsController 构造时就 registerReceiver(ACTION_AUDIO_BECOMING_NOISY)；
-            # 这里从 dumpsys 的 Registered Receivers 里核实它确实挂在本进程上，
-            # 再用 logcat [probe] noisy-receiver registered 交叉印证。
-            python3 scripts/emulator_noisy_check.py || { echo "ERROR: NoisyGuard registration check failed"; exit 1; }
 
             # Poke Live2D
             adb shell input tap 160 220
