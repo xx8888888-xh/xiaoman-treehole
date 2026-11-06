@@ -122,6 +122,28 @@ def main():
         print(f"[IME-FAIL] CDP attach: {e}", flush=True)
         return 1
 
+    # attach 只代表 URL commit，assets 还在加载时 DOM 是空的（首轮真机就栽在这）。
+    diag = None
+    end = time.time() + 60
+    while time.time() < end:
+        try:
+            diag = cdp.eval("""() => ({
+                ready: document.readyState,
+                hasInput: !!document.querySelector("#textInput"),
+                href: location.href,
+                bodyClass: document.body ? document.body.className : "",
+                text: (document.body ? document.body.innerText : "").slice(0, 120)
+            })""")
+            if diag and diag.get("hasInput") and diag.get("ready") == "complete":
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    if not diag or not diag.get("hasInput"):
+        print(f"[IME-FAIL] WebView DOM 未就绪: {diag}", flush=True)
+        return 1
+    print(f"[IME] DOM ready: {diag.get('href')} input=ok", flush=True)
+
     # 键盘隐藏态先截一张，作为"改后"的对照基线
     shot("r5_landscape_before_ime.png")
 
