@@ -427,6 +427,9 @@ jobs:
           # GitHub Actions 每个 step 结束会回收该 step 的进程树：上一版把 TTS server
           # 放在独立 step，到本 step 时进程已死（服务器日志为空、fetch 全失败，
           # 12/12 探针都回落到 browser provider）。必须在同一 step 起、同一 step 用。
+          # CORS 白名单默认只有 8901；压测页在 8911/8912，不放行 OPTIONS 预检会让
+          # 浏览器连 POST 都不发（上一轮服务端日志只见 OPTIONS 204、无 POST /tts）。
+          export XIAOMAN_ALLOW_ORIGINS="http://127.0.0.1:8911,http://127.0.0.1:8912,https://appassets.androidplatform.net"
           XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="cat /tmp/r5-tts.wav" XIAOMAN_TTS_PORT=8903 \
             python3 -u server/tts_server.py >/tmp/tts-fast.log 2>&1 &
           XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="/tmp/r5-tts-slow.sh" XIAOMAN_TTS_PORT=8904 \
