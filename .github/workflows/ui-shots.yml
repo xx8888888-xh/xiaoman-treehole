@@ -396,21 +396,41 @@ jobs:
           PY
 
       # 第五轮：暗色浮窗对比度、flat/neutral 像素差、首音节包络延迟
-      - name: Install TTS + image deps
+      # 首轮 CI 卡在 apt-get update（>=8min 未返回）。延迟测量不需要真语音引擎：
+      # 用合成 WAV（30ms 起音 + 三段音节包络）当 provider 输出，量的是
+      # "点击 → fetch → decode → 首个非零包络帧" 的真实客户端链路。
+      # 另起 8904 端口 + 120ms 假合成，量化服务端合成成本叠加后的总延迟。
+      - name: Prepare TTS fixture (no apt)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq espeak-ng
           python -m pip install --quiet pillow
-          espeak-ng --version | head -1
+          python3 - <<'PY'
+          import math, struct, wave
+          rate, dur = 22050, 2.2
+          frames = []
+          for i in range(int(rate * dur)):
+              t = i / rate
+              u = t % 0.36
+              env = 0.0 if u < 0.02 else (1 - math.exp(-(u - 0.02) * 40))
+              if u > 0.26:
+                  env *= max(0.0, (0.34 - u) / 0.08)
+              frames.append(int(12000 * env * math.sin(2 * math.pi * 220 * t)))
+          with wave.open("/tmp/r5-tts.wav", "wb") as w:
+              w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+              w.writeframes(b"".join(struct.pack("<h", v) for v in frames))
+          print("fixture /tmp/r5-tts.wav")
+          PY
+          printf '#!/bin/sh\nsleep 0.12\ncat /tmp/r5-tts.wav\n' > /tmp/r5-tts-slow.sh
+          chmod +x /tmp/r5-tts-slow.sh
 
-      - name: Start TTS server (cmd → espeak-ng, 8903)
+      - name: Start TTS servers (fast 8903 / +120ms 8904)
         run: |
-          XIAOMAN_TTS_PROVIDER=cmd \
-          XIAOMAN_TTS_CMD="espeak-ng -v cmn --stdout" \
-          XIAOMAN_TTS_PORT=8903 \
-          nohup python3 server/tts_server.py >/tmp/tts.log 2>&1 &
-          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/health >/dev/null && break; sleep 0.5; done
+          XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="cat /tmp/r5-tts.wav" XIAOMAN_TTS_PORT=8903 \
+            nohup python3 server/tts_server.py >/tmp/tts-fast.log 2>&1 &
+          XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="/tmp/r5-tts-slow.sh" XIAOMAN_TTS_PORT=8904 \
+            nohup python3 server/tts_server.py >/tmp/tts-slow.log 2>&1 &
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/health >/dev/null && curl -sf http://127.0.0.1:8904/health >/dev/null && break; sleep 0.5; done
           curl -sf http://127.0.0.1:8903/health; echo
+          curl -sf http://127.0.0.1:8904/health; echo
 
       - name: Render R5 shots
         run: |
@@ -426,8 +446,9 @@ jobs:
           M = {}
 
           CFG = {"mode": "offline", "heartbeatOn": False, "tts": "off", "allowFreePersonal": False}
-          CFG_TTS = {"mode": "offline", "heartbeatOn": False, "tts": "server",
-                     "ttsServer": "http://127.0.0.1:8903", "allowFreePersonal": False}
+          def cfg_tts(server):
+              return {"mode": "offline", "heartbeatOn": False, "tts": "server",
+                      "ttsServer": server, "allowFreePersonal": False}
           MEM = {"称呼": "阿禾", "在意的人": "妈妈", "在意的事": "周三复诊", "最近": "在准备换工作"}
           LONG_TIP = "今天降温了，出门记得把围巾带上；回来的时候我给你留了热水，别急着做别的。"
 
@@ -617,13 +638,13 @@ jobs:
                   setTimeout(() => finish("timeout"), 12000);
               })"""
 
-              def latency(base, tag, texts):
+              def latency(base, tag, texts, server):
                   rows = []
                   for text in texts:
                       ctx = browser.new_context(viewport={"width": 390, "height": 844},
                                                 device_scale_factor=1, locale="zh-CN")
                       page = ctx.new_page()
-                      seed(page, base, cfg=CFG_TTS)
+                      seed(page, base, cfg=cfg_tts(server))
                       page.wait_for_timeout(900)
                       r = page.evaluate(
                           LAT.replace("今天降温了，出门记得带围巾。", text))
@@ -634,16 +655,19 @@ jobs:
                   vals = [x["totalMs"] for x in rows if x["why"] == "first-nonzero"]
                   m["medianMs"] = round(statistics.median(vals), 1) if vals else None
                   # 分段中位数（毫秒，相对 speak() 入口）
-                  seg = {"fetch": [], "play": [], "envReady": [], "firstFrame": []}
+                  seg = {"preDecode": [], "decode": [], "play": [], "envReady": [], "firstFrame": []}
                   for x in rows:
                       t = x.get("timing") or {}
                       if not t.get("speakAt"):
                           continue
-                      seg["fetch"].append(t["fetchEndAt"] - t["speakAt"])
+                      if t.get("decodeStartAt"):
+                          seg["preDecode"].append(t["decodeStartAt"] - t["speakAt"])
+                      if t.get("envReadyAt", 0) > 0 and t.get("decodeStartAt"):
+                          seg["decode"].append(t["envReadyAt"] - t["decodeStartAt"])
                       if t.get("playAt"):
                           seg["play"].append(t["playAt"] - t["fetchEndAt"])
                       if t.get("envReadyAt", 0) > 0:
-                          seg["envReady"].append(t["envReadyAt"] - t["fetchEndAt"])
+                          seg["envReady"].append(t["envReadyAt"] - t["speakAt"])
                       if t.get("firstNonZeroAt"):
                           seg["firstFrame"].append(t["firstNonZeroAt"] - t["speakAt"])
                   m["segmentsMedianMs"] = {k: (round(statistics.median(v), 1) if v else None)
@@ -653,8 +677,10 @@ jobs:
               TEXTS = ["今天降温了，出门记得带围巾。",
                        "我把热水放在桌上了，你慢慢来。",
                        "不用急着回我，先把自己照顾好。"]
-              M["latency_before"] = latency(BEFORE, "R4 顺序解码", TEXTS)
-              M["latency_after"] = latency(AFTER, "R5 并行解码", TEXTS)
+              M["latency_before"] = latency(BEFORE, "R4 顺序解码", TEXTS, "http://127.0.0.1:8903")
+              M["latency_after"] = latency(AFTER, "R5 并行解码", TEXTS, "http://127.0.0.1:8903")
+              M["latency_before_slow"] = latency(BEFORE, "R4 顺序解码 +120ms 服务端", TEXTS, "http://127.0.0.1:8904")
+              M["latency_after_slow"] = latency(AFTER, "R5 并行解码 +120ms 服务端", TEXTS, "http://127.0.0.1:8904")
 
               browser.close()
 

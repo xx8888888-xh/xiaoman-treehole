@@ -246,7 +246,7 @@ const TTS = (() => {
       // 延迟探针：从 speak() 入口（≈用户点击）到首个"真语音"包络帧。
       // 阈值 0.12 高于呼吸兜底峰值 0.09，避免把"没解码时的呼吸"误算成首音节。
       const timing = {
-        speakAt: lastSpeakAt || now(), fetchEndAt: now(), playRequestAt: 0,
+        speakAt: lastSpeakAt || now(), fetchEndAt: now(), decodeStartAt: 0, playRequestAt: 0,
         playAt: 0, envReadyAt: 0, firstNonZeroAt: 0,
       };
       lastTiming = timing;
@@ -271,6 +271,7 @@ const TTS = (() => {
       // 解码与开播并行：旧实现等 audio.play() resolve 后才 fetch+decode，
       // 白等一个"真正开播"的往返（Chromium/WebView 30-80ms）。现在同一轮启动，
       // 包络先就绪就先按播放进度出帧，开播延迟不受影响。
+      timing.decodeStartAt = now();
       computeEnvelope(url).then(e => {
         env = e;
         timing.envReadyAt = now();
