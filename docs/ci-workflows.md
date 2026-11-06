@@ -174,6 +174,23 @@ Playwright 统一到复合动作后，每个 GUI job 共享 `${{ runner.os }}-pl
 | release 签名 | `build_apk.sh` | 云端由 `android-release.yml` 出签名包；本地只用于验证 keystore/口令 |
 | 真机后台与耗电 | `run_bg_e2e.sh` | 需要真机后台保活、电量采样 |
 
+### 7.1 `test_paging` 的手动点名入口
+
+`ui_scripts=all`（默认矩阵）**不含** `test_paging`；需要验证它时显式点名，三条入口任选：
+
+```bash
+# 直接跑 e2e：只跑这一个脚本，顺带跳过核心 6 套以省时间
+gh workflow run e2e.yml -f ui_scripts=test_paging -f core=false
+
+# 经 gates / nightly 转发（调用方会把 ui_scripts 原样传给 e2e）
+gh workflow run gates.yml -f ui_scripts=test_paging
+gh workflow run nightly.yml -f ui_scripts=test_paging
+```
+
+多点名几个脚本时用逗号分隔，例如 `-f ui_scripts=test_appearance,test_paging`。
+
+**预期结果**：手动点名会跑出**一个已知失败项**（上表两条 WebGL 显存断言），这是设计意图——不放宽断言、不 `skip`，所以不把它塞进默认 `all` 制造每轮常红。其余 12 项断言（分页、窗口恒定、60fps）云端可过。
+
 ## 8. 已知红项
 
 - 2026-11-05 复查：`test_memory_recall` 在主干（`feat/containerize-and-config`，含 data-completeness 的修复）已 **152/152 全绿**；
