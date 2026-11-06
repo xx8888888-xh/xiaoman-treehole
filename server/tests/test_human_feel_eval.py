@@ -88,6 +88,41 @@ class HumanFeelEvalTest(unittest.TestCase):
         self.assertEqual(covered, total,
                          "记忆槽链路漏召回：\n" + "\n".join(misses))
 
+    def test_case_stats_keeps_prev_replies(self):
+        """失败存档必须带失败轮之前 1-2 轮原文；取不到时为空，不编造。"""
+        res = ev.CaseResult({"id": "t1", "category": "具体细节",
+                             "turns": ["a", "b", "c"]})
+        for i, text in enumerate(["甲", "乙", "丙"]):
+            res.turns.append(ev.Turn("u", {"reply": text}, i))
+        res.fail(1, "首轮失败")
+        res.fail(3, "第三轮失败")
+        first, third = ev.case_stats(res)["failures"]
+        self.assertEqual(first["prev_replies"], [])
+        self.assertEqual(third["prev_replies"], ["甲", "乙"])
+
+        # 用例级失败（turn=0）与首轮失败都不崩，且不带上一轮
+        res2 = ev.CaseResult({"id": "t2", "category": "追问", "turns": ["a"]})
+        res2.turns.append(ev.Turn("u", {"reply": "甲"}, 0))
+        res2.fail(0, "建议轮次 1>0")
+        self.assertEqual(ev.case_stats(res2)["failures"][0]["prev_replies"], [])
+
+    def test_archive_stores_prev_replies_on_real_failure(self):
+        """走真实 rubric 的末轮失败：归档要落下前一至两轮回复原文。"""
+        case = {"id": "x", "category": "具体细节",
+                "turns": ["我把关东煮买回来了", "你猜怎么着"],
+                "expect_any": ["关东煮"]}
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("我把关东煮买回来了",
+                                 {"reply": "排队排了四十分钟"}, 0))
+        res.turns.append(ev.Turn("你猜怎么着",
+                                 {"reply": "团子闻着味儿过来了吧"}, 1))
+        ev.check_case_expect(res, self.data["universal"])
+        stats = ev.case_stats(res)
+        self.assertFalse(stats["passed"])
+        failure = stats["failures"][0]
+        self.assertEqual(failure["turn"], 2)
+        self.assertEqual(failure["prev_replies"], ["排队排了四十分钟"])
+
     def test_pass_rate_and_regression(self):
         by_cat = {}
         failures = []
