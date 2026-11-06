@@ -18,6 +18,8 @@
   python scripts/offline_rubric_audit.py
   python scripts/offline_rubric_audit.py --self-test
   python scripts/offline_rubric_audit.py --changes   # 3 处改动的改前红/改后绿断言
+  python scripts/offline_rubric_audit.py --anchor-window  # 锚点最近 2 轮 + 归档保守复算
+  python scripts/offline_rubric_audit.py --advice-scope   # 追问默认 0 / followup-04 显式 1
 """
 
 import json
@@ -403,7 +405,137 @@ def self_test():
     return t
 
 
+def anchor_window_audit():
+    """A. 锚点口径：具体细节类“最近 2 轮接住过一次”即算接住。
+
+    证明三件事：
+    1) 旧口径（只看末轮）红、新口径绿；
+    2) 两轮都没接住，仍然红（没有变成“无条件放行”）；
+    3) 追问等其他类不受影响（仍只看末轮）。
+    并对历史 112 条归档做保守复算：缺上一轮原文时一律不算翻绿。
+    """
+    universal = json.loads(CASES.read_text(encoding="utf-8"))["universal"]
+    checks = []
+
+    def add(name, got, want, note=""):
+        checks.append({"name": name, "got": got, "want": want,
+                       "pass": got == want, "note": note})
+
+    def sim(category, texts, terms):
+        r = ev.CaseResult({"id": "sim-" + category, "category": category,
+                           "expect_any": list(terms)})
+        for i, t in enumerate(texts, 1):
+            r.turns.append(ev.Turn("u", {"reply": t}, i))
+        ev.check_case_expect(r, universal)
+        return r.passed
+
+    def old_last_turn_only(texts, terms):
+        return any(w in texts[-1] for w in terms)
+
+    # 1) 前一轮接住、末轮换说法：旧红 -> 新绿
+    t1, t2 = "关东煮？那玩意儿你居然排了四十分钟", "真的假的？团子闻闻也好"
+    add("具体细节:前轮接住->新口径绿", sim("具体细节", [t1, t2], ["关东煮"]), True,
+        "旧口径=%s" % old_last_turn_only([t1, t2], ["关东煮"]))
+    add("具体细节:旧口径确实红", old_last_turn_only([t1, t2], ["关东煮"]), False)
+
+    # 2) 两轮都没接住：新口径仍红
+    add("具体细节:两轮都没接住->仍红",
+        sim("具体细节", ["真的假的？", "团子闻闻也好"], ["关东煮"]), False)
+
+    # 3) 追问类不动：前轮接住、末轮没接住，仍红
+    add("追问:不受影响->仍红",
+        sim("追问", ["张三让你改的？", "你们一起拆吧"], ["张三"]), False)
+
+    # 4) 显式 expect_scope=any 行为不变
+    add("显式 any 仍全轮扫描->绿",
+        any("关东煮" in t for t in [t1, t2]), True)
+
+    # 历史归档复算：有 prev_replies 才能证实“前一轮接住”，否则只标潜在
+    arch = json.loads(ARCHIVE.read_text(encoding="utf-8"))
+    cases_by_id = {c["id"]: c for c in json.loads(
+        CASES.read_text(encoding="utf-8"))["cases"]}
+    red_detail, confirmed, potential, other_fail = [], [], [], []
+    for s in arch["case_stats"]:
+        if s["category"] != "具体细节" or s["passed"]:
+            continue
+        red_detail.append(s["id"])
+        fails = s.get("failures") or []
+        if not (len(fails) == 1 and fails[0]["reason"].startswith("未体现期望内容")):
+            other_fail.append(s["id"])
+            continue
+        terms = cases_by_id[s["id"]].get("expect_any") or []
+        prev = fails[0].get("prev_replies") or []
+        if prev and any(w in "\n".join(prev) for w in terms):
+            confirmed.append(s["id"])
+        else:
+            potential.append(s["id"])
+
+    def confirmable(prev, terms):
+        return bool(prev) and any(w in "\n".join(prev) for w in terms)
+
+    add("归档:有前轮原文且接住->可确认翻绿",
+        confirmable(["关东煮？这大晚上的太合适了"], ["关东煮"]), True)
+    add("归档:无前轮原文->只能标潜在", confirmable([], ["关东煮"]), False)
+    add("归档:可确认翻绿条数", len(confirmed), len(confirmed),
+        "存量归档（旧格式无 prev_replies）确认翻绿=%d" % len(confirmed))
+    add("归档:潜在上限（未证实，不计入通过率）", len(potential), len(potential),
+        "、".join(potential))
+    add("归档:有其他失败、不可能翻绿", len(other_fail), len(other_fail),
+        "、".join(other_fail))
+
+    return {"checks": checks, "confirmed": confirmed, "potential": potential,
+            "red_detail": red_detail, "other_fail": other_fail,
+            "all_pass": all(c["pass"] for c in checks)}
+
+
+def advice_scope_audit():
+    """锁死建议口径：追问/细节全局默认 0；followup-04 显式 1；其他类默认不变。"""
+    universal = json.loads(CASES.read_text(encoding="utf-8"))["universal"]
+    cases = {c["id"]: c for c in json.loads(
+        CASES.read_text(encoding="utf-8"))["cases"]}
+    checks = []
+
+    def add(name, got, want, note=""):
+        checks.append({"name": name, "got": got, "want": want,
+                       "pass": got == want, "note": note})
+
+    add("追问/细节全局默认仍为 0",
+        (effective_limit({"category": "追问"}, universal),
+         effective_limit({"category": "具体细节"}, universal)), (0, 0),
+        "追问类不得改回 1")
+    add("追问仍在 strict 词表范围",
+        "追问" in ev.ADVICE_STRICT_CATEGORIES, True)
+    add("followup-04 显式配置为 1",
+        cases["followup-04"].get("max_advice_turns"), 1)
+    add("followup-04 生效上限为 1",
+        effective_limit(cases["followup-04"], universal), 1)
+    add("其他类默认不被抬高",
+        effective_limit({"category": "情绪低落"}, universal),
+        universal["max_advice_turns"])
+    return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
+
+
 def main():
+    if "--advice-scope" in sys.argv:
+        a = advice_scope_audit()
+        print("== 建议口径锁死 ==")
+        for c in a["checks"]:
+            print("  [%s] %s -> got=%r want=%r%s"
+                  % ("PASS" if c["pass"] else "RED", c["name"],
+                     c["got"], c["want"], (" | " + c["note"]) if c["note"] else ""))
+        return 0 if a["all_pass"] else 1
+
+    if "--anchor-window" in sys.argv:
+        a = anchor_window_audit()
+        print("== A. 锚点口径（最近 2 轮接住过一次） ==")
+        for c in a["checks"]:
+            print("  [%s] %s -> got=%r want=%r%s"
+                  % ("PASS" if c["pass"] else "RED", c["name"],
+                     c["got"], c["want"], (" | " + c["note"]) if c["note"] else ""))
+        print("\n历史 112 条复算：确认翻绿 %d 条；潜在 %d 条（未证实，不计入通过率）；另有其他失败 %d 条"
+              % (len(a["confirmed"]), len(a["potential"]), len(a["other_fail"])))
+        return 0 if a["all_pass"] else 1
+
     if "--changes" in sys.argv:
         ch = changes_audit()
         print("== 3 处改动审计（改前红 / 改后绿） ==")

@@ -65,7 +65,10 @@ class Cdp:
             cand = [t for t in lst if url_filter in (t.get("url") or "")]
             if cand:
                 target = cand[0]
-                self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024)
+                # 关掉 websockets 默认的 20s ping：WebView devtools 不回 pong，
+                # 长时间静置（耗电探针 60s/300s）会在第 20s 被客户端误判断线。
+                self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024,
+                                  ping_interval=None, ping_timeout=None)
                 return target["url"]
             time.sleep(1)
         raise RuntimeError(f"{timeout}s 内没有匹配 {url_filter} 的 WebView target，"

@@ -287,13 +287,30 @@ def check_turn(result: CaseResult, turn: Turn, prev: list, cfg: dict,
     return bool(advice_hits(case, reply))
 
 
+ANCHOR_WINDOW_CATEGORIES = ("具体细节",)
+
+
+def _expect_pool(result: CaseResult) -> list:
+    """expect_any 的取轮范围。
+
+    锚点/细节类的语义是“接住过一次”，不是“末轮复述”，看最近 2 轮；
+    追问/拒绝等其他类仍只看末轮，口径不变。
+    """
+    case = result.case
+    if case.get("expect_scope") == "any":
+        return result.turns
+    if case.get("category") in ANCHOR_WINDOW_CATEGORIES:
+        return result.turns[-2:]
+    return result.turns[-1:]
+
+
 def check_case_expect(result: CaseResult, universal: dict):
     case = result.case
     if not result.turns:
         return
     expect = case.get("expect_any")
     if expect:
-        pool = result.turns if case.get("expect_scope") == "any" else result.turns[-1:]
+        pool = _expect_pool(result)
         if not any(w in t.text for t in pool for w in expect):
             result.fail(len(result.turns),
                         "未体现期望内容（期望其一：%s；实际：%s）"
@@ -843,6 +860,26 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
     return data
 
 
+def enrich_failures(res) -> list:
+    """失败记录附上失败轮之前 1-2 轮的回复原文。
+
+    锚点类判定放宽到“最近 2 轮接住”后，离线复算需要上一轮原文；
+    取不到（首轮失败 / 用例级失败）时为空列表，不编造。
+    """
+    out = []
+    turns = res.turns
+    for f in res.failures:
+        rec = dict(f)
+        idx = f.get("turn")
+        if isinstance(idx, int) and 0 < idx <= len(turns):
+            prev = turns[max(0, idx - 3):idx - 1]
+        else:
+            prev = []
+        rec["prev_replies"] = [t.text for t in prev if t.text]
+        out.append(rec)
+    return out
+
+
 def case_stats(res) -> dict:
     """单条用例的可合并统计（续跑时用来把历史结果并进来）。"""
     turns = res.turns
@@ -881,7 +918,7 @@ def case_stats(res) -> dict:
         "repeat": repeat,
         "recall_checks": recall_checks,
         "recall_natural": recall_natural,
-        "failures": list(res.failures),
+        "failures": enrich_failures(res),
     }
 
 
