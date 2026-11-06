@@ -549,6 +549,7 @@ jobs:
                                         device_scale_factor=2, locale="zh-CN")
               page = ctx.new_page()
               seed(page, AFTER)
+              page.wait_for_function("() => window.Stage && window.Stage._faceState", timeout=20000)
               page.wait_for_timeout(3600)
 
               geo = page.evaluate("""() => {
@@ -645,7 +646,8 @@ jobs:
                                                 device_scale_factor=1, locale="zh-CN")
                       page = ctx.new_page()
                       seed(page, base, cfg=cfg_tts(server))
-                      page.wait_for_timeout(900)
+                      page.wait_for_function("() => window.TTS && window.TTS.speak", timeout=15000)
+                      page.wait_for_timeout(300)
                       r = page.evaluate(
                           LAT.replace("今天降温了，出门记得带围巾。", text))
                       page.evaluate("() => window.TTS && TTS.stop()")
