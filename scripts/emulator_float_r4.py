@@ -297,12 +297,15 @@ PROBE_JS = r"""
       return origFill.apply(this, arguments);
     };
 
-    /* 帧边界：puppet.render() 每帧先 clearRect(0,0,W,H)。只有主画布整幅清除才算一帧 */
+    /* 帧边界：puppet.render() 每帧先 clearRect(0,0,W,H)，其中 W/H 是逻辑画布尺寸。
+     * R6 把后备缓冲缩到可见区后，clearRect 的宽高仍按逻辑尺寸（≥ 后备），
+     * 因此"整幅清除"的判据是：从 (0,0) 起清掉一块不小于后备缓冲的区域
+     * （ctx 变换只平移，超出画布的部分被裁剪，等价于清空整块后备）。 */
     proto.clearRect = function (x, y, w0, h0) {
       try {
         var c = mainCanvas();
-        if (c && this.canvas === c && Math.abs(+w0 - c.width) <= 2 &&
-            Math.abs(+h0 - c.height) <= 2) {
+        if (c && this.canvas === c && Math.abs(+x) <= 2 && Math.abs(+y) <= 2 &&
+            +w0 >= c.width - 2 && +h0 >= c.height - 2) {
           S.frames++; S.drawFrames++;
           S.frameLog.push({ t: Math.round(performance.now() - S.t0), d: S.drawCalls });
           if (S.frameLog.length > 40) S.frameLog.shift();
@@ -988,17 +991,40 @@ def blank_edges_png(path, region):
     }
 
 
-def capture_geom_png(cdp, path):
-    """几何矩阵截图：Page.captureScreenshot 优先，失败退回 canvas.toDataURL。
-    返回 (ok, source, detail)；source 决定可见区在图片里的坐标口径。"""
-    detail = ""
+def _png_content_ratio(path):
+    """截图里有内容的像素占比（alpha>阈值；无 alpha 时按左上角背景差分）。
+
+    Page.captureScreenshot 对透明浮窗 WebView 可能返回整页全透明，需要这个
+    便宜的判定来决定是否退回画布读回。失败返回 None。"""
     try:
-        data = cdp.screenshot(path, timeout=20)
-        if data and len(data) > 100:
-            return True, "Page.captureScreenshot", f"{len(data)}B"
-        detail = "Page.captureScreenshot 空"
-    except Exception as e:
-        detail = f"Page.captureScreenshot 不支持: {str(e)[:90]}"
+        from PIL import Image, ImageChops
+    except Exception:
+        return None
+    try:
+        im = Image.open(path)
+        rgba = im.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        if (im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+                or alpha.getextrema()[1] > GEOM_ALPHA_MIN):
+            mask = alpha.point(lambda v: 255 if v > GEOM_ALPHA_MIN else 0)
+        else:
+            rgb = rgba.convert("RGB")
+            bg = rgb.getpixel((0, 0))
+            mask = ImageChops.difference(rgb, Image.new("RGB", rgb.size, bg)).convert("L") \
+                .point(lambda v: 255 if v > GEOM_BG_DIFF else 0)
+        total = im.width * im.height
+        return round(mask.histogram()[255] / float(total), 4) if total else 0.0
+    except Exception:
+        return None
+
+
+def capture_geom_png(cdp, path):
+    """几何矩阵截图：优先画布后备读回，页截图仅在读回不可用时兜底。
+
+    实测（R6 run 42263922259）Page.captureScreenshot 在这个透明浮窗 WebView 上
+    只返回全透明整页（471–1419B、contentRatio=0），而同一时刻 adb 屏幕截图里
+    立绘正常。因此几何断言以画布后备像素为准；source 决定可见区坐标口径。"""
+    detail = ""
     try:
         url = cdp.eval(CANVAS_PNG_JS, timeout=20) or ""
         if isinstance(url, str) and url.startswith("data:image/png;base64,"):
@@ -1006,10 +1032,18 @@ def capture_geom_png(cdp, path):
             if len(raw) > 100:
                 with open(path, "wb") as f:
                     f.write(raw)
-                return True, "canvas.toDataURL", f"{len(raw)}B | {detail}"
-        detail += " | canvas.toDataURL 空"
+                return True, "canvas.toDataURL", f"{len(raw)}B"
+        detail = "canvas.toDataURL 空"
     except Exception as e:
-        detail += f" | canvas 读回失败: {str(e)[:80]}"
+        detail = f"canvas 读回失败: {str(e)[:80]}"
+    try:
+        data = cdp.screenshot(path, timeout=20)
+        if data and len(data) > 100:
+            ratio = _png_content_ratio(path)
+            return True, "Page.captureScreenshot", f"{len(data)}B content={ratio}"
+        detail += " | Page.captureScreenshot 空"
+    except Exception as e:
+        detail += f" | Page.captureScreenshot 不支持: {str(e)[:90]}"
     return False, "", detail
 
 
@@ -2057,12 +2091,18 @@ def main():
                   and not failed_rounds and not failed and not missing
                   and not payload["errors"]
                   and (not geom_enabled or geom_overview.get("ok") is True))
+        # ANR 结论只看「轮次是否完整执行」，与性能判据是否达标无关：
+        # 5 轮都跑完、两预设都采到、无脚本错误 → 未复现就是未复现。
+        exec_complete = (len(rounds_all) == rounds_n and not missing_rounds
+                         and not missing and not payload["errors"])
         if occurrences:
             anr_conclusion = (f"{rounds_n} 轮 × {args.seconds}s/预设复现 ANR {len(occurrences)} 次："
                               + "、".join(f"第{o['round']}轮/{o['preset']}" for o in occurrences))
-        elif len(rounds_all) == rounds_n and not failed_rounds:
+        elif exec_complete:
             anr_conclusion = (f"{rounds_n} 轮 × {len(names)} 预设 × {args.seconds}s 未复现 ANR"
-                              f"（共 {rounds_n * len(names)} 次采样），判为环境偶发")
+                              f"（共 {rounds_n * len(names)} 次采样、"
+                              f"{rounds_n * len(names) * args.seconds}s 采集），"
+                              f"判为环境偶发，保留观察（不等于已修复）")
         else:
             anr_conclusion = (f"轮次未全部完成（{len(rounds_all)}/{rounds_n}），"
                               f"ANR 复现结论不成立")
@@ -2074,6 +2114,7 @@ def main():
             "missingRounds": missing_rounds,
             "anrReproduced": bool(occurrences),
             "anrOccurrences": len(occurrences),
+            "anrExecutionComplete": exec_complete,
             "anrConclusion": anr_conclusion,
             "perRoundOk": [{"round": rr.get("round"), "ok": rr.get("ok"),
                             "anrDetected": rr.get("anrDetected"),
