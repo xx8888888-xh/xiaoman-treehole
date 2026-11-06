@@ -652,13 +652,21 @@ const App = (() => {
   }
   window.__onMode = showModeBadge;
 
-  // 语音不可用：不出声，但文字照常显示；只给一条可关闭的安静提示（不弹窗）
-  function showVoiceTip() {
-    try { if (sessionStorage.getItem("xiaoman_voice_tip_off") === "1") return; } catch (e) {}
-    const tip = $("voiceTip");
-    if (tip) tip.classList.remove("hidden");
+  // 语音不可用：不出声，但文字照常显示；提示有 8s 存活期，收起后失败记录仍留在
+  // sessionStorage（xiaoman_voice_fail_log），下次重绘不会把它刷回来。
+  let voiceTipCtl = null;
+  function voiceTip() {
+    if (!voiceTipCtl && window.VoiceTip) {
+      voiceTipCtl = VoiceTip.create({ el: $("voiceTip"), store: sessionStorage, now: () => Date.now() });
+    }
+    return voiceTipCtl;
+  }
+  function showVoiceTip(reason) {
+    const c = voiceTip();
+    if (c) c.show(reason);
   }
   window.__onVoiceUnavailable = showVoiceTip;
+  window.__voiceTip = voiceTip;   // E2E：可见性 / 存活期 / 失败日志探针
 
   // ---------- 渲染 ----------
   // 长会话分页交给 ChatPager（chat_pager.js）：DOM 只保留当前页 + 缓冲，
@@ -1659,9 +1667,9 @@ const App = (() => {
         TTS.speakSafe(spoken, Stage.lipFrame.bind(Stage), (ok) => {
           // 只有真的出声并播完才打「🔊 语音已播」（句柄写回记录，滑出窗口再回来也不丢）；
           // 设备/播放链路失败时 onEnd(false) —— 只给安静提示，状态与文案同源。
-          if (ok === false) showVoiceTip();
+          if (ok === false) showVoiceTip("play_failed");
           else ChatPager.markVoice(lastRow);
-        }, () => showVoiceTip());
+        }, () => showVoiceTip("start_failed"));
       } catch (e) { console.warn("语音启动异常（文字照常）:", e && e.message); }
     }
 
@@ -1998,7 +2006,8 @@ const App = (() => {
     };
     const voiceTipClose = $("voiceTipClose");
     if (voiceTipClose) voiceTipClose.onclick = () => {
-      $("voiceTip").classList.add("hidden");
+      if (voiceTip()) voiceTip().hide();
+      else $("voiceTip").classList.add("hidden");
       try { sessionStorage.setItem("xiaoman_voice_tip_off", "1"); } catch (e) {}
     };
     // 排队提示：再试一次 / 本次不再提醒
