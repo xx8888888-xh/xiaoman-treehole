@@ -248,11 +248,17 @@ def main():
                     w: +b.width.toFixed(1), h: +b.height.toFixed(1),
                     bottom: +b.bottom.toFixed(1), right: +b.right.toFixed(1)};
         };
-        const rows = document.querySelectorAll("#messages .msg-row");
-        const bubbles = document.querySelectorAll("#messages .bubble");
+        // chat pager 会在 #messages 里常驻两条 .msg-row.window-tip（默认 .hidden），
+        // 直接取 rows[rows.length-1] 拿到的是隐藏占位条（rect 全 0）→ 误判"最后一条不可见"。
+        const visible = (el) => !el.classList.contains("hidden")
+            && !el.classList.contains("window-tip")
+            && el.getBoundingClientRect().height > 0;
+        const rows = Array.from(document.querySelectorAll("#messages .msg-row")).filter(visible);
+        const bubbles = Array.from(document.querySelectorAll("#messages .bubble")).filter(visible);
         const chat = document.querySelector("#chatScroll");
         const last = rows.length ? rows[rows.length - 1] : null;
-        const lastB = bubbles.length ? bubbles[bubbles.length - 1] : null;
+        const lastB = (last && last.querySelector(".bubble"))
+            || (bubbles.length ? bubbles[bubbles.length - 1] : null);
         return {
             dpr: devicePixelRatio || 1,
             innerW: innerWidth, innerH: innerHeight,
@@ -313,10 +319,12 @@ def main():
     check("WebView 因 adjustResize 缩短（键盘真的占了可视区）",
           bool(keyboard_from_screen and keyboard_from_screen > 200),
           f"screenH={screen_h} webviewBottom={vis_bottom} keyboard={keyboard_from_screen}px")
-    check("IME 窗口高度与 WebView 缩短量一致（差值 ≤32px）",
-          bool(keyboard_from_frame and keyboard_from_screen and
-               abs(keyboard_from_frame - keyboard_from_screen) <= 32),
-          f"dumpsys={keyboard_from_frame} screen-webview={keyboard_from_screen}")
+    # 横屏下 dumpsys 的 InputMethod mFrame 是旋转坐标系（实测 [0,83][2148,1080]，
+    # 顶边是状态栏底而不是键盘顶边），不能拿它减出键盘高度；键盘高度以
+    # adjustResize 后的 WebView 底边为准，这里只校验"键盘确实吃掉 ≥25% 屏高"。
+    check("键盘高度 ≥ 屏高 25%（横屏 mFrame 不作高度基准）",
+          bool(keyboard_from_screen and screen_h and keyboard_from_screen >= screen_h * 0.25),
+          f"keyboard={keyboard_from_screen}px/{screen_h}px imeFrame={frame}")
     check("最后一条消息未被键盘遮挡（0px）", occluded == 0, f"occluded={occluded}px")
     check("输入框完整可见（0px 溢出）", input_over == 0, f"inputOverflow={input_over}px")
     check("最后一条消息在聊天可视区内（未被列表容器裁掉）",

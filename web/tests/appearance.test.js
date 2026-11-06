@@ -399,3 +399,15 @@ test("空态/记忆页只有一个主焦点，次级说明收敛；发送态与�
   assert.match(CSS, /\.inputbar\[data-recording="true"\]/);
   assert.match(CSS, /var\(--press-scale\)/);
 });
+
+test("横屏 + 软键盘：极矮视口（≤260px）必须收紧顶栏与输入条", () => {
+  // 云端 AVD 实测（2280×1080，键盘弹起后 WebView 只剩 149 CSS px）：
+  // 旧布局 topbar 64 + chatArea margin 28 + inputbar 79 会把输入框挤出可视区
+  // （溢出 36 设备 px），聊天区只剩 12px。这条规则是修复的唯一入口。
+  const mq = "@media (orientation: landscape) and (max-height: 260px)";
+  assert.match(CSS, /@media \(orientation: landscape\) and \(max-height: 260px\)/);
+  const block = CSS.split(mq)[1].split("/* ---------- 记忆抽屉空态")[0];
+  assert.match(block, /\.topbar\s*\{[\s\S]{0,80}min-height: 32px/, "顶栏未从 64px 压缩");
+  assert.match(block, /#chatArea\s*\{\s*margin:\s*0;\s*\}/, "聊天区外层 margin 未清零");
+  assert.match(block, /\.inputbar\s*\{[\s\S]{0,120}var\(--space-1\)/, "输入条 padding 未压缩");
+});

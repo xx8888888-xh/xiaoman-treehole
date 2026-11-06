@@ -1116,6 +1116,20 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   #stage { height: 120px; min-height: 120px; }
 }
 
+/* ---------- 横屏 + 软键盘：可视高只剩 ~150px ----------
+ * 实测（云端 AVD，2280×1080，dpr 2.75）：键盘 588px 占 54%，WebView 只剩 149 CSS px。
+ * 原来 topbar 固定 64px + #chatArea 上下 margin 28px + inputbar 79px 会把输入框
+ * 挤出可视区（溢出 36 设备 px），聊天区只剩 12px。这里只在"键盘弹起后的极矮视口"
+ * 收紧：无键盘的横屏（392 CSS px）不触发，设计稿不变。 */
+@media (orientation: landscape) and (max-height: 260px) {
+  .topbar {
+    min-height: 32px;
+    padding: 0;
+  }
+  #chatArea { margin: 0; }
+  .inputbar { padding: var(--space-1) 0 calc(var(--space-1) + env(safe-area-inset-bottom, 0px)); }
+}
+
 /* ---------- 记忆抽屉空态 ---------- */
 .drawer-empty {
   margin: var(--space-1) 0 var(--space-3);
