@@ -1,0 +1,62 @@
+# -*- coding: utf-8 -*-
+"""W21 主动记忆回带（名字/计划/时间）离线断言。
+
+不依赖真实模型：用 mock_api 的模板语料做确定性替身，
+判定只落在回复文本上——记忆槽里有名字不算回带，回复里出现才算。
+"""
+import sys
+from pathlib import Path
+
+SERVER_DIR = Path(__file__).resolve().parents[1]
+if str(SERVER_DIR) not in sys.path:
+    sys.path.insert(0, str(SERVER_DIR))
+
+import mock_api  # noqa: E402
+import memory_slots  # noqa: E402
+import prompt_core  # noqa: E402
+
+
+def _reply(messages, sid):
+    out = mock_api.make_reply(messages, sid)
+    return out["reply"] + "||" + (out.get("hook") or "")
+
+
+def _name_recalled(reply_text, name):
+    return name in reply_text
+
+
+def test_prompt_requires_proactive_recall():
+    """提示词必须把“名字/计划/时间主动带回”写成硬要求，而不是“相关时再说”。"""
+    rules = prompt_core.MEMORY_SLOT_RULES
+    assert "名字/计划/时间" in rules
+    assert "隔 1-2 轮主动带一次" in rules
+    assert "叫名字" in rules
+
+
+def test_slot_pin_survives_competing_match():
+    """别的槽命中时，昵称/大事这类钉子槽不能被检索丢掉。"""
+    store = memory_slots.SlotStore()
+    sid = "w21-pin-survive"
+    for text in ("我叫张三", "我下个月要搬家", "最近在加班赶稿"):
+        store.ingest(sid, text)
+    hits = [x["key"] for x in store.recall(sid, "今天又加班到十点")]
+    assert "在忙" in hits
+    assert "昵称" in hits, "用户本轮没提名字，但昵称槽应仍在注入上下文里"
+
+
+def test_mock_recalls_name_on_next_turn():
+    """正例：用户提名字 → 下一轮不再提 → 回复文本里出现该名字。"""
+    sid = "w21-name-positive"
+    first = _reply([{"role": "user", "content": "叫我阿秋就行"}], sid)
+    second = _reply([
+        {"role": "user", "content": "叫我阿秋就行"},
+        {"role": "assistant", "content": first},
+        {"role": "user", "content": "今天上班被骂了"},
+    ], sid)
+    assert _name_recalled(second, "阿秋"), "回复完全没提名字：%r" % second
+
+
+def test_negative_reply_without_name_is_flagged():
+    """反例对照：同一判定器必须把“完全没提名字”的回复判红。"""
+    assert _name_recalled("今天上班被骂了，真烦。", "阿秋") is False
+    assert _name_recalled("阿秋，今天上班被骂了？", "阿秋") is True

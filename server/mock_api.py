@@ -504,9 +504,27 @@ def _match_memory_value(memories, user_text, sess):
             return k, v
     return None
 
+NAME_RECALL_COOLDOWN = 6  # 昵称叫一次后静默 6 轮，避免每句都带名字
+
+def _name_recall_text(memories, user_text, sess, turn, topic):
+    """W21 名字主动回带：用户本轮没提名字、且不是开场/拒绝轮，
+    提取后隔 ≥1 轮就在回复里自然叫一声。返回名字或 None。"""
+    name = str(memories.get("昵称") or "").strip()
+    if not name or topic == "greet" or not user_text:
+        return None
+    if name in user_text:
+        return None
+    ext = sess.setdefault("mem_extracted", {}).get("昵称")
+    if ext is None or turn - ext < 1:
+        return None
+    last = sess.setdefault("memory_hits", {}).get("昵称")
+    if last is not None and turn - last < NAME_RECALL_COOLDOWN:
+        return None
+    return name
+
 def _pick_recall(memories, mem_updates, topic, user_text, sess, turn):
     """P0-2 回提决策：返回 (hook 文本, 命中键) 或 (None, None)。确定性触发，不掷骰子。
-    昵称不回提（称呼里天然高频使用，回提显得刻意）。"""
+    昵称不走 hook（称呼天然高频，硬提显刻意）——由 _name_recall_text 直接落进回复。"""
     hits = sess.setdefault("memory_hits", {})
     extracted = sess.setdefault("mem_extracted", {})
     # 闸门2：每会话总额（含 greet 开场引用）
@@ -1727,6 +1745,12 @@ def make_reply(messages, session_id=None):
         hook = ONBOARD_EVENT_HOOK
     else:
         hook = HOOKS.get(topic) if random.random() < 0.55 else None
+    # W21 名字主动回带（与提示词 MEMORY_SLOT_RULES 同一条：隔 1-2 轮叫一声）
+    name = None if blocked else _name_recall_text(memories, user_text, sess, turn, topic)
+    if name:
+        if name not in reply:
+            reply = "%s，%s" % (name, reply)
+        _STATE.mark_recall(session_id, "昵称", turn)
     return {"reply": reply, "emotion": emo, "motion": motion,
             "memory_updates": mem_updates, "hook": hook, "crisis": False}
 

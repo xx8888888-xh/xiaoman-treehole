@@ -517,8 +517,9 @@ class SlotStore:
                 scored = []
                 for s in slots:
                     overlap = _overlap_count(s, q_grams, query)
-                    # 与当前话题没有任何字面/别名关联就不注入（避免每轮背昵称）
-                    if overlap == 0:
+                    # 钉子户（昵称/大事/宠物/生日）始终注入：用户本轮不提名字，
+                    # 模型也要看得到，才能隔 1-2 轮主动带回；其余槽按关联度过滤。
+                    if overlap == 0 and not _is_pin(s):
                         continue
                     scored.append((s, _match_score(s, q_grams, now, query)))
                 scored.sort(key=lambda x: x[1], reverse=True)
