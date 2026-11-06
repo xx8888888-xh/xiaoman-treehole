@@ -83,31 +83,17 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072
           emulator-boot-timeout: 600
           script: |
-            set -x
             APK_PATH=${APK_PATH:?no apk}
             adb install -r "$APK_PATH"
             pip3 install --quiet --user requests websockets pillow 2>/dev/null || pip3 install --quiet requests websockets pillow || true
             python3 -c "import websockets, requests; print('probe deps ok')" || exit 1
-
-            # TTS server：emu 通过 10.0.2.2 访问 runner 回环；缓存目录独立，避免磁盘缓存掩盖
-            XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="cat /tmp/e2e-tts.wav" \
-              XIAOMAN_TTS_PORT=8903 TTS_CACHE_DIR=/tmp/e2e-tts-cache \
-              python3 -u server/tts_server.py > /tmp/e2e-tts.log 2>&1 &
-            for i in $(seq 1 30); do
-              curl -sf http://127.0.0.1:8903/health && break
-              sleep 1
-            done
-            cat /tmp/e2e-tts.log | tail -5
-
+            XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="cat /tmp/e2e-tts.wav" XIAOMAN_TTS_PORT=8903 TTS_CACHE_DIR=/tmp/e2e-tts-cache nohup python3 -u server/tts_server.py > /tmp/e2e-tts.log 2>&1 &
+            for i in $(seq 1 30); do curl -sf http://127.0.0.1:8903/health && break; sleep 1; done
+            tail -5 /tmp/e2e-tts.log
             adb shell am start -n com.xiaoman.treehole/.MainActivity
             sleep 8
-            for i in 1 2 3; do
-              adb shell pidof com.xiaoman.treehole && break
-              adb shell am start -n com.xiaoman.treehole/.MainActivity || true
-              sleep 10
-            done
+            for i in 1 2 3; do adb shell pidof com.xiaoman.treehole && break; adb shell am start -n com.xiaoman.treehole/.MainActivity || true; sleep 10; done
             adb shell pidof com.xiaoman.treehole || { echo "app not running"; adb logcat -d | tail -80; exit 1; }
-
             python3 scripts/emulator_e2e_walk.py || echo "[E2E] walkthrough exited nonzero"
             adb logcat -d | grep -E "AndroidRuntime|FATAL" | grep -i xiaoman | tail -20 || true
 

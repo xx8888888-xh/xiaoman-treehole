@@ -138,7 +138,8 @@ INIT_JS = r"""
 }))()
 """
 
-SET_CFG_JS = "API.saveCfg(" + json.dumps({"tts": "server", "ttsServer": TTS_BASE}) + ") && TTS.chain(API.loadCfg())"
+SET_CFG_JS = ("(() => { API.saveCfg(" + json.dumps({"tts": "server", "ttsServer": TTS_BASE}) +
+              "); return TTS.chain(API.loadCfg()); })()")
 
 PROBE_JS = r"""
 (() => {
