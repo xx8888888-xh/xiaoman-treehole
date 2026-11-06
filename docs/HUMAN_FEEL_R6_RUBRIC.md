@@ -12,7 +12,7 @@
 | mock 112 条 | 112/112 | **112/112**（0 绿→红回归） |
 | 归档 20 条“未体现期望内容”片段 | 20 条全红 | **2 条红→绿，18 条仍红** |
 | `offline_rubric_audit.py --self-test` | 12/12 | **21/21 PASS** |
-| `pytest server/tests` | — | 见 §6（本支 201 passed / 3 skipped） |
+| `pytest server/tests` | — | **208 passed / 3 skipped / 19 subtests** |
 
 ## 1. 改了什么（逐条）
 
