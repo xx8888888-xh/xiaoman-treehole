@@ -435,7 +435,7 @@ jobs:
       - name: Render R5 shots
         run: |
           python -u - <<'PY'
-          import json, os, statistics
+          import json, os, statistics, time
           from PIL import Image, ImageChops, ImageOps
           from playwright.sync_api import sync_playwright
 
@@ -525,7 +525,12 @@ jobs:
 
           with sync_playwright() as p:
               browser = p.chromium.launch(args=["--mute-audio",
-                                               "--autoplay-policy=no-user-gesture-required"])
+                                               "--autoplay-policy=no-user-gesture-required",
+                                               # headless 多 context 下页面会被判 hidden，
+                                               # setTimeout 节流会把 12s 探针拖到 1 次/分钟。
+                                               "--disable-background-timer-throttling",
+                                               "--disable-renderer-backgrounding",
+                                               "--disable-backgrounding-occluded-windows"])
 
               for w, h in [(140, 180), (180, 180), (240, 160)]:
                   ctx = browser.new_context(viewport={"width": w, "height": h},
@@ -623,20 +628,24 @@ jobs:
               ImageOps.autocontrast(mx).save(os.path.join(OUT, "53-face-diff.png"))
 
               # ---------- 4) 首音节延迟：点击 → 首个非零包络帧 ----------
-              LAT = """() => new Promise((resolve) => {
-                  const t0 = performance.now();
-                  const provider = window.TTS ? TTS.provider() : "none";
-                  let done = false;
-                  const finish = (why) => {
-                      if (done) return;
-                      done = true;
-                      resolve({why, provider, totalMs: +(performance.now() - t0).toFixed(1),
-                               timing: (window.TTS && TTS._lastTiming) ? TTS._lastTiming() : null});
-                  };
-                  TTS.speak("今天降温了，出门记得带围巾。",
-                            (lv) => { if (lv >= 0.12) finish("first-nonzero"); },
-                            () => finish("end"));
-                  setTimeout(() => finish("timeout"), 12000);
+              # 旧实现 page.evaluate(await Promise)：headless 多 context 里页面被标 hidden，
+              # setTimeout 被节流，12s 探针实际拖到 1 次/分钟 → 整步挂死。
+              # 改成"页内打点 + 外部轮询"，不依赖 await Promise。
+              START_JS = """(t) => {
+                  window.__latT0 = performance.now();
+                  window.__latFirst = 0;
+                  window.__latEnd = 0;
+                  TTS.speak(t,
+                      (lv) => { if (!window.__latFirst && lv >= 0.12)
+                                  window.__latFirst = performance.now(); },
+                      () => { window.__latEnd = performance.now(); });
+                  return true;
+              }"""
+              READ_JS = """() => ({
+                  t0: window.__latT0 || 0,
+                  first: window.__latFirst || 0,
+                  end: window.__latEnd || 0,
+                  timing: (window.TTS && TTS._lastTiming) ? TTS._lastTiming() : null
               })"""
 
               def latency(base, tag, texts, server):
@@ -648,10 +657,21 @@ jobs:
                       seed(page, base, cfg=cfg_tts(server))
                       page.wait_for_function("() => window.TTS && window.TTS.speak", timeout=15000)
                       page.wait_for_timeout(300)
-                      r = page.evaluate(
-                          LAT.replace("今天降温了，出门记得带围巾。", text))
+                      page.evaluate(START_JS, text)
+                      r = {}
+                      deadline = time.time() + 10
+                      while time.time() < deadline:
+                          r = page.evaluate(READ_JS) or {}
+                          if r.get("first") or r.get("end"):
+                              break
+                          page.wait_for_timeout(120)
+                      t0, first, end = r.get("t0") or 0, r.get("first") or 0, r.get("end") or 0
+                      why = ("first-nonzero" if first else
+                             ("end-no-frame" if end else "timeout"))
+                      rows.append({"why": why,
+                                   "totalMs": round(first - t0, 1) if (first and t0) else None,
+                                   "timing": r.get("timing")})
                       page.evaluate("() => window.TTS && TTS.stop()")
-                      rows.append(r)
                       ctx.close()
                   m = {"tag": tag, "runs": rows}
                   vals = [x["totalMs"] for x in rows if x["why"] == "first-nonzero"]
