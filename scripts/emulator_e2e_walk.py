@@ -12,8 +12,12 @@ emulator_e2e_walk.py · 端到端真机走查（云端 AVD，六态截图 + 实�
   ⑥ 20 轮后滚到底   e2e_06_rounds20.png
 
 实测值全部来自运行时：CDP DOM rect、uiautomator WebView bounds、dumpsys window、
-Stage._lipState()、screencap PNG 尺寸。脚本只负责采集，不做断言拦截——
-本机只跑「采集 + 归因」，问题清单按实测值排序（见 e2e_walk_metrics.json）。
+Stage._lipState()、screencap PNG 尺寸。
+
+硬门（GateFail → metrics + exit 1，CI 变红）：
+  - replyArrived=false / 没有新的 speakSafe 事件 → 该步骤 FAIL，不允许对静音采样；
+  - 同日重启后 total 增加或末条又是时段问候 → FAIL（重入不该重复问候）。
+其余仍是「采集 + 归因」，问题清单按实测值排序（见 e2e_walk_metrics.json）。
 
 用法：python3 scripts/emulator_e2e_walk.py（App 已启动、TTS server 已在 8903 起）
 依赖：requests、websockets
@@ -27,6 +31,7 @@ import time
 import xml.etree.ElementTree as ET
 
 from android_cdp import Cdp, PKG, sh
+from e2e_walk_gate import GateFail, require_reply, require_true, require_voice
 
 PORT = 9224
 MAIN = f"{PKG}/.MainActivity"
@@ -37,6 +42,27 @@ METRICS = {"states": {}, "notes": []}
 
 def log(msg):
     print("[E2E] " + msg, flush=True)
+
+
+def dump_metrics():
+    with open("e2e_walk_metrics.json", "w", encoding="utf-8") as f:
+        json.dump(METRICS, f, ensure_ascii=False, indent=2)
+
+
+def gate(step, fn, *args):
+    """硬门：回复没到达 → 写 metrics + 非零退出。
+
+    上一轮的 0/143 是"消息没发出去、流程继续跑、对静音采样还判过"造成的；
+    这里让该步骤直接 FAIL（workflow 不吞退出码，CI 随之为红）。
+    """
+    try:
+        fn(*args)
+    except GateFail as e:
+        METRICS["ok"] = False
+        METRICS.setdefault("failures", []).append({"step": step, "reason": str(e)})
+        dump_metrics()
+        log("FAIL " + str(e))
+        raise SystemExit(1)
 
 
 def shot(name):
@@ -268,6 +294,7 @@ LIP_PROBE_JS = r"""
   const st = (window.Stage && Stage._lipState) ? Stage._lipState() : null;
   const face = (window.Stage && Stage._faceState) ? Stage._faceState() : null;
   const F = window.__lipFeed || {};
+  const LS = (window.Stage && Stage._lipStats) ? Stage._lipStats() : null;
   return {
     t: Math.round(performance.now() * 10) / 10,
     lipOpen: st ? st.lipOpen : null,
@@ -278,6 +305,8 @@ LIP_PROBE_JS = r"""
     mix: face ? face.mouthMix : null,
     faceNull: face === null,
     frames: F.frames || 0,
+    // 真正画到画布的说话帧（motion 开≈满帧 / 关≈15fps）：证明"只省帧不削幅"
+    paint: LS ? LS.paints : null,
     feedMax: F.max || 0,
     mode: (window.Stage && Stage._mode) ? Stage._mode() : null,
     raf: (window.Stage && Stage._rafActive) ? Stage._rafActive() : null,
@@ -344,6 +373,46 @@ def wait_voice(cdp, n0, timeout=25.0):
     return None, round(time.time() - t0, 2)
 
 
+GREET_JS = r"""
+(() => {
+  const rows = [...document.querySelectorAll('#messages .msg-row:not(.hidden) .bubble')]
+    .filter(b => !b.classList.contains('typing'));
+  const texts = rows.map(b => (b.innerText || '').replace(/\s+/g, ' ').trim());
+  const greetLike = texts.filter(t =>
+    /早呀|中午好呀|下午好|晚上好呀|这个点还没睡|深夜树洞营业中/.test(t));
+  return {
+    total: (window.ChatPager && ChatPager.stats) ? ChatPager.stats().total : null,
+    rows: rows.length,
+    greetCount: greetLike.length,
+    greetLike: greetLike.slice(-3)
+  };
+})()
+"""
+
+
+def wait_reentry(cdp, before_total, timeout=20, settle=1.5):
+    """重启后等同日重入判定：total 不应因"又开场"而增加。
+
+    历史恢复是异步的：先等 total 回到重启前的值，再停 settle 观察是否有新开场。
+    """
+    end = time.time() + timeout
+    last = {}
+    while time.time() < end:
+        try:
+            last = cdp.eval(GREET_JS) or {}
+        except Exception:
+            last = {}
+        if (last.get("total") or 0) >= before_total:
+            time.sleep(settle)
+            try:
+                last = cdp.eval(GREET_JS) or last
+            except Exception:
+                pass
+            return last
+        time.sleep(0.5)
+    return last
+
+
 def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.30):
     """播放期间高频采样：局部 lipOpen + 引擎 lipSync/mouthMix + 喂帧计数。
 
@@ -364,8 +433,8 @@ def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.30):
                "open": round(float(p.get("lipOpen") or 0), 3),
                "sync": round(float(p.get("lipSync") or 0), 4),
                "mouth": p.get("mouth"), "mix": p.get("mix"),
-               "frames": p.get("frames"), "mode": p.get("mode"),
-               "raf": p.get("raf"), "tag": p.get("tag")}
+               "frames": p.get("frames"), "paint": p.get("paint"),
+               "mode": p.get("mode"), "raf": p.get("raf"), "tag": p.get("tag")}
         samples.append(rec)
         if p.get("faceNull"):
             null_faces += 1
@@ -388,8 +457,11 @@ def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.30):
     if start is not None:
         win = [x for x in ok if start <= x["t"] <= start + 1.0]
         if win:
+            paints = [x for x in win if x.get("paint") is not None]
             mid = {"from": round(start, 2), "to": round(start + 1.0, 2),
                    "feedFrames": int((win[-1]["frames"] or 0) - (win[0]["frames"] or 0)),
+                   # 真正画到画布的说话帧：motion=true≈满帧，motion=false≈15fps
+                   "paintFrames": int(paints[-1]["paint"] - paints[0]["paint"]) if paints else None,
                    "samples": len(win),
                    "nonzeroSync": len([x for x in win if (x["sync"] or 0) > 0.02]),
                    "maxSync": round(max((x["sync"] or 0) for x in win), 4)}
@@ -401,6 +473,8 @@ def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.30):
             "nullFaceSamples": null_faces,
             "pageTags": sorted({x["tag"] for x in ok if x.get("tag")}),
             "modes": sorted({str(x["mode"]) for x in ok}), "midSecond": mid,
+            "paintTotal": (int(ok[-1]["paint"] - ok[0]["paint"])
+                           if ok and ok[-1].get("paint") is not None and ok[0].get("paint") is not None else None),
             "shotAt": shot_t, "shotBytes": shot_size}
 
 
@@ -442,8 +516,7 @@ def main():
     except Exception as e:
         log(f"附着失败: {e}")
         METRICS["fatal"] = f"attach failed: {e}"
-        with open("e2e_walk_metrics.json", "w", encoding="utf-8") as f:
-            json.dump(METRICS, f, ensure_ascii=False, indent=2)
+        dump_metrics()
         sys.exit(1)
     log(f"已附着 {url}")
 
@@ -477,6 +550,9 @@ def main():
     sent2 = type_and_send(cdp, origin, "jin tian xin qing bu hao")
     log(f"② 发送结果: {sent2}")
     grew, p2 = wait_rows(cdp, rows0 + 2, timeout=30)
+    # 硬门：回复没到达就判红，不允许带着空回复继续往下走
+    gate("02_chat", require_reply, "02_chat", grew,
+         {"sent": sent2, "rows": (p2 or {}).get("rows"), "busy": (p2 or {}).get("busy")})
     time.sleep(1.2)
     s2 = cdp.eval(STATE_JS) or {}
     b2 = shot("e2e_02_chat.png")
@@ -511,6 +587,8 @@ def main():
     # 等"真的有一条新的语音在播"，再开采样窗口——避免像上一轮那样对着静音采样
     ev, waited = wait_voice(cdp, n0, timeout=30)
     log(f"③ 语音开始: {ev} waited={waited}s")
+    # 硬门：没有新的语音事件 = 回复没开始播，绝不对着静音采样口型
+    gate("03_voice", require_voice, "03_voice", ev)
     voice = sample_voice(cdp, seconds=5.5)
     ok3, p3 = wait_rows(cdp, rows1 + 2, timeout=6)
     try:
@@ -528,6 +606,84 @@ def main():
         "chain": chain, "hook": hook, "motionDefault": motion,
         "ttsEvents": events, "chatPager": total3, "lip": voice, "probe": s3
     }
+    gate("03_voice", require_reply, "03_voice", ok3,
+         {"sent": sent3, "rows": (p3 or {}).get("rows")})
+
+    # ---------------- ③b 非默认预设（motion=true）同段语音对照 ----------------
+    # 同一段 TTS fixture（text 不影响 cmd provider 的 WAV）：比较满帧路径的
+    # 帧率/幅度，证明修复没把 motion=true 一起改坏、也没削口型幅度。
+    try:
+        motion_on = cdp.eval(
+            "(() => { Appearance.setSwitch('motion', true); return Appearance.get().motion; })()")
+    except Exception as e:
+        motion_on = f"err {e}"[:80]
+    log(f"③b motion 开关 → {motion_on}")
+    time.sleep(0.8)                     # appearance:change → Stage.setMotionEnabled(true)
+    try:
+        n1 = len(cdp.eval("window.__ttsLog || []") or [])
+    except Exception:
+        n1 = 0
+    rows2 = (cdp.eval(PROBE_JS) or {}).get("rows") or 0
+    sent3b = type_and_send(cdp, origin, "zai shuo yi bian")
+    log(f"③b 发送结果: {sent3b}")
+    ev_b, waited_b = wait_voice(cdp, n1, timeout=30)
+    gate("03b_motion", require_voice, "03b_motion", ev_b)
+    voice_b = sample_voice(cdp, path="e2e_03b_voice_motion.png", seconds=5.5)
+    ok3b, p3b = wait_rows(cdp, rows2 + 2, timeout=8)
+    gate("03b_motion", require_reply, "03b_motion", ok3b,
+         {"sent": sent3b, "rows": (p3b or {}).get("rows")})
+    try:
+        events_b = cdp.eval("window.__ttsLog || []")
+    except Exception:
+        events_b = None
+    METRICS["states"]["03b_motion_voice"] = {
+        "shot": "e2e_03b_voice_motion.png" if voice_b["shotBytes"] else None,
+        "replyArrived": ok3b, "sent": sent3b, "voiceEvent": ev_b, "voiceWaitS": waited_b,
+        "motion": motion_on, "ttsEvents": events_b, "lip": voice_b
+    }
+    # 还原默认极简：后续 ④⑤⑥ 口径与之前一致
+    try:
+        motion_off = cdp.eval(
+            "(() => { Appearance.setSwitch('motion', false); return Appearance.get().motion; })()")
+    except Exception as e:
+        motion_off = f"err {e}"[:80]
+    log(f"③b motion 还原 → {motion_off}")
+    time.sleep(0.5)
+
+    def _mid(lip):
+        return (lip.get("midSecond") or {})
+
+    METRICS["lipCompare"] = {
+        # 默认极简（零动画）：只省帧（≈15fps），幅度不削
+        "motionFalse": {"maxLipSync": voice.get("maxLipSync"),
+                        "feedFramesPerSec": _mid(voice).get("feedFrames"),
+                        "paintFramesPerSec": _mid(voice).get("paintFrames"),
+                        "paintTotal": voice.get("paintTotal"),
+                        "durationMs": (ev or {}).get("endAt", 0) - (ev or {}).get("at", 0)},
+        # motion=true（满帧）：帧率更高，幅度应与零动画同源（lipFor 不再看 motion）
+        "motionTrue": {"maxLipSync": voice_b.get("maxLipSync"),
+                       "feedFramesPerSec": _mid(voice_b).get("feedFrames"),
+                       "paintFramesPerSec": _mid(voice_b).get("paintFrames"),
+                       "paintTotal": voice_b.get("paintTotal"),
+                       "durationMs": (ev_b or {}).get("endAt", 0) - (ev_b or {}).get("at", 0)},
+    }
+    _mt, _mf = METRICS["lipCompare"]["motionTrue"], METRICS["lipCompare"]["motionFalse"]
+    METRICS["lipCompare"]["verdict"] = {
+        # 口型幅度：motion=true 不得低于 motion=false（同段语音、同一 lipFor）
+        "amplitudeNotReduced": (_mt["maxLipSync"] or 0) >= (_mf["maxLipSync"] or 0) * 0.98,
+        # 零动画只省帧：≤20fps（目标 15fps），且满帧路径的货真帧数明显更多
+        "motionFalseThrottled": (_mf["paintFramesPerSec"] is not None
+                                 and _mf["paintFramesPerSec"] <= 20),
+        "motionTruePaintsMore": (_mt["paintFramesPerSec"] or 0) > (_mf["paintFramesPerSec"] or 0),
+    }
+    log("口型对照: " + json.dumps(METRICS["lipCompare"], ensure_ascii=False))
+
+    # 重启前的会话量：用于"同日重入不重复问候"的硬断言（在主页面取，避免浮窗目标干扰）
+    try:
+        reentry_before = int((cdp.eval(TOTAL_JS) or {}).get("total") or 0)
+        reentry_pre = cdp.eval(GREET_JS) or {}
+    except Exception:
+        reentry_before, reentry_pre = 0, {}
 
     # ---------------- ④ 浮窗模式 ----------------
     sh(f"adb shell appops set {PKG} SYSTEM_ALERT_WINDOW allow")
@@ -557,6 +713,17 @@ def main():
             pass
     time.sleep(1.5)
 
+    # 硬门：本次已在当天开过场，杀进程再开不得追加第二次时段问候
+    reentry = wait_reentry(cdp, reentry_before)
+    dup = int(reentry.get("total") or 0) - reentry_before
+    reentry_ok = dup <= 0 and int(reentry.get("greetCount") or 0) <= int(reentry_pre.get("greetCount") or 0)
+    log(f"同日重入: before={reentry_before}(greet={reentry_pre.get('greetCount')}) "
+        f"after={reentry.get('total')}(greet={reentry.get('greetCount')}) "
+        f"greetLike={reentry.get('greetLike')}")
+    gate("05_reentry", require_true, "05_reentry", reentry_ok,
+         "同日重启后不应再追加时段问候（before=%s after=%s greetLike=%s）"
+         % (reentry_before, reentry.get("total"), reentry.get("greetLike")))
+
     # ---------------- ⑤ 横屏 → 竖屏 → 切回 ----------------
     sh("adb shell settings put system accelerometer_rotation 0")
     sh("adb shell settings put system user_rotation 0")
@@ -574,6 +741,8 @@ def main():
     vb5c = webview_bounds(ui_dump())
     b5c = shot("e2e_05_back_portrait.png")
     METRICS["states"]["05_rotate"] = {
+        "reentry": {"beforeTotal": reentry_before, "ok": reentry_ok,
+                    "after": reentry, "preGreetCount": reentry_pre.get("greetCount")},
         "portraitBefore": {"probe": s5a, "webview": vb5a},
         "landscape": {"probe": s5b, "webview": vb5b, "shot": "e2e_05_landscape.png", "bytes": b5a},
         "portraitBack": {"probe": s5c, "webview": vb5c,
@@ -614,8 +783,7 @@ def main():
                                          "probe": s6}
 
     METRICS["ok"] = True
-    with open("e2e_walk_metrics.json", "w", encoding="utf-8") as f:
-        json.dump(METRICS, f, ensure_ascii=False, indent=2)
+    dump_metrics()
     summary = {
         "cold_rows": rows0,
         "cold_empty": (s1.get("emptyVisible")),

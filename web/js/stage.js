@@ -26,6 +26,7 @@ const Stage = (() => {
   let lipHold = 0;            // 剩余保持帧（无分析器时的兜底）
   let lipWasOpen = false;     // 零动画：上一帧是否张着嘴（用于收尾立即合嘴）
   let lipTicks = 0;           // 零动画：口型喂入计数（每 4 帧画 1 帧 ≈ 15fps，与墙钟无关）
+  let lipPaints = 0;          // 已真正画到画布的说话帧（motion 开=满帧 / 关=≤15fps，验收口径）
   let lipCloseTimer = 0;      // 零动画：最后一帧包络后 180ms 自动合嘴（TTS 收尾不保证喂 0）
   const LIP_EVERY = 4;        // 不按 performance.now 节流：CI/慢机调度抖动会让帧数不可复现
   const LIP_CLOSE_MS = 180;   // 最后一帧到合嘴的静默窗口
@@ -485,6 +486,7 @@ const Stage = (() => {
     lastTs = t;
     // 口型：包络驱动，短暂保持后回 0（不随机张嘴）；引擎内部 7 档交叉淡入
     const lip = lipHold > 0 ? lipOpen : 0;
+    if (lipHold > 0) lipPaints += 1;         // 满帧路径：这一帧嘴真的画出来了
     puppet.setParam("lipSync", lip);
     // 保持量按 60fps 帧当量递减：低帧率时一帧抵多帧，墙钟时长恒为 ~100ms
     if (lipHold > 0) lipHold = Math.max(0, lipHold - dt * 60);
@@ -826,6 +828,7 @@ const Stage = (() => {
     clearLipClose();
     lipWasOpen = false;
     lipTicks = 0;
+    lipPaints = 0;
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = null;
     if (resizeObs) {
@@ -921,6 +924,7 @@ const Stage = (() => {
     if (lipTicks % LIP_EVERY !== 1) return;  // 60fps 喂入 → 画 1/4 ≈ 15fps；首帧必画
     puppet.setParam("lipSync", target);
     if (typeof puppet.update === "function") puppet.update(LIP_EVERY / 60);
+    lipPaints += 1;                          // 零动画路径：节流后真正画出的说话帧
     renderOnce("lip");
   }
 
@@ -995,22 +999,26 @@ const Stage = (() => {
     /** 单测入口：口型目标纯函数与当前内部状态 */
     _lipFor: lipFor,
     _lipState: () => ({ lipOpen, lipHold }),
+    /** 验收探针：真正画出的说话帧数（区分"满帧"与"零动画节流"，见 E2E paintFrames） */
+    _lipStats: () => ({ paints: lipPaints }),
     /** 单测入口：零动画冻结帧签名 + 注入假 puppet（返回还原函数） */
     _stillFrameSig: stillFrameSig,
     _stillForTest(nextPuppet, motionOn) {
-      const prev = { puppet, motionEnabled, stillSig, mode, lipWasOpen, lipTicks, lipCloseTimer };
+      const prev = { puppet, motionEnabled, stillSig, mode, lipWasOpen, lipTicks, lipCloseTimer, lipPaints };
       clearLipClose();
       puppet = nextPuppet;
       motionEnabled = !!motionOn;
       mode = "layers";                        // 注入的假 puppet 视作已挂载的 layer 模式
       lipWasOpen = false;
       lipTicks = 0;
+      lipPaints = 0;
       lipCloseTimer = 0;
       stillSig = stillFrameSig(nextPuppet);   // 视作"该状态已经画在屏上"
       return () => {
         clearLipClose();
         puppet = prev.puppet; motionEnabled = prev.motionEnabled; stillSig = prev.stillSig;
         mode = prev.mode; lipWasOpen = prev.lipWasOpen; lipTicks = prev.lipTicks;
+        lipPaints = prev.lipPaints;
         lipCloseTimer = 0;
       };
     }
