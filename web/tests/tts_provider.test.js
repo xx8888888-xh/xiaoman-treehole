@@ -2,6 +2,8 @@
  * 只校验：接口形状、available 判定、参数映射、降级链、静音开关、stop 幂等。 */
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const TTS = require("../js/tts.js");
 
 /** 造一个假的 window：不含 Audio/AudioContext/fetch 真相，绝不触发真实播放 */
@@ -226,4 +228,20 @@ test("延迟探针入口 _lastTiming 在引擎作用域内可取（回归：曾 
   const engine = TTS._create(fakeWin());
   assert.equal(typeof engine._lastTiming, "function");
   assert.equal(engine._lastTiming(), null, "未播放时应为 null");
+});
+
+test("CSP 必须放行 blob: 到 connect-src（否则包络解码 fetch 被拦，口型永远只有呼吸）", () => {
+  // 云端 Chromium 实测 envError="Failed to fetch"、envFrames=0：
+  // computeEnvelope() 对 createObjectURL 的 blob: URL 再 fetch 一次，
+  // 而 CSP connect-src 只写了 'self' http: https: ws: wss: —— blob: 被拦。
+  // 结果：服务端语音能出声，但口型一直走呼吸兜底（首音节包络帧永远不出现）。
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const m = html.match(/Content-Security-Policy" content="([^"]+)"/);
+  assert.ok(m, "index.html 缺少 CSP meta");
+  const csp = m[1];
+  for (const dir of ["connect-src", "media-src"]) {
+    const part = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith(dir));
+    assert.ok(part, `CSP 缺少 ${dir}`);
+    assert.match(part, /\bblob:/, `${dir} 未放行 blob:（${part}）`);
+  }
 });

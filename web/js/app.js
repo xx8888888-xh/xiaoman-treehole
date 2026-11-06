@@ -2306,13 +2306,21 @@ const App = (() => {
         };
         let lastGap = gap();
         s.addEventListener("scroll", () => { lastGap = gap(); }, { passive: true });
+        const stick = () => {
+          s.scrollTop = s.scrollHeight;
+          const row = lastVisibleRow();
+          if (row) row.scrollIntoView({ block: "nearest" });
+        };
         window.addEventListener("resize", () => {
-          if (lastGap <= 60) {
-            s.scrollTop = s.scrollHeight;
-            const row = lastVisibleRow();
-            if (row) row.scrollIntoView({ block: "nearest" });
-          }
+          const follow = lastGap <= 60;
+          if (follow) stick();
           lastGap = gap();
+          if (!follow) return;
+          // 安卓 adjustResize 分两拍：resize 事件先到，媒体查询/dvh 触发的布局晚一拍。
+          // 真机实测（横屏 782×149 + 键盘）只贴一次底会停在旧 scrollTop=8：
+          // 内容 276 / 视口 82，最后一条气泡底边 92.5 被裁掉 10px。补两拍兜住。
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => stick());
+          setTimeout(() => { stick(); lastGap = gap(); }, 240);
         });
         // 真机复现：键盘已弹起后再追加消息，append 路径不会重算 scrollTop，
         // 最后一条会停在容器下方（实测 38px 落到键盘后面）。用 MutationObserver

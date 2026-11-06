@@ -687,15 +687,22 @@ jobs:
                       deadline = time.time() + 15
                       while time.time() < deadline:
                           r = page.evaluate(READ_JS) or {}
-                          if r.get("first") or r.get("end"):
+                          tm0 = r.get("timing") or {}
+                          if r.get("first") or r.get("end") or tm0.get("firstNonZeroAt"):
                               break
                           page.wait_for_timeout(120)
                       t0, first, end = r.get("t0") or 0, r.get("first") or 0, r.get("end") or 0
-                      why = ("first-nonzero" if first else
+                      tm = r.get("timing") or {}
+                      total = round(first - t0, 1) if (first and t0) else None
+                      # 页内回调（__latFirst/__latEnd）走 window，若被页面 CSP/降级吞掉，
+                      # 用引擎自记的 timing 兜底：speakAt → 首个非零包络帧，同一时间轴。
+                      if total is None and tm.get("firstNonZeroAt") and tm.get("speakAt"):
+                          total = round(tm["firstNonZeroAt"] - tm["speakAt"], 1)
+                      why = ("first-nonzero" if (total is not None or first) else
                              ("end-no-frame" if end else "timeout"))
                       rows.append({"why": why,
-                                   "totalMs": round(first - t0, 1) if (first and t0) else None,
-                                   "timing": r.get("timing"), "audio": r.get("audio"),
+                                   "totalMs": total,
+                                   "timing": tm, "audio": r.get("audio"),
                                    "chain": r.get("chain"), "provider": r.get("provider"),
                                    "muted": r.get("muted"), "cfg": r.get("cfg")})
                       page.evaluate("() => window.TTS && TTS.stop()")
