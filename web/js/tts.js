@@ -147,6 +147,8 @@ const TTS = (() => {
     let androidSettle = null;  // 当前 Android TTS 的完成回调（供原生 __ttsEnded 触发）
     let speakGen = 0;          // 播放代际：异步取音频返回时，过期的请求直接丢弃
     let muted = W.XIAOMAN_TTS_MUTED === "1" || W.XIAOMAN_TTS_MUTED === true;
+    let lastSpeakAt = 0;       // speak() 入口时刻（≈用户点击播放），供延迟探针取基准
+    let lastTiming = null;     // 上一次服务端播放的分段耗时（CI/探针只读取，不参与播放逻辑）
 
     /**
      * 读取前端配置（API.loadCfg 由 api.js 提供；缺失时用空配置走默认链路）。
@@ -171,7 +173,8 @@ const TTS = (() => {
       if (fakeStopTimer) { clearTimeout(fakeStopTimer); fakeStopTimer = null; }
     }
 
-    /** 只结算一次：先归零口型再回调 onEnd，避免多路叠加/重复 onEnd */
+    /** 只结算一次：先归零口型再回调 onEnd，避免多路叠加/重复 onEnd。
+     *  onEnd(true) = 真的出声并播完；调用方据此才允许打「语音已播」标记。 */
     function settleOnce(onFrame, onEnd) {
       let done = false;
       return () => {
@@ -179,7 +182,7 @@ const TTS = (() => {
         done = true;
         clearFake();
         try { onFrame && onFrame(0); } catch (e) {}
-        try { onEnd && onEnd(); } catch (e) {}
+        try { onEnd && onEnd(true); } catch (e) {}
       };
     }
 
@@ -241,13 +244,21 @@ const TTS = (() => {
       currentAudio = audio;
       let raf = 0, settled = false, env = null, last = 0;
       let startTimer = 0;
+      // 延迟探针：从 speak() 入口（≈用户点击）到首个"真语音"包络帧。
+      // 阈值 0.12 高于呼吸兜底峰值 0.09，避免把"没解码时的呼吸"误算成首音节。
+      const timing = {
+        speakAt: lastSpeakAt || now(), fetchEndAt: now(), decodeStartAt: 0, playRequestAt: 0,
+        playAt: 0, envReadyAt: 0, firstNonZeroAt: 0,
+        envError: "", envFrames: 0, frames: 0,
+      };
+      lastTiming = timing;
       const settle = (failed) => {
         if (settled) return;
         settled = true;
         clearTimeout(startTimer);
         if (W.cancelAnimationFrame) W.cancelAnimationFrame(raf);
         if (currentAudio === audio) currentAudio = null;
-        if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
+        if (failed) { onFail && onFail(); } else { onEnd && onEnd(true); }
       };
 
       audio.onended = () => settle(false);
@@ -259,14 +270,30 @@ const TTS = (() => {
         if (!audio.currentTime && audio.readyState < 3) settle(true);
       }, AUDIO_START_TIMEOUT);
 
+      // 解码与开播并行：旧实现等 audio.play() resolve 后才 fetch+decode，
+      // 白等一个"真正开播"的往返（Chromium/WebView 30-80ms）。现在同一轮启动，
+      // 包络先就绪就先按播放进度出帧，开播延迟不受影响。
+      timing.decodeStartAt = now();
+      computeEnvelope(url).then(e => {
+        env = e;
+        timing.envReadyAt = now();
+        timing.envFrames = (e && e.levels) ? e.levels.length : 0;
+      }).catch((err) => {
+        env = null;
+        timing.envReadyAt = -1;
+        timing.envError = String((err && err.message) || err || "decode failed");
+      });
+
       const tick = () => {
         if (settled) return;
+        timing.frames++;
         let level;
         if (env && env.levels.length) {
           const idx = envelopeIndex(audio.currentTime, env.frameMs, env.levels.length);
           const target = env.levels[idx] || 0;
           last = last * 0.62 + target * 0.38;   // 起落平滑，避免嘴抖
           level = last;
+          if (!timing.firstNonZeroAt && level >= 0.12) timing.firstNonZeroAt = now();
         } else {
           level = breathLevel(now());   // 解码前 / 解码失败：轻微呼吸（不随机张嘴）
         }
@@ -274,9 +301,10 @@ const TTS = (() => {
         raf = W.requestAnimationFrame ? W.requestAnimationFrame(tick) : setTimeout(tick, 16);
       };
 
+      timing.playRequestAt = now();
       audio.play().then(() => {
+        timing.playAt = now();
         audio.onplaying = () => clearTimeout(startTimer);
-        computeEnvelope(url).then(e => { env = e; }).catch(() => { env = null; });
         tick();
       }).catch(() => settle(true));
     }
@@ -295,7 +323,7 @@ const TTS = (() => {
         clearFake();
         if (currentAudio === audio) currentAudio = null;
         onFrame && onFrame(0);
-        if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
+        if (failed) { onFail && onFail(); } else { onEnd && onEnd(true); }
       };
       audio.onended = () => settle(false);
       audio.onerror = () => settle(true);
@@ -435,14 +463,15 @@ const TTS = (() => {
         }
         const cleanup = () => { try { W.URL.revokeObjectURL(blobUrl); } catch (e) {} };
         // server 路失败（解码失败/跨域被拦）→ 先纯播放，再降级 browser
-        playWithEnvelope(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(); }, () => {
+        playWithEnvelope(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(true); }, () => {
           console.info("server tts 口型链路失败，尝试纯播放");
-          playPlain(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(); }, () => {
+          playPlain(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(true); }, () => {
             console.info("server tts 纯播放失败，降级本机语音");
             cleanup();
             if (!browserProvider.speak(text, opts)) {
+              // 一路都没发出来：onEnd(false) 明确"没播成"，调用方不得打「语音已播」
               onFrame && onFrame(0);
-              onEnd && onEnd();
+              onEnd && onEnd(false);
             }
           });
         });
@@ -482,26 +511,29 @@ const TTS = (() => {
 
     /**
      * 朗读入口：先 stop 上一段，再按 provider 链路尝试；永远只回调一次 onEnd。
+     * onEnd(ok)：ok=true 表示真的出声并播完（UI 才可标「语音已播」）；
+     * ok=false 表示链路跑完但没出声音（静默降级，UI 只能给安静提示）。
      * 返回 { spoke, provider }：spoke=false 表示本次没有出声（可由 UI 给安静提示）。
      * 文字渲染由调用方先完成，本函数不阻塞、不抛异常。
      */
     async function speak(text, onFrame, onEnd) {
+      lastSpeakAt = now();   // 延迟探针基准：入口即"点击播放"
       const cfg = loadCfg();
       const frame = typeof onFrame === "function" ? onFrame : () => {};
       const finish = typeof onEnd === "function" ? onEnd : () => {};
       let ended = false;
-      const done = () => {
+      const done = (ok) => {
         if (ended) return;
         ended = true;
-        try { finish(); } catch (e) {}
+        try { finish(ok === false ? false : true); } catch (e) {}
       };
 
       stop();                                  // 先停上一段，防多路叠加
       const gen = speakGen;                    // stop() 之后取代际，异步返回时校验
-      if (muted) { frame(0); done(); return { spoke: false, provider: "muted" }; }
+      if (muted) { frame(0); done(false); return { spoke: false, provider: "muted" }; }
       if (typeof text !== "string" || !text.trim()) {
         frame(0);
-        done();
+        done(false);
         return { spoke: false, provider: "none" };
       }
       // 用户显式关闭语音（设置页 tts=off）：只静默收尾，且**不回调 onEnd**。
@@ -526,7 +558,7 @@ const TTS = (() => {
         console.warn("TTS 链路异常，静默降级:", e && e.message);
       }
       frame(0);
-      done();
+      done(false);
       return { spoke: false, provider: "none" };
     }
 
@@ -579,6 +611,17 @@ const TTS = (() => {
         return muted;
       },
       isMuted: () => muted,
+      /** 探针：上一次服务端播放的分段耗时（毫秒，性能时间轴；不参与播放逻辑） */
+      _lastTiming: () => lastTiming,
+      /** 探针：当前 <audio> 的真实状态（诊断"包络没出帧"到底是没解码还是没开播） */
+      _probeAudio: () => (currentAudio ? {
+        t: +(currentAudio.currentTime || 0).toFixed(3),
+        dur: +((currentAudio.duration || 0).toFixed(3)),
+        readyState: currentAudio.readyState,
+        networkState: currentAudio.networkState,
+        paused: !!currentAudio.paused,
+        err: currentAudio.error ? currentAudio.error.code : 0
+      } : null),
       /** provider 对象（单测用：直接校验 available/speak/stop 接口与参数） */
       providerObjects: providers,
       providers: Object.keys(providers),

@@ -1081,9 +1081,12 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
     padding: 0 var(--space-6) 0 var(--space-6);
   }
   .topbar { grid-column: 1 / -1; min-height: 64px; padding: calc(env(safe-area-inset-top, 0px) + var(--space-3)) 0 var(--space-3); }
-  /* 同时压过 899px 以下"有消息就缩到 23vh"的 :has 规则（0,2,0 特指度） */
-  #stage,
-  #app:has(#emptyState.hidden) #stage {
+  /* 注意：不能把 #stage 和 #app:has(...) #stage 写进同一个选择器列表。
+   * 安卓 WebView 83 不认 :has()，选择器列表里有一个非法选择器会让**整条规则作废**，
+   * 横屏键盘态（782×149）实测舞台仍锁在 min-height:196px，把聊天区挤成 12px、
+   * 最后一条气泡溢出到输入框下方 221px。拆成两条：#stage 无条件生效，
+   * :has 那条单独存在（旧内核整条丢弃，只在有消息的老浏览器里少缩一次舞台）。 */
+  #stage {
     grid-column: 1;
     grid-row: 2;
     align-self: stretch;
@@ -1093,6 +1096,8 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
     margin: 0 var(--space-6) var(--space-6) 0;
     border-radius: var(--radius-xl);
   }
+  /* 压过 899px 以下"有消息就缩到 23vh"的规则（0,2,0 特指度）；旧内核整条丢弃也无妨 */
+  #app:has(#emptyState.hidden) #stage { height: auto; min-height: 0; }
   /* 一条发丝竖线分隔"人"与"话"，让宽屏有版心而不是两块漂浮内容 */
   #chatArea {
     grid-column: 2;
@@ -1114,6 +1119,19 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
  * 横屏（≥560 宽）已走上方的左右分栏，不能再被这里按 120px 压扁。 */
 @media (max-height: 480px) and (max-width: 559px) {
   #stage { height: 120px; min-height: 120px; }
+}
+
+/* ---------- 横屏 + 软键盘：可视高只剩 ~150px ----------
+ * 实测（云端 AVD，2280×1080，dpr 2.75）：键盘 588px 占 54%，WebView 只剩 149 CSS px。
+ * 原来 topbar 固定 64px + #chatArea 上下 margin 28px + inputbar 79px 会把输入框
+ * 挤出可视区（溢出 36 设备 px），聊天区只剩 12px。这里只在"键盘弹起后的极矮视口"
+ * 收紧：无键盘的横屏（392 CSS px）不触发，设计稿不变。 */
+@media (orientation: landscape) and (max-height: 260px) {
+  /* 32px 顶栏仍会挤掉最后一条气泡（实测聊天区只剩 38px，气泡 48.5px 装不满）；
+   * 键盘弹起的横屏里标题栏让位给消息本身，键盘收起（392 CSS px）自动恢复。 */
+  .topbar { display: none; }
+  #chatArea { margin: 0; }
+  .inputbar { padding: var(--space-1) 0 calc(var(--space-1) + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ---------- 记忆抽屉空态 ---------- */

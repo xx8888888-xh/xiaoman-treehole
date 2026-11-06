@@ -2,6 +2,8 @@
  * 只校验：接口形状、available 判定、参数映射、降级链、静音开关、stop 幂等。 */
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const TTS = require("../js/tts.js");
 
 /** 造一个假的 window：不含 Audio/AudioContext/fetch 真相，绝不触发真实播放 */
@@ -148,8 +150,9 @@ test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰
   });
   const engine = makeEngine(win, { tts: "browser", ttsRate: "slow" });
   let ended = 0;
+  const endedOk = [];
   try {
-    const res = await engine.speak("晚安", () => {}, () => { ended++; });
+    const res = await engine.speak("晚安", () => {}, (ok) => { ended++; endedOk.push(ok); });
     assert.deepEqual(res, { spoke: true, provider: "browser" });
     assert.equal(spoken.length, 1);
     assert.equal(spoken[0].lang, "zh-CN");
@@ -158,6 +161,7 @@ test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰
     spoken[0].onend();
     spoken[0].onerror();          // 只结算一次
     assert.equal(ended, 1, "onend/onerror 不会重复 onEnd");
+    assert.deepEqual(endedOk, [true], "真出声了：onEnd(true) 才允许打「语音已播」");
   } finally {
     engine.stop();
   }
@@ -210,6 +214,28 @@ test("stop 幂等、空文本不发声但 onEnd 必到", async () => {
   assert.equal(ended, 1);
 });
 
+test("服务端音频拿到了但设备播不出来：onEnd(false) 且只一次（不得打「语音已播」）", async () => {
+  // 回归（云端 AVD 实测）：server 返回 200，但设备侧 play() reject（无音频设备/
+  // 自动播放被拦）→ 旧实现仍然 onEnd()，气泡被打成「🔊 语音已播」，
+  // 与同屏的「语音暂时没法出声」提示自相矛盾。onEnd 必须带 ok 事实。
+  const calls = [];
+  const win = fakeWin({
+    fetch: async () => ({ ok: true, blob: async () => ({ type: "audio/wav" }) }),
+    URL: { createObjectURL: () => "blob:fake", revokeObjectURL: () => {} },
+    Audio: function FakeAudio() {
+      this.currentTime = 0; this.readyState = 0;
+      this.play = () => Promise.reject(new Error("no audio device"));
+      this.pause = () => {};
+    }
+  });
+  const engine = makeEngine(win, { tts: "server", ttsServer: "http://127.0.0.1:8903" });
+  const res = await engine.speak("今天有点累", () => {}, (ok) => { calls.push(ok); });
+  assert.deepEqual(res, { spoke: true, provider: "server" }, "server 接管了播放（已拿到音频）");
+  await new Promise((r) => setTimeout(r, 30));   // 等两段播放降级链走完
+  assert.deepEqual(calls, [false], "只结算一次，且明确 ok=false");
+  assert.equal(calls.includes(true), false, "没出声绝不能报成功");
+});
+
 test("包络帧下标：越界钳制在 [0, len-1]", () => {
   const idx = TTS._envelopeIndex;
   assert.equal(idx(-1, 50, 10), 0);
@@ -252,4 +278,28 @@ test("app.js：先渲染文字，语音统一走 speakSafe（不 await、不阻�
     app.indexOf("function finalizeStreamed"));
   assert.ok(split.indexOf('addMsg(seg, "them")') < split.indexOf("await finalizeReply"),
     "分条发送必须先把文字落屏，再进 finalizeReply（语音/舞台都在文字之后）");
+});
+
+test("延迟探针入口 _lastTiming 在引擎作用域内可取（回归：曾 ReferenceError）", () => {
+  // 真机 CI 里 TTS._lastTiming() 抛 ReferenceError: lastTiming is not defined，
+  // 因为旧的导出写在 IIFE 外层作用域；单测此前没调用过这个入口。
+  const engine = TTS._create(fakeWin());
+  assert.equal(typeof engine._lastTiming, "function");
+  assert.equal(engine._lastTiming(), null, "未播放时应为 null");
+});
+
+test("CSP 必须放行 blob: 到 connect-src（否则包络解码 fetch 被拦，口型永远只有呼吸）", () => {
+  // 云端 Chromium 实测 envError="Failed to fetch"、envFrames=0：
+  // computeEnvelope() 对 createObjectURL 的 blob: URL 再 fetch 一次，
+  // 而 CSP connect-src 只写了 'self' http: https: ws: wss: —— blob: 被拦。
+  // 结果：服务端语音能出声，但口型一直走呼吸兜底（首音节包络帧永远不出现）。
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const m = html.match(/Content-Security-Policy" content="([^"]+)"/);
+  assert.ok(m, "index.html 缺少 CSP meta");
+  const csp = m[1];
+  for (const dir of ["connect-src", "media-src"]) {
+    const part = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith(dir));
+    assert.ok(part, `CSP 缺少 ${dir}`);
+    assert.match(part, /\bblob:/, `${dir} 未放行 blob:（${part}）`);
+  }
 });
