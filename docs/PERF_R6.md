@@ -219,4 +219,4 @@ cd web && node --test --test-concurrency=1 "tests/*.test.js"
 | 合并后耗电（idle/background + 打点） | `42274326628` | `38d41b0` |
 | 拖动回归（3 轮，几何 27/27、拖动 3/3） | `42276909668` | `b2913b7` |
 | CI（合并前） | `42273891058`、`42274308454`、`42274321467` | — |
-| main CI / E2E | （推送后回填） | — |
+| main CI / E2E | CI `42279265097` success / E2E `42279265101` success | `7a9ff27` |
