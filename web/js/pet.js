@@ -57,13 +57,18 @@
    * 分三档，全部以「最后一次交互」为基准：
    *   0–6s   全帧（呼吸/眨眼/视线漫游）
    *   6–10s  15fps（保呼吸与眨眼，砍掉 3/4 的帧）
-   *   >10s   完全停 rAF 与 draw，只在触摸/可见性变化/10s 呼吸节拍补一帧
+   *   >10s   完全停 rAF 与 draw，只在触摸/可见性变化/动作切换时重绘；
+   *          另留一个 20s 的兜底补帧（见 BREATH_WAKE_MS），只防 overlay 表面被系统收回
+   *          后整块透明，不追求动画连续性。
    * 任何触摸、表情动作、原生补帧都会把计时器清零并重新开循环。 */
   const IDLE_THROTTLE_MS = 6000;
   const IDLE_STOP_MS = 10000;
   const IDLE_FPS = 15;
   const FRAME_CAP_MS = 1000 / IDLE_FPS;
-  const BREATH_WAKE_MS = 10000;
+  /* 停机后的兜底补帧间隔：画面此刻已无任何变化（呼吸/眨眼都停），
+   * 每帧只为验证"表面还在"。10s 一轮实测收益有限且仍属无变化重绘，
+   * 拉到 20s 后每分钟 3 帧即可挡住 overlay 掉帧，像素成本再减半。 */
+  const BREATH_WAKE_MS = 20000;
   let lastActionAt = Date.now();
   let idleStopped = false;
   let breathTimer = 0;
@@ -90,12 +95,13 @@
     breathTimer = setTimeout(breathTick, BREATH_WAKE_MS);
   }
 
-  /** 停机后的呼吸节拍：只补一帧（update+render 一次），绝不重开循环 */
+  /** 停机后的兜底节拍：只补一帧（update+render 一次），绝不重开循环。
+   *  这一帧的目的只是确认 overlay 表面没有整块透明，不是动画：间隔 20s。 */
   function breathTick() {
     breathTimer = 0;
     if (!mounted || !motion || !puppet || envBlocked() || !idleStopped) return;
     try {
-      puppet.update(0.4);      // 约 10s 的呼吸相位推进
+      puppet.update(0.4);      // 只推进一点呼吸相位，避免补帧时姿态跳变过大
       renderFrame();
     } catch (e) {
       log("pet-breath-error " + (e && e.message));
@@ -195,25 +201,24 @@
   /* 只画窗口真正看得见的那一段：画布 CSS 高 300% 窗口、宽屏时还会左右溢出，
    * 剩下约 2/3 高度和两侧都被 #petStage 的 overflow:hidden 裁掉。
    * Canvas2D 在软件光栅下会为整块后备缓冲逐帧上色，这里加一个取景 clip，
-   * Skia 只处理可见矩形（约为整块面积的 20%），帧量不变而像素量按面积下降。 */
-  const CLIP_MARGIN_PX = 6;
+   * Skia 只处理可见矩形（约为整块面积的 20%），帧量不变而像素量按面积下降。
+   * 余量只留给抗锯齿与 floor/ceil 取整误差：6px 时可见区外的多余光栅约占 7.3%，
+   * 收到 2px 后约 2.3%；边界仍在 stage 可见边界之外，不会裁到木偶摆动边缘。 */
+  const CLIP_MARGIN_PX = 2;                   // 后备像素（设备像素）
 
   function visibleRect() {
     const full = { x: 0, y: 0, w: puppet ? puppet.W : 0, h: puppet ? puppet.H : 0 };
     if (!puppet || !canvas) return full;
-    const cw = canvas.clientWidth;
-    const chh = canvas.clientHeight;
-    const sw = stageEl.clientWidth;
-    const sh = stageEl.clientHeight;
-    if (!cw || !chh || !sw || !sh) return full;
-    const k = puppet.H / chh;                 // 后备像素 / CSS 像素
-    const vw = Math.min(cw, sw);
-    const vh = Math.min(chh, sh - 8);         // CSS: canvas top = 8px
-    const x = Math.max(0, Math.round(((cw - vw) / 2) * k) - CLIP_MARGIN_PX);
-    const y = 0;                              // 顶边从 0 起，margin 已把 8px 偏移算进去
-    const w = Math.min(puppet.W - x, Math.round(vw * k) + CLIP_MARGIN_PX * 2);
-    const h = Math.min(puppet.H - y, Math.round(vh * k) + CLIP_MARGIN_PX * 2);
-    return { x, y, w, h };
+    return core.clipRect({
+      modelW: puppet.W,
+      modelH: puppet.H,
+      canvasW: canvas.clientWidth,
+      canvasH: canvas.clientHeight,
+      stageW: stageEl.clientWidth,
+      stageH: stageEl.clientHeight,
+      canvasTop: 8,                           // 与 css/pet.css 的 `top: 8px` 一致
+      margin: CLIP_MARGIN_PX,
+    });
   }
 
   function renderFrame() {

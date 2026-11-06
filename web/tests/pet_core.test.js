@@ -143,6 +143,88 @@ test("bubbleLayout：优先上方，顶部不够放下方，水平钳制", () =>
   );
 });
 
+/* ---------- 取景 clip ---------- */
+
+const ART_RATIO = 469 / 1080;   // 桌宠立绘宽高比（manifest canvas）
+
+/** 按引擎 fit() 的规则造一个画布盒子（CSS 高 = 300% 窗口，dpr 上限 2） */
+function floatBox(stageW, stageH, dpr, margin) {
+  const cssH = stageH * 3;
+  const modelH = Math.max(240, Math.min(1600, Math.round(cssH * Math.min(2, dpr))));
+  return {
+    modelW: Math.round(modelH * ART_RATIO), modelH,
+    canvasW: cssH * ART_RATIO, canvasH: cssH,
+    stageW, stageH, canvasTop: 8, margin,
+  };
+}
+
+/** 与实现独立的"可见矩形"复算（后备像素，且不超出后备缓冲） */
+function visibleOf(box) {
+  const k = box.modelH / box.canvasH;
+  const vw = Math.min(box.canvasW, box.stageW);
+  const vh = Math.min(box.canvasH, Math.max(0, box.stageH - box.canvasTop));
+  const left = (box.canvasW - vw) / 2;
+  return {
+    l: Math.max(0, Math.min(box.modelW, left * k)),
+    t: 0,
+    r: Math.min(box.modelW, (left + vw) * k),
+    b: Math.min(box.modelH, vh * k),
+  };
+}
+
+test("clipRect：可见区完整落在取景窗口内（四档窗型 × dpr）", () => {
+  const windows = [[140, 180], [240, 160], [100, 120], [360, 640]];
+  for (const [w, h] of windows) {
+    for (const dpr of [1, 1.5, 2]) {
+      const box = floatBox(w, h, dpr, 2);
+      const clip = Pet.clipRect(box);
+      const vis = visibleOf(box);
+      const tag = `${w}x${h}@${dpr}`;
+      assert.ok(clip.x <= vis.l, `左边裁到可见区 ${tag}: ${clip.x} < ${vis.l}`);
+      assert.ok(clip.y <= vis.t, `上边裁到可见区 ${tag}`);
+      assert.ok(clip.x + clip.w >= vis.r, `右边裁到可见区 ${tag}: ${clip.x + clip.w} < ${vis.r}`);
+      assert.ok(clip.y + clip.h >= vis.b, `下边裁到可见区 ${tag}: ${clip.y + clip.h} < ${vis.b}`);
+      // 余量 = 2px + floor/ceil 取整（最多 1px），不应再超出
+      assert.ok(vis.l - clip.x <= 3 + 1e-9, `左边余量过大 ${tag}: ${vis.l - clip.x}`);
+      assert.ok(clip.x + clip.w - vis.r <= 3 + 1e-9, `右边余量过大 ${tag}: ${clip.x + clip.w - vis.r}`);
+      assert.ok(clip.y + clip.h - vis.b <= 3 + 1e-9, `下边余量过大 ${tag}: ${clip.y + clip.h - vis.b}`);
+    }
+  }
+});
+
+test("clipRect：2px 余量相比 6px 明显收紧，可见区外 < 3%", () => {
+  const box = floatBox(140, 180, 2, 2);
+  const vis = visibleOf(box);
+  const visArea = (vis.r - vis.l) * vis.b;
+  const tight = Pet.clipRect(box);
+  // 旧实现（第四轮实测版）：round 取整、左右各 6px、上下各 2*6px
+  const legacy = (function (b, margin) {
+    const k = b.modelH / b.canvasH;
+    const vw = Math.min(b.canvasW, b.stageW);
+    const vh = Math.min(b.canvasH, b.stageH - b.canvasTop);
+    const x = Math.max(0, Math.round(((b.canvasW - vw) / 2) * k) - margin);
+    return {
+      x: x,
+      w: Math.min(b.modelW - x, Math.round(vw * k) + margin * 2),
+      h: Math.min(b.modelH, Math.round(vh * k) + margin * 2),
+    };
+  })(box, 6);
+  const tightArea = tight.w * tight.h;
+  const legacyArea = legacy.w * legacy.h;
+  // 旧 6px 余量白画的面积约 8%（实测 rasterOutside 7.3%），新 2px 余量压到 3% 以内
+  assert.ok(legacyArea - visArea > visArea * 0.07, `旧余量外溢 ${(legacyArea - visArea) / visArea}`);
+  assert.ok(tightArea - visArea < visArea * 0.03, `新余量外溢 ${(tightArea - visArea) / visArea}`);
+  assert.ok(tightArea < legacyArea - visArea * 0.05, "收紧后光栅面积应至少降 5%");
+});
+
+test("clipRect：尺寸缺失时退化为整块画布（保持旧行为）", () => {
+  assert.deepStrictEqual(
+    Pet.clipRect({ modelW: 469, modelH: 1080, canvasW: 0, canvasH: 0, stageW: 0, stageH: 0 }),
+    { x: 0, y: 0, w: 469, h: 1080 }
+  );
+  assert.deepStrictEqual(Pet.clipRect(null), { x: 0, y: 0, w: 0, h: 0 });
+});
+
 test("interactionFor：头部/身体命中区与稳定文案", () => {
   const head = Pet.interactionFor(0.2, 0);
   assert.strictEqual(head.area, "head");
@@ -188,6 +270,16 @@ test("pet.css：透明背景 + 零动画/大字号/扁平预设接线", () => {
   assert.ok(PET_CSS.includes('html[data-motion="off"]'));
   assert.ok(PET_CSS.includes('html[data-font="large"]'));
   assert.ok(PET_CSS.includes('html[data-flat="true"]'));
+});
+
+test("pet.js：取景余量收到 2px 并交给 PetCore.clipRect；静止补帧降到 20s", () => {
+  const margin = PET_JS.match(/const CLIP_MARGIN_PX = (\d+);/);
+  assert.ok(margin, "pet.js 应保留 CLIP_MARGIN_PX 常量");
+  assert.strictEqual(Number(margin[1]), 2);
+  assert.ok(PET_JS.includes("core.clipRect("), "取景矩形应由 PetCore.clipRect 计算（可单测）");
+  const breath = PET_JS.match(/const BREATH_WAKE_MS = (\d+);/);
+  assert.ok(breath, "pet.js 应保留 BREATH_WAKE_MS 常量");
+  assert.ok(Number(breath[1]) >= 20000, `静止补帧间隔应 ≥20s，实际 ${breath && breath[1]}ms`);
 });
 
 test("设置页：悬浮入口已改为桌宠文案，并引导授权后自动续开", () => {
