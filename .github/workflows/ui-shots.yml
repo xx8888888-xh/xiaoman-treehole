@@ -431,8 +431,13 @@ jobs:
           # 浏览器连 POST 都不发（上一轮服务端日志只见 OPTIONS 204、无 POST /tts）。
           export XIAOMAN_ALLOW_ORIGINS="http://127.0.0.1:8911,http://127.0.0.1:8912,https://appassets.androidplatform.net"
           XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="cat /tmp/r5-tts.wav" XIAOMAN_TTS_PORT=8903 \
+            TTS_CACHE_DIR=/tmp/tts-cache-fast \
             python3 -u server/tts_server.py >/tmp/tts-fast.log 2>&1 &
+          # 两个 server 必须各自独立缓存目录：默认都落在 ~/.cache/xiaoman_tts，
+          # 8903（无延迟，先跑）会把音频缓存下来，8904 直接命中缓存 → sleep 0.12 根本不执行，
+          # 上一轮 "+120ms 慢服务端" 的 preDecode 仍是 6.9ms（等于没测到慢网）。
           XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="/tmp/r5-tts-slow.sh" XIAOMAN_TTS_PORT=8904 \
+            TTS_CACHE_DIR=/tmp/tts-cache-slow \
             python3 -u server/tts_server.py >/tmp/tts-slow.log 2>&1 &
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/health >/dev/null && curl -sf http://127.0.0.1:8904/health >/dev/null && break; sleep 0.5; done
           curl -sf http://127.0.0.1:8903/health || { echo "TTS 8903 未就绪"; exit 1; }
