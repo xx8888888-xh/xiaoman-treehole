@@ -107,8 +107,15 @@ class Cdp:
         raise RuntimeError(f"CDP {method} 超时")
 
     def _eval(self, js, timeout=20):
+        # 根因：Runtime.evaluate 只求值表达式，裸箭头函数 `() => ({...})` 返回的是
+        # Function 远程对象（returnByValue 序列化成 {}），不会执行函数体。
+        # Playwright 的 page.evaluate 会自动调用，CDP 不会；这里统一包成 IIFE，
+        # 老脚本里手写的 `(() => {...})()` 不受影响（正则不匹配已包裹形式）。
+        expr = js
+        if re.match(r"^\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>", js):
+            expr = f"({js})()"
         r = self._send("Runtime.evaluate",
-                       {"expression": js, "returnByValue": True, "awaitPromise": True},
+                       {"expression": expr, "returnByValue": True, "awaitPromise": True},
                        timeout=timeout)
         if "exceptionDetails" in r:
             raise RuntimeError(str(r["exceptionDetails"])[:300])
