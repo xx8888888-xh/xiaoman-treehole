@@ -940,6 +940,22 @@ def wait_direct(be, target, timeout=20):
     return False, be.direct_count(), round(time.time() - start, 2)
 
 
+def wait_idle(cdp, timeout=12):
+    """等这一轮发送彻底收尾（busy=false）：失败分支还会补一条兜底气泡，
+    没等它落屏就取 total，会把"重发刚好 +1"算错。"""
+    end = time.time() + timeout
+    p = {}
+    while time.time() < end:
+        try:
+            p = cdp.eval(FAIL_PROBE_JS) or {}
+        except Exception:
+            p = {}
+        if not p.get("busy"):
+            return True, p
+        time.sleep(0.3)
+    return False, p
+
+
 def main():
     dev, dens = wm_size()
     METRICS["device"] = {"screenPx": dev, "densityDpi": dens}
@@ -1403,6 +1419,7 @@ def main():
         js_fill_tap(cdp, origin8, "zhe ju hua yao shi mei song chu qu")
         got8, p8e, wait8 = wait_fail_probe(cdp, timeout=25, want_visible=True)
         toast_text8 = (p8e.get("toast") or {}).get("text") or ""
+        idle8, _ = wait_idle(cdp, timeout=12)      # 等兜底气泡也落屏，total 才是最终值
         # toast 会短暂浮在提示条上；等它收走再量，避免把"浮层"误判成"提示条被盖住"
         wait_toast_gone(cdp, timeout=8)
         # 让 voiceTip 与提示条同屏：验证提示条不会被它挤掉/盖住
@@ -1496,6 +1513,7 @@ def main():
         js_fill_tap(cdp, origin8, "wang luo duan le hai zai ma")
         got8b, p8be, wait8b = wait_fail_probe(cdp, timeout=25, want_visible=True)
         toast_text8b = (p8be.get("toast") or {}).get("text") or ""
+        idle8b, _ = wait_idle(cdp, timeout=12)
         wait_toast_gone(cdp, timeout=8)
         cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
         time.sleep(0.4)
