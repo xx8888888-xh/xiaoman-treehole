@@ -26,6 +26,14 @@ on:
         description: "只跑浮窗探针（true 时跳过 idle/background 耗电段）"
         required: false
         default: "false"
+      float_rounds:
+        description: "浮窗两预设各重复轮数（默认 5；float_only=true 时只跑浮窗）"
+        required: false
+        default: "5"
+      power_only:
+        description: "只跑 idle/background 耗电段（true 时跳过浮窗探针）"
+        required: false
+        default: "false"
 
 concurrency:
   group: avd-r4-${{ github.ref }}
@@ -138,7 +146,7 @@ jobs:
             adb shell pidof com.xiaoman.treehole || { echo "ERROR: App process not found after 3 attempts — crash evidence follows"; adb logcat -d | rg -i "xiaoman|FATAL|AndroidRuntime|lowmemorykiller" | tail -100 || adb logcat -d | tail -200 || true; exit 1; }
             mkdir -p artifacts/avd
             IDLE="${{ inputs.idle_seconds }}"; BG="${{ inputs.bg_seconds }}"; if [ "${{ inputs.float_only }}" != "true" ]; then python3 scripts/emulator_power_r4.py --idle-seconds "${IDLE:-60}" --bg-seconds "${BG:-300}" --out artifacts/avd/power_r4.json || echo 1 > /tmp/r4_power_failed; fi
-            if [ -f scripts/emulator_float_r4.py ]; then python3 scripts/emulator_float_r4.py || echo 1 > /tmp/r4_float_failed; fi
+            ROUNDS="${{ inputs.float_rounds }}"; if [ "${{ inputs.power_only }}" != "true" ] && [ -f scripts/emulator_float_r4.py ]; then python3 scripts/emulator_float_r4.py --rounds "${ROUNDS:-5}" --out artifacts/avd/float_r4.json || echo 1 > /tmp/r4_float_failed; fi
             [ ! -f /tmp/r4_power_failed ] || { echo "ERROR: power r4 判据未全部成立（见 artifacts/avd/power_r4.json 与 power_r4_*.txt）"; exit 1; }
             if [ -f /tmp/r4_float_failed ]; then echo "WARN: emulator_float_r4.py 非零退出（不影响本 job 的耗电判据）"; fi
 

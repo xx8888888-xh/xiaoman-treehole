@@ -50,6 +50,10 @@
   let freezeTimer = 0;
   let watchdogTimer = 0;
   let envPaused = false;   // 页面不可见/窗口失焦期间暂停（收起桌宠时也走这里）
+  let view = null;         // 当前后备裁切/映射（PetCore.backingRect 的结果）
+  let logical = null;      // 逻辑画布（CSS 盒）缓存，与后备裁切无关
+  let resizeTimer = 0;
+  let resizeObs = null;
 
   /* ---------- 静止分档（耗电 P0） ----------
    * 实测：后台桌宠可见时主进程 5 分钟吃掉 194.2s CPU（单核 64.7%），
@@ -199,24 +203,86 @@
   };
 
   /* 只画窗口真正看得见的那一段：画布 CSS 高 300% 窗口、宽屏时还会左右溢出，
-   * 剩下约 2/3 高度和两侧都被 #petStage 的 overflow:hidden 裁掉。
-   * Canvas2D 在软件光栅下会为整块后备缓冲逐帧上色，这里加一个取景 clip，
-   * Skia 只处理可见矩形（约为整块面积的 20%），帧量不变而像素量按面积下降。
-   * 余量只留给抗锯齿与 floor/ceil 取整误差：6px 时可见区外的多余光栅约占 7.3%，
-   * 收到 2px 后约 2.3%；边界仍在 stage 可见边界之外，不会裁到木偶摆动边缘。 */
+   * 剩下约 2/3 高度和两侧都被父级 overflow:hidden 裁掉。
+   * R5 已用 clip 把"被丢弃的像素"挡在光栅化之外，但后备缓冲仍是整块 3 倍画布；
+   * 这里进一步把后备缩到可见区（PetCore.backingRect），内存按面积下降。
+   * 绘制坐标语义不变：ctx.setTransform 只做平移，把原画布坐标映射到新后备。
+   * 余量只留给抗锯齿与 floor/ceil 取整误差：2px（设备像素），且后备与 clip 取并集。 */
   const CLIP_MARGIN_PX = 2;                   // 后备像素（设备像素）
+  const CANVAS_TOP_CSS = 8;                   // 与 css/pet.css 的 `top: 8px` 一致
 
+  /** 逻辑画布（CSS 盒）：引擎按"300% 窗口高 + 立绘宽高比"铺满，与后备裁切无关 */
+  function logicalBox() {
+    if (!puppet || !puppet.m || !puppet.m.canvas) return { cssW: 0, cssH: 0, W: 0, H: 0, artW: 0, artH: 0 };
+    const artW = puppet.m.canvas.width;
+    const artH = puppet.m.canvas.height;
+    const cssH = (stageEl.clientHeight * 3) || 720;   // 与 vendor fit 的兜底一致
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const H = Math.max(240, Math.min(1600, Math.round(cssH * dpr)));
+    const W = Math.max(120, Math.round(H * artW / artH));
+    return { cssW: cssH * W / H, cssH: cssH, W: W, H: H, artW: artW, artH: artH };
+  }
+
+  /**
+   * 把 canvas 后备缩到可见区；只在尺寸变化时重建缓冲（重建会清空像素，
+   * 因此调用方必须在同一任务里立刻重绘，合成器不会看到空帧）。
+   */
+  function syncCanvas() {
+    if (!puppet || !canvas) return null;
+    const lb = logicalBox();
+    if (!lb.artH || !lb.cssH) return null;
+    logical = lb;
+    // 引擎坐标系保持"整块 3 倍画布"语义，只有后备缓冲变小
+    puppet.W = lb.W;
+    puppet.H = lb.H;
+    puppet.s = lb.H / lb.artH;                 // 与 vendor fit 完全一致
+    const stageW = stageEl.clientWidth;
+    const stageH = stageEl.clientHeight;
+    const k = lb.H / lb.cssH;                  // 设备像素 / CSS 像素
+    const b = core.backingRect({
+      fullW: lb.W, fullH: lb.H,
+      canvasCssW: lb.cssW, canvasCssH: lb.cssH,
+      windowCssW: stageW, windowCssH: stageH,
+      canvasTop: CANVAS_TOP_CSS, dpr: k, margin: CLIP_MARGIN_PX,
+    });
+    if (canvas.width !== b.w || canvas.height !== b.h) {
+      canvas.width = b.w;                      // 赋值即重置 context 状态
+      canvas.height = b.h;
+    }
+    // 画布 CSS 盒 = 后备在舞台里的投影：1:1 映射，绝不把裁切图拉伸回原尺寸
+    const left = (stageW - lb.cssW) / 2 + b.css.left;
+    const top = CANVAS_TOP_CSS + b.css.top;
+    const key = left + "|" + top + "|" + b.css.width + "|" + b.css.height;
+    if (!view || view.cssKey !== key) {
+      canvas.style.setProperty("left", left + "px", "important");
+      canvas.style.setProperty("top", top + "px", "important");
+      canvas.style.setProperty("width", b.css.width + "px", "important");
+      canvas.style.setProperty("height", b.css.height + "px", "important");
+      canvas.style.transform = "none";
+    }
+    view = {
+      kx: b.kx, ky: b.ky, tx: b.tx, ty: b.ty, cssKey: key,
+      bw: b.w, bh: b.h, dpr: Math.min(2, window.devicePixelRatio || 1),
+      logical: lb, stageW: stageW, stageH: stageH,
+    };
+    return b;
+  }
+
+  /** 取景矩形按"当前后备那一版"的几何计算，resize 未完成前不混用新旧尺寸 */
   function visibleRect() {
+    const lb = (view && view.logical) || logical || (puppet ? logicalBox() : null);
+    const sw = view ? view.stageW : stageEl.clientWidth;
+    const sh = view ? view.stageH : stageEl.clientHeight;
     const full = { x: 0, y: 0, w: puppet ? puppet.W : 0, h: puppet ? puppet.H : 0 };
-    if (!puppet || !canvas) return full;
+    if (!puppet || !canvas || !lb) return full;
     return core.clipRect({
-      modelW: puppet.W,
-      modelH: puppet.H,
-      canvasW: canvas.clientWidth,
-      canvasH: canvas.clientHeight,
-      stageW: stageEl.clientWidth,
-      stageH: stageEl.clientHeight,
-      canvasTop: 8,                           // 与 css/pet.css 的 `top: 8px` 一致
+      modelW: lb.W,
+      modelH: lb.H,
+      canvasW: lb.cssW,
+      canvasH: lb.cssH,
+      stageW: sw,
+      stageH: sh,
+      canvasTop: CANVAS_TOP_CSS,
       margin: CLIP_MARGIN_PX,
     });
   }
@@ -224,6 +290,10 @@
   function renderFrame() {
     if (!puppet) return;
     const ctx = puppet.ctx;
+    if (!view && !syncCanvas()) return;
+    const v = view || { kx: 1, ky: 1, tx: 0, ty: 0 };
+    // 每次绘制前重建映射：canvas.width/height 赋值会重置 transform/clip
+    ctx.setTransform(v.kx, 0, 0, v.ky, v.tx, v.ty);
     const r = visibleRect();
     ctx.save();
     ctx.beginPath();
@@ -240,7 +310,7 @@
   function renderOnce() {
     if (!puppet) return;
     try {
-      puppet.fit();
+      syncCanvas();
       renderFrame();
     } catch (e) {
       log("pet-render-error " + (e && e.message));
@@ -386,16 +456,52 @@
     }
   }
 
-  /** 自适应：画布 CSS 高度 = 300% 窗口（头部特写），引擎按 clientHeight 等比铺满 */
+  /** 自适应：逻辑画布 CSS 高 = 300% 窗口（头部特写），后备再裁到可见区 */
   function fit() {
     if (!puppet) return;
     try {
-      puppet.fit();
+      syncCanvas();
+      renderFrame();             // 缓冲刚重建，立刻补帧避免空白
       log("pet-fit w=" + canvas.width + " h=" + canvas.height);
     } catch (e) {
       log("pet-fit-error " + (e && e.message));
     }
   }
+
+  /** 窗口尺寸/DPI 变化：debounce 后重建后备，并在同一任务里重绘一帧 */
+  function rebuild(why) {
+    if (!mounted || !puppet || !canvas) return;
+    try {
+      const b = syncCanvas();
+      renderFrame();
+      if (b) {
+        log("pet-backing x=" + b.x + " y=" + b.y + " w=" + b.w + " h=" + b.h +
+          " full=" + b.fullW + "x" + b.fullH);
+      }
+    } catch (e) {
+      log("pet-rebuild-error " + (e && e.message));
+    }
+    log("pet-rebuild:" + (why || "resize"));
+  }
+
+  function scheduleRebuild(why) {
+    if (!mounted || !puppet) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = 0;
+      rebuild(why);
+    }, 120);
+  }
+
+  /** 复用 ResizeObserver（若可用）监听 stage 尺寸；退化到 window.resize */
+  function watchResize() {
+    if (window.ResizeObserver && !resizeObs) {
+      resizeObs = new ResizeObserver(() => scheduleRebuild("stage"));
+      resizeObs.observe(stageEl);
+    }
+  }
+
+  function onWindowResize() { scheduleRebuild("window"); }
 
   /**
    * 强制重绘：overlay 窗口被移动/从 GONE 切回可见后，部分设备（软件 GL 模拟器实测）
@@ -418,7 +524,14 @@
   function startWatchdog() {
     clearInterval(watchdogTimer);
     watchdogTimer = setInterval(() => {
-      if (!mounted || !puppet || !motion || envBlocked()) return;
+      if (!mounted || !puppet) return;
+      // DPI 变化（跨屏/分辨率切换）不一定会触发 resize：看门狗兜底检测
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      if (view && Math.abs(view.dpr - dpr) >= 0.01) {
+        scheduleRebuild("dpr");
+        return;
+      }
+      if (!motion || envBlocked()) return;
       if (idleStopped || Date.now() - lastActionAt >= IDLE_STOP_MS) return;
       if (Date.now() - lastPaintAt > 2500) {
         log("pet-watchdog");
@@ -562,7 +675,13 @@
     clearInterval(reminderTimer); reminderTimer = 0;
     clearInterval(styleTimer); styleTimer = 0;
     clearInterval(watchdogTimer); watchdogTimer = 0;
+    clearTimeout(resizeTimer); resizeTimer = 0;
+    if (resizeObs) { try { resizeObs.disconnect(); } catch (e) { /* 忽略 */ } }
+    resizeObs = null;
+    view = null;
+    logical = null;
     window.removeEventListener("appearance:change", syncAppearance);
+    window.removeEventListener("resize", onWindowResize);
     try { showMenu(false); } catch (e) { /* 忽略 */ }
     if (puppet) {
       try { puppet.stop(); } catch (e) { /* 忽略 */ }
@@ -590,7 +709,7 @@
   document.addEventListener("pointerup", onUp, true);
   document.addEventListener("pointercancel", onCancel, true);
   document.addEventListener("contextmenu", (e) => e.preventDefault());
-  window.addEventListener("resize", fit);
+  window.addEventListener("resize", onWindowResize);
 
   document.getElementById("petChat").addEventListener("click", openPanel);
   document.getElementById("petClose").addEventListener("click", closePet);
@@ -663,6 +782,7 @@
   /** 原生（FloatWindowService）在贴边/恢复可见后调用：强制补帧 */
   window.__petRepaint = function (why) { repaint(why || "native"); };
 
+  watchResize();
   startWatchdog();
 
   syncAppearance();

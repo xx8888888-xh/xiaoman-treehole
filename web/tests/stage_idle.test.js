@@ -90,3 +90,72 @@ test("TTS/音频喂帧（含静音段 level=0）是活跃信号", () => {
   assert.equal(Stage._idleRate(), R.full);
   assert.ok(Stage._idleState().lastActivity > 0);
 });
+
+/* ---------- 零动画：空刷新抑制 ------------------------------------------------
+ * AVD 探针在 idle_minimal 里记录到 t≈45s 的 303,309px / 14 次 drawImage，
+ * 来源是 60s 空闲问候重复 setEmotion("gentle") + TTS 收尾 lipFrame(0)。
+ * 零动画下这两处画面本来就没有变化，签名相同就不该重绘。
+ */
+function fakePuppet(emotion) {
+  const p = {
+    emotion: emotion || "smile",
+    eye: { l: "open", r: "open" },
+    mouthFrame: "closed",
+    blink: { phase: "open" },
+    params: { lipSync: 0, headTilt: 0 },
+    paints: 0,
+    fit() {},
+    render() { p.paints += 1; },
+    setAutoIdle() {},
+    setParam(name, v) { p.params[name] = v; },
+    setEmotion(name) { p.emotion = name; },
+    playMotion() {}
+  };
+  return p;
+}
+
+test("零动画：表情未变不重绘（60s 空闲问候与开场同为 gentle）", () => {
+  const p = fakePuppet("smile");          // 开场已把 gentle→smile 画在屏上
+  const undo = Stage._stillForTest(p, false);
+  try {
+    Stage.setEmotion("gentle");           // 同为 smile：空刷新
+    assert.equal(p.paints, 0, "同表情不应重绘");
+    Stage.setEmotion("gentle");
+    assert.equal(p.paints, 0, "重复空刷新仍不应重绘");
+  } finally { undo(); }
+});
+
+test("零动画：表情真的变化只重绘一次，之后再调同值不重绘", () => {
+  const p = fakePuppet("smile");
+  const undo = Stage._stillForTest(p, false);
+  try {
+    Stage.setEmotion("sad");              // smile → neutral
+    assert.equal(p.paints, 1, "表情变化应重绘一次");
+    Stage.setEmotion("sad");
+    assert.equal(p.paints, 1, "同值重复调用不应再画");
+    Stage.setEmotion("shy");              // neutral → shy
+    assert.equal(p.paints, 2, "再次变化只加一帧");
+  } finally { undo(); }
+});
+
+test("零动画：lipFrame(0) 不改 params，签名不变 → 不重绘", () => {
+  const p = fakePuppet("smile");
+  p.params.lipSync = 0.6;                 // 动画期留下的口型（零动画无 update 不会回 0）
+  const undo = Stage._stillForTest(p, false);
+  try {
+    Stage.lipFrame(0.53);                 // TTS 收尾/无 provider 的 frame(0)
+    Stage.lipFrame(0);
+    assert.equal(p.paints, 0, "零动画的 lipFrame 不该产生画布重绘");
+  } finally { undo(); }
+});
+
+test("冻结帧签名：表情/眼睛/嘴型/眨眼相位任一变化都算不同帧", () => {
+  const a = fakePuppet("smile");
+  const b = fakePuppet("smile");
+  assert.equal(Stage._stillFrameSig(a), Stage._stillFrameSig(b));
+  b.emotion = "neutral";
+  assert.notEqual(Stage._stillFrameSig(a), Stage._stillFrameSig(b));
+  const c = fakePuppet("smile");
+  c.blink = { phase: "half_down" };
+  assert.notEqual(Stage._stillFrameSig(a), Stage._stillFrameSig(c));
+});
