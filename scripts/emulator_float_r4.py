@@ -1741,32 +1741,50 @@ def drag_check(cdp, round_no, out_dir, tag):
         rec["moved"] = bool(f1) and list(f1) != list(f0)
         rec["swipe"] = (out or "").strip()[:120]
 
-        ok_g, data = _geom_eval(cdp, timeout=12)
-        if not ok_g:
-            rec["cdpLost"] = str(data)[:140]
-        else:
-            rec["geometry"] = {k: data.get(k) for k in
-                               ("canvasW", "canvasH", "innerW", "innerH", "dpr", "rect")}
-            png = f"drag_r{round_no}_{tag}.png"
-            ok_p, src, detail = capture_geom_png(cdp, png)
-            rec["canvasShot"] = {"ok": ok_p, "source": src, "detail": detail}
-            if ok_p:
-                img = {"w": 0, "h": 0}
-                try:
-                    from PIL import Image
-                    im = Image.open(png)
-                    img = {"w": im.width, "h": im.height}
-                except Exception:
-                    pass
-                region = _shot_region(data, src, img)
-                if region:
-                    rec["blank"] = blank_edges_png(png, region)
-                    rec["ok"] = bool(rec.get("moved")) and bool(rec["blank"].get("ok"))
-                    if os.path.abspath(out_dir) != os.getcwd():
-                        try:
-                            shutil.copyfile(png, os.path.join(out_dir, png))
-                        except Exception:
-                            pass
+        # rehostPet 会把 WebView 摘下再挂回，旧 CDP socket 可能失效；换一条新连接再读。
+        cdp2 = None
+        try:
+            cdp.close()
+        except Exception:
+            pass
+        try:
+            cdp2, _ = attach_pet(20)
+        except Exception as e:
+            rec["cdpLost"] = f"{type(e).__name__}: {str(e)[:120]}"
+        if cdp2 is not None:
+            data, err = _geom_eval(cdp2, timeout=12)
+            if not isinstance(data, dict):
+                rec["cdpLost"] = f"eval 失败: {err}"
+            else:
+                rec["geometry"] = {
+                    "canvas": data.get("canvas"),
+                    "css": data.get("css"),
+                    "visible": (data.get("expected") or {}).get("visible"),
+                }
+                png = f"drag_r{round_no}_{tag}.png"
+                ok_p, src, detail = capture_geom_png(cdp2, png)
+                rec["canvasShot"] = {"ok": ok_p, "source": src, "detail": detail}
+                if ok_p:
+                    img = {"w": 0, "h": 0}
+                    try:
+                        from PIL import Image
+                        im = Image.open(png)
+                        img = {"w": im.width, "h": im.height}
+                    except Exception:
+                        pass
+                    region = _shot_region(data, src, img)
+                    if region:
+                        rec["blank"] = blank_edges_png(png, region)
+                        rec["ok"] = bool(rec.get("moved")) and bool(rec["blank"].get("ok"))
+                        if os.path.abspath(out_dir) != os.getcwd():
+                            try:
+                                shutil.copyfile(png, os.path.join(out_dir, png))
+                            except Exception:
+                                pass
+            try:
+                cdp2.close()
+            except Exception:
+                pass
         screen = f"drag_r{round_no}_{tag}_screen.png"
         rec["screenShot"] = {"path": screen, "ok": shot(screen)}
         if os.path.abspath(out_dir) != os.getcwd():
