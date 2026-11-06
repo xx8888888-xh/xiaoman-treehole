@@ -574,6 +574,14 @@ def main():
           f"topbar={restored and restored.get('topbarDisplay')} "
           f"topbarH={restored and restored.get('topbarH')} "
           f"viewportH={restored and restored.get('viewportH')}")
+    # 键盘收起后视口回到 363 CSS px，旁白/状态条全部回来：聊天区若被压到比一条气泡还矮，
+    # 最后一条消息就会被列表容器裁掉。单条气泡实测 48.5 CSS px（#chatScroll 194 轮实测）。
+    check("收起键盘后聊天区容得下一条完整气泡（≥48.5 CSS px）",
+          bool(restored and restored.get("chatH") and restored["chatH"] >= 48.5),
+          f"chatH={restored and restored.get('chatH')} "
+          f"viewportH={restored and restored.get('viewportH')} "
+          f"topbarH={restored and restored.get('topbarH')} "
+          f"inputBarBottom={restored and restored.get('inputBarBottom')}")
 
     cdp.close()
     print("[IME] summary " + json.dumps({
