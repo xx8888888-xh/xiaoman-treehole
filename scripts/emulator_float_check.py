@@ -552,6 +552,7 @@ def pet_double_tap_page(target_gap_ms=150):
               buttons:(type === "pointerdown" ? 1 : 0)
             }));
           }
+          window.__tap = ev;   // 页内探针入口：直调产品监听同一 pointerdown/pointerup
           var x = innerWidth / 2, y = innerHeight / 2;
           var t0 = performance.now();
           ev("pointerdown", x, y); ev("pointerup", x, y);
