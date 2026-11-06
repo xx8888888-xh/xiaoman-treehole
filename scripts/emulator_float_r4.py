@@ -35,8 +35,14 @@ emulator_float_r4.py · 第四轮桌宠浮窗渲染验收（FLOAT_R4）
     jsDrawsOutsideClip, clipSeen, clipRect, frames, reset(), snap()}，
     snap() 附画布/视口几何、clip 实况与预设实况。
 
-CLI：python3 scripts/emulator_float_r4.py --seconds 60 --out artifacts/avd/float_r4.json
-退出码：0=两预设都拿到数据且三档/预设判据成立；1=有项失败（已得数据仍写 JSON）。
+CLI：python3 scripts/emulator_float_r4.py --seconds 60 --rounds 5 \
+       --out artifacts/avd/float_r4.json
+  --rounds N（默认 5）：两预设各重复 N 轮，每轮独立 force-stop / start / 采样；
+  每轮都做 ANR 取证（dumpsys activity anr / window / logcat crash+main /
+  /data/anr traces pull），结果写进 JSON 的 anr 字段与 roundsSummary，
+  末尾汇总 anrOccurrences。窗口若小于 60s，JSON 会显式标注
+  「缩短了窗口，判据按 Ns 重算」。
+退出码：0=所有轮次都拿到数据且三档/预设判据成立；1=有轮次失败（已得数据仍写 JSON）。
 """
 import argparse
 import json
@@ -936,13 +942,123 @@ def logcat_summary():
     return {"fatal": fatal[-5:], "petProbes": pet[-12:], "scannedLines": len(lines)}
 
 
-def anr_evidence():
-    """采集 ANR 证据：系统 ANR 记录 / 窗口状态 / 最近 logcat 关键行。
+ANR_LOG_RE = re.compile(r"ANR in|Input dispatching timed out|am_anr|Application Not Responding")
+
+
+def _indent_of(line):
+    return len(line) - len(line.lstrip())
+
+
+def anr_process_section(text, max_lines=80):
+    """从 `dumpsys activity processes` 里截本包 ProcessRecord 段（最多 max_lines 行）。"""
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if PKG in ln and "ProcessRecord" in ln:
+            start = i
+            break
+    if start is None:
+        return []
+    base = _indent_of(lines[start])
+    out = []
+    for i, ln in enumerate(lines[start:start + max_lines], start):
+        if ln.strip() and i > start and (_indent_of(ln) < base
+                                         or (_indent_of(ln) == base
+                                             and ln.lstrip().startswith("ProcessRecord"))):
+            break
+        out.append(ln.rstrip()[:240])
+    return out
+
+
+def anr_root():
+    """尝试 adb root（AOSP/userdebug 镜像可 root；用户版镜像会失败）。
+
+    只影响 /data/anr 的可读性，失败只记录原因、不影响判据。
+    """
+    out = {"attempted": True, "ok": False, "detail": {}}
+    rc, txt = sh("adb root", timeout=30)
+    out["detail"]["adbRoot"] = {"rc": rc, "out": (txt or "").strip()[:160]}
+    if rc != 0:
+        out["detail"]["reason"] = "adb root 命令失败（镜像可能不可 root）"
+        return out
+    sh("adb wait-for-device", timeout=60)
+    time.sleep(1)
+    rc2, uid = sh("adb shell id -u", timeout=20)
+    uid_s = (uid or "").strip()
+    if rc2 == 0 and uid_s.isdigit() and int(uid_s) == 0:
+        out["ok"] = True
+        out["detail"]["uid"] = uid_s
+    else:
+        out["detail"]["uid"] = {"rc": rc2, "out": uid_s[:80]}
+        out["detail"]["reason"] = "adbd 未取得 root（用户版镜像无法读 /data/anr）"
+    return out
+
+
+def _ls_anr():
+    rc, txt = sh("adb shell ls -l -t /data/anr", timeout=30)
+    return {"cmd": "adb shell ls -l -t /data/anr", "rc": rc,
+            "out": (txt or "").strip()}
+
+
+def anr_traces(round_no, preset, out_dir):
+    """把 /data/anr/traces.txt（或目录里最新文件）拉到 anr_traces_<round>[_preset].txt。
+
+    优先 traces.txt；没有就按 `ls -t` 取最新文件。任何失败都写进 tried/reason。
+    """
+    tag = str(round_no) + (f"_{preset}" if preset else "")
+    name = f"anr_traces_{tag}.txt"
+    dst = os.path.join(out_dir, name) if out_dir else name
+    rec = {"round": round_no, "preset": preset, "ok": False, "path": dst,
+           "source": None, "bytes": 0, "tried": []}
+    ls = _ls_anr()
+    rec["tried"].append({"cmd": ls["cmd"], "rc": ls["rc"],
+                         "out": (ls["out"] or "")[:400]})
+    files, err = [], None
+    for raw in (ls["out"] or "").splitlines():
+        ln = raw.strip()
+        if not ln or ln.startswith("total"):
+            continue
+        if "Permission denied" in ln or "No such file" in ln or "Not a directory" in ln:
+            err = ln[:200]
+            continue
+        parts = ln.split()
+        fname = parts[-1] if parts else ""
+        if fname in (".", ".."):
+            continue
+        if fname and ("/" not in fname or fname.startswith("/data/anr/")):
+            files.append(fname)
+    rec["tried"].append({"files": files[:20], "error": err})
+    if not files:
+        rec["reason"] = err or "adb shell ls /data/anr 没有可读文件（root 不可用或目录为空）"
+        return rec
+    src_name = "traces.txt" if "traces.txt" in files else files[0]
+    src = f"/data/anr/{src_name}"
+    rc, out = sh(f"adb pull {src} \"{dst}\"", timeout=90)
+    rec["tried"].append({"cmd": f"adb pull {src}", "rc": rc, "out": (out or "").strip()[:200]})
+    rec["source"] = src
+    if rc == 0 and os.path.exists(dst):
+        size = os.path.getsize(dst)
+        rec["bytes"] = size
+        rec["ok"] = size > 0
+        if not rec["ok"]:
+            rec["reason"] = "拉到的 traces 文件为空"
+    else:
+        rec["reason"] = "adb pull 失败（rc=%s）" % rc
+    return rec
+
+
+def anr_evidence(round_no=None, preset=None, out_dir=None):
+    """采集 ANR 证据：系统 ANR 记录 / 窗口状态 / logcat crash+main / dumpsys processes。
 
     只取证、不改判据；任何一步失败都记进 queries，不抛异常。
     R5 曾在一张浮窗截图里看到系统 ANR 对话框，因此把证据固化进 JSON。
+    检测到 ANR（或 -b crash 有本包记录）时追加：
+      - dumpsys activity processes 的 com.xiaoman.treehole 段；
+      - dumpsys window windows 的 ANR 窗口行（上面的 window 查询已含，另存 anrWindow）；
+      - adb root 后的 /data/anr traces pull（见 anr_traces）。
     """
-    out = {"queries": {}, "matches": {}, "anrDetected": False}
+    out = {"round": round_no, "preset": preset, "queries": {}, "matches": {},
+           "anrDetected": False}
 
     def run(label, cmd, timeout=40):
         try:
@@ -955,24 +1071,38 @@ def anr_evidence():
 
     anr_dump = run("dumpsys_activity_anr", "adb shell dumpsys activity anr")
     window = run("dumpsys_window", "adb shell dumpsys window windows")
-    log_lines = run("logcat_recent", "adb logcat -d -v brief -t 4000")
+    crash = run("logcat_crash", "adb logcat -d -b crash -v brief -t 2000")
+    log_lines = run("logcat_main", "adb logcat -d -v brief -t 4000")
     matches = {
         "anr_dump": [ln.strip()[:240] for ln in anr_dump.splitlines()
                      if ("ANR" in ln or PKG in ln)][:12],
         "window": [ln.strip()[:240] for ln in window.splitlines()
                    if ("Not Responding" in ln or "ANR" in ln)][:8],
+        "crash": [ln.strip()[:240] for ln in crash.splitlines()
+                  if ANR_LOG_RE.search(ln) or PKG in ln][:12],
         "logcat": [ln.strip()[:240] for ln in log_lines.splitlines()
-                   if ("ANR in" in ln or "am_anr" in ln or "Input dispatching timed out" in ln
-                       or "Application Not Responding" in ln)][:12],
+                   if ANR_LOG_RE.search(ln)][:12],
     }
     out["matches"] = {k: v for k, v in matches.items() if v}
     out["anrDetected"] = bool(out["matches"])
+    out["pattern"] = "ANR in|Input dispatching timed out|am_anr|Application Not Responding"
+    if not out["anrDetected"]:
+        return out
+
+    # 检测到 ANR：补充进程段与 ANR 窗口行，并尽快抓 traces（堆叠 ANR 会覆盖旧文件）
+    procs = run("dumpsys_activity_processes", "adb shell dumpsys activity processes", timeout=60)
+    out["processSection"] = anr_process_section(procs) if procs else []
+    out["anrWindow"] = [ln.strip()[:240] for ln in window.splitlines()
+                        if PKG in ln and ("Not Responding" in ln or "ANR" in ln)][:8]
+    out["root"] = anr_root()
+    out["traces"] = anr_traces(round_no, preset, out_dir)
     return out
 
 
-def run_preset(name, seconds, out_dir):
-    """单预设全流程：写 localStorage → 拉起桌宠 → HOME → CDP 探针 → 采样 → 判据。"""
-    rec = {"name": name, "preset": PRESETS[name], "checks": {}, "reasons": [],
+def run_preset(name, seconds, out_dir, round_no=1):
+    """单预设全流程：写 localStorage → 拉起桌宠 → HOME → CDP 探针 → 采样 → 判据 → ANR 取证。"""
+    rec = {"name": name, "round": round_no, "seconds": seconds,
+           "preset": PRESETS[name], "checks": {}, "reasons": [],
            "warnings": [], "ok": False}
     cdp = None
     try:
@@ -1007,11 +1137,12 @@ def run_preset(name, seconds, out_dir):
         rec["gaps"] = gaps
         rec["probeReinjects"] = reinj
         rec["logcat"] = logcat_summary()
-        rec["anr"] = anr_evidence()
+        rec["anr"] = anr_evidence(round_no, name, out_dir)
         if rec["anr"].get("anrDetected"):
-            rec["warnings"].append("检测到 ANR 证据（见 rec.anr.matches）")
+            rec["warnings"].append(
+                "检测到 ANR 证据（见 rec.anr.matches / processSection / traces）")
 
-        name_png = f"emulator_float_r4_{name}.png"
+        name_png = f"emulator_float_r4_r{round_no}_{name}.png"
         ok_shot = shot(name_png)
         rec["screenshot"] = {"path": name_png, "ok": ok_shot}
         if ok_shot and os.path.abspath(out_dir) != os.getcwd():
@@ -1073,6 +1204,87 @@ def summary_line(rec):
     return "[FLOAT-R4] " + " ".join(str(p) for p in parts)
 
 
+def key_metrics(rec):
+    """单预设单轮的关键指标（roundsSummary 消费）。"""
+    w = rec.get("windows") or {}
+    inv = rec.get("invalid_rasterization") or {}
+    anr = rec.get("anr") or {}
+    out = {
+        "dataSeconds": len([r for r in (rec.get("samples") or []) if not r.get("gap")]),
+        "gaps": rec.get("gaps"),
+        "probeReinjects": rec.get("probeReinjects"),
+        "invalidRasterization": inv.get("verdict"),
+        "canvasOverWindow": inv.get("canvasOverWindow"),
+        "visibleRatio": inv.get("visibleRatio"),
+        "rasterOutsideRatio": inv.get("rasterOutsideRatio"),
+        "anrDetected": bool(anr.get("anrDetected")),
+    }
+    if w.get("full"):
+        out.update({
+            "fullRafPerSec": w["full"].get("rafPerSec"),
+            "fullFramesPerSec": w["full"].get("framesPerSec"),
+            "throttleRafPerSec": w["throttle"].get("rafPerSec"),
+            "throttleFramesPerSec": w["throttle"].get("framesPerSec"),
+            "stoppedRafPerSec": w["stopped"].get("rafPerSec"),
+            "stoppedFramesTotal": w["stopped"].get("framesTotal"),
+        })
+    elif w.get("zero"):
+        out.update({"rafTotal": w["zero"].get("rafTotal"),
+                    "framesTotal": w["zero"].get("framesTotal")})
+    return out
+
+
+def rounds_summary(rounds, names):
+    """每轮 ok / anrDetected / 关键指标 / 截图 / traces。"""
+    rows = []
+    for rr in rounds:
+        presets = rr.get("presets") or {}
+        row = {
+            "round": rr.get("round"),
+            "ok": rr.get("ok"),
+            "anrDetected": rr.get("anrDetected"),
+            "durationSec": rr.get("durationSec"),
+            "error": rr.get("error"),
+            "anrTraces": (rr.get("anrTraces") or {}).get("path"),
+            "anrTracesOk": (rr.get("anrTraces") or {}).get("ok"),
+            "presets": {},
+        }
+        for n in names:
+            rec = presets.get(n) or {}
+            row["presets"][n] = {
+                "ok": rec.get("ok"),
+                "error": rec.get("error"),
+                "checks": rec.get("checks"),
+                "reasons": rec.get("reasons"),
+                "warnings": rec.get("warnings"),
+                "screenshot": (rec.get("screenshot") or {}).get("path"),
+                "keys": key_metrics(rec),
+            }
+        rows.append(row)
+    return rows
+
+
+def anr_occurrences(rounds):
+    """跨轮汇总 ANR 命中（每命中带轮次/预设/证据片段/traces 文件名）。"""
+    out = []
+    for rr in rounds:
+        for n, rec in (rr.get("presets") or {}).items():
+            anr = rec.get("anr") or {}
+            if not anr.get("anrDetected"):
+                continue
+            tr = anr.get("traces") or {}
+            out.append({
+                "round": rr.get("round"), "preset": n,
+                "matches": anr.get("matches"),
+                "processSection": anr.get("processSection"),
+                "anrWindow": anr.get("anrWindow"),
+                "traces": tr.get("path"), "tracesOk": tr.get("ok"),
+                "tracesSource": tr.get("source"), "tracesReason": tr.get("reason"),
+                "screenshot": (rec.get("screenshot") or {}).get("path"),
+            })
+    return out
+
+
 def write_json(path, payload):
     d = os.path.dirname(os.path.abspath(path))
     if d:
@@ -1092,7 +1304,7 @@ def meta_info(args):
         "pkg": PKG, "activity": MAIN, "petUrl": "https://appassets.androidplatform.net/www/pet.html",
         "deviceModel": model.strip(), "android": f"{rel.strip()} (API {sdk.strip()})",
         "screen": size.strip(), "density": dens.strip(),
-        "seconds": args.seconds, "presets": args.presets,
+        "seconds": args.seconds, "rounds": args.rounds, "presets": args.presets,
         "cdpPorts": {"main": MAIN_CDP_PORT, "pet": PET_CDP_PORT},
         "startedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
@@ -1101,11 +1313,22 @@ def meta_info(args):
 def main():
     ap = argparse.ArgumentParser(description="treehole R4 桌宠浮窗渲染验收（FLOAT_R4）")
     ap.add_argument("--seconds", type=int, default=60)
+    ap.add_argument("--rounds", type=int, default=5,
+                    help="两预设各重复轮数（默认 5；小于 1 按 1 处理）")
     ap.add_argument("--out", default=os.path.join("artifacts", "avd", "float_r4.json"))
     ap.add_argument("--presets", default="minimal,default")
     args = ap.parse_args()
+    rounds_n = max(1, args.rounds)
+    args.rounds = rounds_n                     # meta 与实际执行轮数保持一致
     if args.seconds < 12:
         print("[FLOAT-R4] --seconds 小于 12s，>10s 停机档样本不足，仅记录", flush=True)
+
+    window_note = None
+    if args.seconds < 60:
+        window_note = (f"缩短了窗口：每预设 {args.seconds}s，判据按 {args.seconds}s 重算"
+                       f"（停机档仅 {max(0, args.seconds - 10)}s，"
+                       f"framesTotal 上限随窗口下调）")
+        print(f"[FLOAT-R4] {window_note}", flush=True)
 
     names = [n.strip() for n in args.presets.split(",") if n.strip()]
     bad = [n for n in names if n not in PRESETS]
@@ -1120,8 +1343,10 @@ def main():
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "meta": meta_info(args),
         "config": {
-            "seconds": args.seconds, "presets": names,
+            "seconds": args.seconds, "presets": names, "rounds": rounds_n,
+            "windowNote": window_note,
             "appearanceKey": APPEARANCE_KEY,
+            "anrPattern": "ANR in|Input dispatching timed out|am_anr|Application Not Responding",
             "thresholds": {
                 "fullRafPerSec": [FULL_RAF_LO, FULL_RAF_HI],
                 "fullFramesPerSecMin": FULL_FRAME_LO,
@@ -1135,25 +1360,63 @@ def main():
             },
         },
         "devicePrep": {},
+        "anrRoot": {},
+        "rounds": [],
         "presets": {},
         "errors": [],
     }
     try:
         payload["devicePrep"] = device_prepare()
         print(f"[FLOAT-R4] device ready battery={payload['devicePrep'].get('battery')}", flush=True)
-        for name in names:
-            if name not in PRESETS:
-                payload["errors"].append(f"跳过未知预设 {name}")
-                continue
-            print(f"[FLOAT-R4] === 预设 {name} 开始（{args.seconds}s）===", flush=True)
-            sh("adb logcat -c", timeout=30)      # logcat 摘要只覆盖本预设窗口
-            rec = run_preset(name, args.seconds, out_dir)
-            payload["presets"][name] = rec
-            print(summary_line(rec), flush=True)
-            for why in rec.get("reasons") or []:
-                print(f"[FLOAT-R4]   - {why}", flush=True)
-            for why in rec.get("warnings") or []:
-                print(f"[FLOAT-R4]   ! {why}", flush=True)
+        # /data/anr 只有 root 可读：一次 root 即可，之后每轮只做 ls/pull
+        payload["anrRoot"] = anr_root()
+        print(f"[FLOAT-R4] ANR 取证 root：ok={payload['anrRoot'].get('ok')} "
+              f"detail={json.dumps(payload['anrRoot'].get('detail'), ensure_ascii=False)[:200]}",
+              flush=True)
+
+        for r in range(1, rounds_n + 1):
+            rrec = {"round": r, "startedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "presets": {}}
+            t_round = time.monotonic()
+            print(f"[FLOAT-R4] === 第 {r}/{rounds_n} 轮开始（每预设 {args.seconds}s）===",
+                  flush=True)
+            for name in names:
+                if name not in PRESETS:
+                    payload["errors"].append(f"跳过未知预设 {name}")
+                    continue
+                sh("adb logcat -c", timeout=30)      # logcat 摘要只覆盖本预设窗口
+                rec = run_preset(name, args.seconds, out_dir, r)
+                rrec["presets"][name] = rec
+                payload["presets"][name] = rec        # 顶层保留最后一轮，便于旧消费方
+                print(f"[FLOAT-R4] round={r} " + summary_line(rec)[len("[FLOAT-R4] "):],
+                      flush=True)
+                for why in rec.get("reasons") or []:
+                    print(f"[FLOAT-R4]   - {why}", flush=True)
+                for why in rec.get("warnings") or []:
+                    print(f"[FLOAT-R4]   ! {why}", flush=True)
+            # 每轮结束统一抓一次 /data/anr（文件名 anr_traces_<round>.txt）
+            rrec["anrTraces"] = anr_traces(r, None, out_dir)
+            if rrec["anrTraces"].get("ok"):
+                print(f"[FLOAT-R4] round={r} anr_traces -> "
+                      f"{rrec['anrTraces']['path']} ({rrec['anrTraces']['bytes']}B, "
+                      f"src={rrec['anrTraces']['source']})", flush=True)
+            else:
+                print(f"[FLOAT-R4] round={r} anr_traces 未取得："
+                      f"{rrec['anrTraces'].get('reason')}", flush=True)
+
+            presets = rrec["presets"]
+            rrec["ok"] = bool(presets) and all(bool(p.get("ok")) for p in presets.values())
+            rrec["anrDetected"] = any(
+                bool((p.get("anr") or {}).get("anrDetected")) for p in presets.values())
+            rrec["error"] = next((p.get("error") for p in presets.values()
+                                  if p.get("error")), None)
+            rrec["durationSec"] = round(time.monotonic() - t_round, 1)
+            rrec["screenshots"] = [(p.get("screenshot") or {}).get("path")
+                                   for p in presets.values()]
+            payload["rounds"].append(rrec)
+            print(f"[FLOAT-R4] === 第 {r}/{rounds_n} 轮结束 ok={rrec['ok']} "
+                  f"anrDetected={rrec['anrDetected']} 用时 {rrec['durationSec']}s ===",
+                  flush=True)
     except Exception as e:
         payload["errors"].append(f"{type(e).__name__}: {e}"[:300])
         print(f"[FLOAT-R4] 未预期异常：{payload['errors'][-1]}", flush=True)
@@ -1163,13 +1426,44 @@ def main():
         time.sleep(1)
         sh(f"adb shell am force-stop {PKG}", timeout=30)
 
+        rounds_all = payload.get("rounds") or []
         presets = payload.get("presets") or {}
+        occurrences = anr_occurrences(rounds_all)
+        payload["roundsSummary"] = rounds_summary(rounds_all, names)
+        payload["anrOccurrences"] = occurrences
+
+        collected_rounds = [rr.get("round") for rr in rounds_all]
+        missing_rounds = [r for r in range(1, rounds_n + 1) if r not in collected_rounds]
+        failed_rounds = [rr.get("round") for rr in rounds_all if not rr.get("ok")]
         failed = [n for n in names if n in presets and not presets[n].get("ok")]
         missing = [n for n in names if n not in presets]
-        raster = [n for n in names if (presets.get(n) or {}).get("invalid_rasterization", {}).get("verdict") == "yes"]
-        ok_all = bool(presets) and not failed and not missing and not payload["errors"]
+        raster = sorted({n for rr in rounds_all
+                         for n, rec in (rr.get("presets") or {}).items()
+                         if (rec.get("invalid_rasterization") or {}).get("verdict") == "yes"})
+        ok_all = (bool(rounds_all) and len(rounds_all) == rounds_n
+                  and not failed_rounds and not failed and not missing
+                  and not payload["errors"])
+        if occurrences:
+            anr_conclusion = (f"{rounds_n} 轮 × {args.seconds}s/预设复现 ANR {len(occurrences)} 次："
+                              + "、".join(f"第{o['round']}轮/{o['preset']}" for o in occurrences))
+        elif len(rounds_all) == rounds_n and not failed_rounds:
+            anr_conclusion = (f"{rounds_n} 轮 × {len(names)} 预设 × {args.seconds}s 未复现 ANR"
+                              f"（共 {rounds_n * len(names)} 次采样），判为环境偶发")
+        else:
+            anr_conclusion = (f"轮次未全部完成（{len(rounds_all)}/{rounds_n}），"
+                              f"ANR 复现结论不成立")
         payload["verdict"] = {
             "ok": ok_all,
+            "rounds": rounds_n,
+            "roundsCollected": len(rounds_all),
+            "failedRounds": failed_rounds,
+            "missingRounds": missing_rounds,
+            "anrReproduced": bool(occurrences),
+            "anrOccurrences": len(occurrences),
+            "anrConclusion": anr_conclusion,
+            "perRoundOk": [{"round": rr.get("round"), "ok": rr.get("ok"),
+                            "anrDetected": rr.get("anrDetected"),
+                            "durationSec": rr.get("durationSec")} for rr in rounds_all],
             "collected": sorted(presets.keys()),
             "failed": failed,
             "missing": missing,
@@ -1183,8 +1477,13 @@ def main():
         except Exception as e:
             print(f"[FLOAT-R4] JSON 写入失败：{e}", flush=True)
         print(f"[FLOAT-R4] verdict={'ok' if ok_all else 'fail'} "
+              f"rounds={len(rounds_all)}/{rounds_n} "
+              f"failedRounds={failed_rounds or 'none'} "
               f"invalid-rasterization={payload['verdict']['invalidRasterization']} "
-              f"failed={failed or missing or payload['errors']}", flush=True)
+              f"anrReproduced={payload['verdict']['anrReproduced']} "
+              f"anrOccurrences={len(occurrences)} "
+              f"failed={failed or missing or payload['errors'] or 'none'}", flush=True)
+        print(f"[FLOAT-R4] ANR 结论：{anr_conclusion}", flush=True)
     return 0 if payload.get("verdict", {}).get("ok") else 1
 
 
