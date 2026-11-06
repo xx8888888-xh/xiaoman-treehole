@@ -530,8 +530,38 @@ const TTS = (() => {
       return { spoke: false, provider: "none" };
     }
 
+    /**
+     * 安全朗读：调用方（app.js finalizeReply）是"文字先落屏 → 再补语音"，
+     * 因此这里的同步异常、异步失败、配置读取崩溃都必须被吞掉，
+     * 返回永不 reject 的 Promise，绝不把语音问题升级成发送链路失败。
+     */
+    function speakSafe(text, onFrame, onEnd, onSilent) {
+      const silent = res => {
+        if (typeof onSilent === "function") { try { onSilent(res); } catch (e) {} }
+      };
+      let p;
+      try {
+        p = speak(text, onFrame, onEnd);
+      } catch (e) {
+        console.warn("TTS 启动异常（文字照常）:", e && e.message);
+        try { if (typeof onFrame === "function") onFrame(0); } catch (_e) {}
+        silent({ spoke: false, provider: "error" });
+        return Promise.resolve({ spoke: false, provider: "error" });
+      }
+      return Promise.resolve(p).then(res => {
+        if (res && res.spoke === false) silent(res);
+        return res;
+      }, e => {
+        console.warn("TTS 异常（文字照常）:", e && e.message);
+        try { if (typeof onFrame === "function") onFrame(0); } catch (_e) {}
+        silent({ spoke: false, provider: "error" });
+        return { spoke: false, provider: "error" };
+      });
+    }
+
     return {
       speak,
+      speakSafe,
       stop,
       /** 当前会使用的 provider（便于设置页/自检显示）；off 如实返回 "off" 而不是 "none" */
       provider: (cfg) => {
