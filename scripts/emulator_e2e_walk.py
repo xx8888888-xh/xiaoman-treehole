@@ -124,6 +124,11 @@ STATE_JS = r"""
                     ch: area.clientHeight,
                     gap: Math.round(area.scrollHeight - area.scrollTop - area.clientHeight)} : null,
     lip: lip, face: face,
+    motion: (window.Appearance && Appearance.get) ? Appearance.get().motion : null,
+    reduceMotion: (typeof matchMedia === 'function')
+      ? matchMedia('(prefers-reduced-motion: reduce)').matches : null,
+    recent: rows.slice(-6).map((r) => ((r.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 24))),
+    emptyRows: rows.filter((r) => !(r.innerText || '').replace(/\s+/g, '')).length,
     chain: (window.TTS && TTS.chain) ? TTS.chain(API.loadCfg()) : null
   };
 })()
