@@ -105,7 +105,7 @@ PROBE_JS = r"""
   if (window.__r4 && window.__r4.__installed) return "already";
   var S = {
     raf: 0, drawCalls: 0, fillPx: 0, visiblePx: 0, visibleInClipPx: 0,
-    rasterPx: 0, rasterOutsidePx: 0,
+    rasterPx: 0, rasterOutsidePx: 0, clearPx: 0,
     clippedDraws: 0, clippedPx: 0, partialDraws: 0,
     jsDrawsOutsideClip: 0, jsPxOutsideClip: 0,
     frames: 0, drawFrames: 0, offDraws: 0, offPx: 0,
@@ -304,11 +304,22 @@ PROBE_JS = r"""
     proto.clearRect = function (x, y, w0, h0) {
       try {
         var c = mainCanvas();
-        if (c && this.canvas === c && Math.abs(+x) <= 2 && Math.abs(+y) <= 2 &&
-            +w0 >= c.width - 2 && +h0 >= c.height - 2) {
-          S.frames++; S.drawFrames++;
-          S.frameLog.push({ t: Math.round(performance.now() - S.t0), d: S.drawCalls });
-          if (S.frameLog.length > 40) S.frameLog.shift();
+        if (c && this.canvas === c) {
+          /* 清屏光栅面积：后备缩到可见区后，同一段 clearRect(0,0,W,H)
+           * 真正光栅化的像素从整块 469×1080 降到后备尺寸（约 285×346）。 */
+          var g = geom(false);
+          if (g) {
+            var box = rectBox(this.getTransform(), +x, +y, +w0, +h0);
+            var cr = box ? rectHit(box, { x: 0, y: 0, x2: g.canvasW, y2: g.canvasH,
+                                          area: g.canvasArea }) : null;
+            S.clearPx += areaOf(cr);
+          }
+          if (Math.abs(+x) <= 2 && Math.abs(+y) <= 2 &&
+              +w0 >= c.width - 2 && +h0 >= c.height - 2) {
+            S.frames++; S.drawFrames++;
+            S.frameLog.push({ t: Math.round(performance.now() - S.t0), d: S.drawCalls });
+            if (S.frameLog.length > 40) S.frameLog.shift();
+          }
         }
       } catch (e) { /* 忽略 */ }
       return origClear.apply(this, arguments);
@@ -358,7 +369,7 @@ PROBE_JS = r"""
     __installed: true,
     reset: function () {
       S.raf = 0; S.drawCalls = 0; S.fillPx = 0; S.visiblePx = 0;
-      S.visibleInClipPx = 0; S.rasterPx = 0; S.rasterOutsidePx = 0;
+      S.visibleInClipPx = 0; S.rasterPx = 0; S.rasterOutsidePx = 0; S.clearPx = 0;
       S.jsDrawsOutsideClip = 0; S.jsPxOutsideClip = 0;
       S.clippedDraws = 0; S.clippedPx = 0; S.partialDraws = 0;
       S.frames = 0; S.drawFrames = 0; S.offDraws = 0; S.offPx = 0;
@@ -383,6 +394,7 @@ PROBE_JS = r"""
         visibleInClipPx: Math.round(S.visibleInClipPx),
         rasterPx: Math.round(S.rasterPx),
         rasterOutsidePx: Math.round(S.rasterOutsidePx),
+        clearPx: Math.round(S.clearPx),
         jsDrawsOutsideClip: S.jsDrawsOutsideClip,
         jsPxOutsideClip: Math.round(S.jsPxOutsideClip),
         /* clippedDraws/clippedPx 是旧字段，现只表示 JS 侧出界调用（已被 clip 丢弃） */
@@ -404,7 +416,7 @@ PROBE_JS = r"""
     }
   };
   ["raf", "drawCalls", "fillPx", "visiblePx", "visibleInClipPx", "rasterPx",
-   "rasterOutsidePx", "jsDrawsOutsideClip", "jsPxOutsideClip",
+   "rasterOutsidePx", "clearPx", "jsDrawsOutsideClip", "jsPxOutsideClip",
    "clippedDraws", "clippedPx", "frames"].forEach(function (k) {
     Object.defineProperty(api, k, { get: function () { return S[k]; }, enumerable: true });
   });
@@ -720,7 +732,7 @@ def start_pet(timeout=20):
 
 
 COUNTERS = ("raf", "drawCalls", "fillPx", "visiblePx", "visibleInClipPx",
-            "rasterPx", "rasterOutsidePx", "jsDrawsOutsideClip", "jsPxOutsideClip",
+            "rasterPx", "rasterOutsidePx", "clearPx", "jsDrawsOutsideClip", "jsPxOutsideClip",
             "clippedDraws", "clippedPx", "partialDraws", "frames", "offDraws", "offPx")
 
 
@@ -1288,6 +1300,7 @@ def sample(cdp, seconds):
             row["visiblePxPerSec"] = int(round(dlt["visiblePx"] / dt))
             row["rasterPxPerSec"] = int(round(dlt["rasterPx"] / dt))
             row["rasterOutsidePxPerSec"] = int(round(dlt["rasterOutsidePx"] / dt))
+            row["clearPxPerSec"] = int(round(dlt["clearPx"] / dt))
             row["clippedDrawsPerSec"] = round(dlt["clippedDraws"] / dt, 2)
             row["jsDrawsOutsideClipPerSec"] = round(dlt["jsDrawsOutsideClip"] / dt, 2)
             p = smp.get("pet") or {}
@@ -1323,6 +1336,7 @@ def win_stats(rows, lo, hi):
         "visiblePxPerSec": _mean([r["visiblePxPerSec"] for r in sel]),
         "rasterPxPerSec": _mean([r["rasterPxPerSec"] for r in sel]),
         "rasterOutsidePxPerSec": _mean([r["rasterOutsidePxPerSec"] for r in sel]),
+        "clearPxPerSec": _mean([r.get("clearPxPerSec") for r in sel]),
         "clippedDrawsPerSec": _mean([r["clippedDrawsPerSec"] for r in sel]),
         "jsDrawsOutsideClipPerSec": _mean([r["jsDrawsOutsideClipPerSec"] for r in sel]),
         "framesTotal": total_of(sel, "frames"),
@@ -1430,6 +1444,12 @@ def judge(name, rows, s0, s1, gaps, reinj, seconds):
                   "维护 save/restore/rect/clip 的 clip 栈，算 dest ∩ clip（rasterPx）"
                   "与 dest ∩ clip ∩ 窗口可见区（可见部分），差值即 rasterOutsidePx",
         "canvasOverWindow": s1.get("canvasOverWindow"),
+        "canvasBacking": {
+            "w": (s1.get("geometry") or {}).get("canvasW"),
+            "h": (s1.get("geometry") or {}).get("canvasH"),
+            "cssW": ((s1.get("geometry") or {}).get("logical") or {}).get("cssW"),
+            "cssH": ((s1.get("geometry") or {}).get("logical") or {}).get("cssH"),
+        },
         "visibleShareOfCanvas": s1.get("visibleShare"),
         "fillPxTotal": fill,
         "pageFillPxTotal": page_fill,
@@ -1444,6 +1464,8 @@ def judge(name, rows, s0, s1, gaps, reinj, seconds):
         "hasClipAtSnap": s1.get("hasClip"),
         "rasterPxTotal": raster_px,
         "rasterOutsidePxTotal": raster_out,
+        "clearPxTotal": total_of(rows, "clearPx"),
+        "clearPxPerSec": _mean([r.get("clearPxPerSec") for r in valid]),
         "rasterOutsideRatio": raster_out_ratio,
         "jsDrawsOutsideClip": js_out_draws,
         "jsPxOutsideClip": js_out_px,
