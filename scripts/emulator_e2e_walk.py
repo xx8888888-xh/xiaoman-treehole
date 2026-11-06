@@ -914,6 +914,20 @@ def wait_fail_probe(cdp, timeout=25, want_visible=True):
     return False, last, round(time.time() - start, 2)
 
 
+def wait_toast_gone(cdp, timeout=8):
+    """toast 是 fixed 在底部居中的，会短暂盖在提示条上；等它自然收走再做命中测试。"""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            p = cdp.eval(FAIL_PROBE_JS) or {}
+        except Exception:
+            p = {}
+        if not (p.get("toast") or {}).get("visible"):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def wait_direct(be, target, timeout=20):
     end = time.time() + timeout
     start = end - timeout
@@ -1381,11 +1395,15 @@ def main():
         be.mode = "http500"
         d_before = be.direct_count()
         js_fill_tap(cdp, origin8, "zhe ju hua yao shi mei song chu qu")
-        got8, p8, wait8 = wait_fail_probe(cdp, timeout=25, want_visible=True)
+        got8, p8e, wait8 = wait_fail_probe(cdp, timeout=25, want_visible=True)
+        toast_text8 = (p8e.get("toast") or {}).get("text") or ""
+        # toast 会短暂浮在提示条上；等它收走再量，避免把"浮层"误判成"提示条被盖住"
+        wait_toast_gone(cdp, timeout=8)
         # 让 voiceTip 与提示条同屏：验证提示条不会被它挤掉/盖住
         cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
-        time.sleep(0.5)
-        p8 = cdp.eval(FAIL_PROBE_JS) or p8
+        time.sleep(0.4)
+        p8 = cdp.eval(FAIL_PROBE_JS) or p8e
+        p8["toast"] = {"visible": False, "text": toast_text8}
         b8 = shot("e2e_08_fail_500.png")
 
         probs = fail_layout_problems(p8) + fail_copy_problems(p8, "http")
@@ -1471,9 +1489,13 @@ def main():
         cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
         time.sleep(0.3)
         js_fill_tap(cdp, origin8, "wang luo duan le hai zai ma")
-        got8b, p8b, wait8b = wait_fail_probe(cdp, timeout=25, want_visible=True)
-        time.sleep(0.6)
-        p8b = cdp.eval(FAIL_PROBE_JS) or p8b
+        got8b, p8be, wait8b = wait_fail_probe(cdp, timeout=25, want_visible=True)
+        toast_text8b = (p8be.get("toast") or {}).get("text") or ""
+        wait_toast_gone(cdp, timeout=8)
+        cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
+        time.sleep(0.4)
+        p8b = cdp.eval(FAIL_PROBE_JS) or p8be
+        p8b["toast"] = {"visible": False, "text": toast_text8b}
         b8b = shot("e2e_08b_fail_timeout.png")
         probs3 = fail_layout_problems(p8b) + fail_copy_problems(p8b, "timeout")
         if not got8b:
