@@ -193,17 +193,25 @@ async def main():
             check("⑦ 钉子户≥3条", ok7)
 
             # ⑧ 再见面（reload，localStorage 保留=同一个身份）→ greet 主动引用大事+称呼
+            # "再见面"指跨天首次进站：f951149 起开场按本地日历日判定（web/js/greet_day.js），
+            # 同日重入按设计只播"话没丢"，不播时段问候/称呼/大事引用；故把 greet_day 回拨到昨天，
+            # 还原真实的隔天再访场景（断言不变）。
             # greet 分条发送带"真实延迟"动画，轮询等待而非固定 sleep
+            await pg.evaluate(
+                "() => localStorage.setItem('xiaoman_greet_day', GreetDay.dayKey(Date.now()-86400000))")
             await pg.reload(wait_until="domcontentloaded")
             await pg.wait_for_selector("#textInput", state="visible", timeout=15000)
             end = time.time() + 15
             msgs2 = ""
             while time.time() < end:
                 msgs2 = await pg.inner_text("#messages")
-                if "上次" in msgs2:
+                # 等开场引用真正落屏（app.js: "对了，你上次说${大事}——怎么样啦？"）。
+                # 旧口径只等"上次"二字：聊天回复里也会出现"上次"，恢复历史后立刻命中，
+                # 开场根本没播也会误判 PASS（main 上曾就此假绿）。
+                if "对了，你上次说" in msgs2:
                     break
                 await asyncio.sleep(0.5)
-            ok8 = ("阿秋" in msgs2) and ("考试" in msgs2) and ("上次" in msgs2)
+            ok8 = ("阿秋" in msgs2) and ("考试" in msgs2) and ("对了，你上次说" in msgs2)
             print(f"⑧ 再访 greet 引用(称呼+大事): {'PASS' if ok8 else 'FAIL'} | {msgs2.strip()[-70:]!r}")
             check("⑧ 再访 greet 引用", ok8)
             await pg.screenshot(path=os.path.join(SHOTS, "12_p01_onboarding_greet.png"))

@@ -1684,8 +1684,11 @@ const App = (() => {
     return { level, script };
   }
 
-  /** 分条发送（非流式兜底路径，保留逐段节奏但已大幅缩短） */
-  async function sendSplit(data, userText) {
+  /** 分条发送（非流式兜底路径，保留逐段节奏但已大幅缩短）
+   *  maxParts：段数上限，缺省 5（挡模型刷屏）。开场白是产品文案拼装的，段数是确定的，
+   *  由 playGreet 显式给到 8——深夜/凌晨时段问候本身就 2 段，再叠升级告知 2 段 + 月度回放
+   *  2 段就 6 段，沿用 5 会把月度回放整段截掉（且 month_done 已落盘，当月再也补不回来）。 */
+  async function sendSplit(data, userText, maxParts) {
     await withSendLock(async () => {
       const g = guardReply(data, userText);
       data = g.data;
@@ -1701,8 +1704,9 @@ const App = (() => {
       }
 
       const parts = String(data.reply || "…").split("||").map(s => s.trim()).filter(Boolean);
-      // 段数上限：防止模型输出过多段导致刷屏
-      const limitedParts = parts.slice(0, 5);
+      // 段数上限：防止模型输出过多段导致刷屏（开场白由调用方显式放宽，见 playGreet）
+      const cap = Number.isFinite(maxParts) && maxParts > 0 ? maxParts : 5;
+      const limitedParts = parts.slice(0, cap);
 
       let lastRow = null;
       for (let i = 0; i < limitedParts.length; i++) {
@@ -1828,7 +1832,8 @@ const App = (() => {
     } catch (e) {}
     console.log("[probe] greet played ms=" + Math.round(performance.now()));
     // 文本先落屏（sendSplit 的同步段先 addMsg），再放行舞台加载：语音/舞台都不挡开场文本
-    sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
+    // 开场文案最多 2(时段问候)+2(升级告知)+2(月度回放)+1(大事/宠物引用)=7 段，给到 8 不截断
+    sendSplit({ reply, emotion: "gentle", motion: "Greeting" }, undefined, 8);
     requestStageMount();
   }
   function greet() {
