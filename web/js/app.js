@@ -1573,6 +1573,12 @@ const App = (() => {
         await checkMilestone();   // P1-1：里程碑播报（幂等；危机轮已早退也不误播——ms_done 闸门兜底）
       } catch (e) {
         hideTyping();
+        // 存储满不是"没送出去"：回复已经拿到，只是本机没存上。
+        // 保留 setItem 时给出的备份/清理提示条，别用发送失败文案把它盖掉。
+        if (window.XMErrors && XMErrors.isQuota(e)) {
+          console.warn("存储写入失败，跳过发送失败提示:", e && e.message);
+          return;
+        }
         if (e && e.kind === "limit") {
           // P1-3 排队 UX：诚实告知信号不好（不静默换离线人格），消息落盘不丢，
           // 排队文案进 history（模型恢复后看得到"自己欠过回复"，自然补话）
