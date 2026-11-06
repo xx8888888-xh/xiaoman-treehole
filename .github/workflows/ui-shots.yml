@@ -419,8 +419,12 @@ jobs:
               w.writeframes(b"".join(struct.pack("<h", v) for v in frames))
           print("fixture /tmp/r5-tts.wav")
           PY
-          printf '#!/bin/sh\nsleep 0.12\ncat /tmp/r5-tts.wav\n' > /tmp/r5-tts-slow.sh
+          # 慢网 fixture：除了 sleep 0.12，还把"每次真实调用 + 实际睡了多久"写进
+          # /tmp/r5-slow-invocations.log —— 用来证明这次 sleep 真的执行了
+          # （上一轮两个 server 共享 ~/.cache/xiaoman_tts，8904 全命中缓存，脚本从未被调用）。
+          printf '#!/bin/sh\nt0=$(date +%%s%%N)\nsleep 0.12\nt1=$(date +%%s%%N)\necho "$t0 $t1 $(( (t1-t0)/1000000 ))ms" >> /tmp/r5-slow-invocations.log\ncat /tmp/r5-tts.wav\n' > /tmp/r5-tts-slow.sh
           chmod +x /tmp/r5-tts-slow.sh
+          echo "slow-args-hint: $(head -c 120 /tmp/r5-tts-slow.sh)"
 
       - name: Render R5 shots
         run: |
@@ -718,6 +722,8 @@ jobs:
                   m = {"tag": tag, "runs": rows}
                   vals = [x["totalMs"] for x in rows if x["why"] == "first-nonzero"]
                   m["medianMs"] = round(statistics.median(vals), 1) if vals else None
+                  m["maxMs"] = round(max(vals), 1) if vals else None
+                  m["runsN"] = len(vals)
                   # 分段中位数（毫秒，相对 speak() 入口）
                   seg = {"preDecode": [], "decode": [], "play": [], "envReady": [], "firstFrame": []}
                   for x in rows:
@@ -757,7 +763,10 @@ jobs:
       # 延迟段若全部回落到 browser provider，需要看服务端到底有没有收到请求
       - name: Dump TTS server logs
         if: always()
-        run: tail -n 30 /tmp/tts-fast.log /tmp/tts-slow.log || true
+        run: |
+          tail -n 30 /tmp/tts-fast.log /tmp/tts-slow.log || true
+          echo "--- slow fixture invocations (start_ns end_ns elapsed) ---"
+          cat /tmp/r5-slow-invocations.log 2>/dev/null || echo "(慢网 fixture 一次都没被调用：仍然是缓存命中)"
 
       - name: Upload shots
         if: always()
