@@ -9,6 +9,7 @@
  *  - suppressByPresence：主 App 在前台时让主程序负责提醒，避免双弹
  *  - clampPosition / bubbleLayout：拖动边界与气泡卡片定位（像素）
  *  - clipRect：桌宠画布的取景 clip（可见区 + 抗锯齿余量）
+ *  - backingRect：把后备缓冲缩到可见区（含 dpr 取整、1:1 映射参数）
  *  - interactionFor：点头部/身体 → 表情、动作与一句短话
  * 所有函数无副作用、不读写 localStorage（持久化由调用方负责）。
  * ============================================================ */
@@ -174,6 +175,69 @@
   }
 
   /**
+   * 后备缓冲取景矩形：把 canvas 后备从"整块 3 倍画布"缩到"窗口真正看得见的一段"。
+   * 坐标一律是后备（设备）像素；可见区按 dpr 向外 floor/ceil，再留 margin 安全余量，
+   * 并取并集于 clipRect，保证渲染 clip 绝不会落在后备之外。
+   * kx/ky 保持 1：只做平移裁切，不做缩放，避免任何重采样拉伸。
+   * @param box {fullW,fullH, canvasCssW,canvasCssH, windowCssW,windowCssH, canvasTop, dpr, margin}
+   * @returns {x,y,w,h,fullW,fullH,visible,kx,ky,tx,ty,k,css,area,fullArea}
+   */
+  function backingRect(box) {
+    const b = box || {};
+    const cw = num(b.canvasCssW);
+    const ch = num(b.canvasCssH);
+    const ww = num(b.windowCssW);
+    const wh = num(b.windowCssH);
+    const top = num(b.canvasTop, 8);
+    const margin = Math.max(0, num(b.margin, 2));
+    const dpr = Math.max(0.01, num(b.dpr, 1));
+    const fullW = Math.max(1, Math.round(num(b.fullW) || cw * dpr));
+    const fullH = Math.max(1, Math.round(num(b.fullH) || ch * dpr));
+    // 真实设备像素 / CSS 像素：优先用后备高与 CSS 高之比（fit 会按 dpr 上限取整）
+    const k = ch > 0 ? fullH / ch : dpr;
+
+    if (!cw || !ch || !ww || !wh) {
+      return {
+        x: 0, y: 0, w: fullW, h: fullH, fullW: fullW, fullH: fullH,
+        visible: { x: 0, y: 0, w: 0, h: 0 },
+        kx: 1, ky: 1, tx: 0, ty: 0, k: k,
+        css: { left: 0, top: 0, width: fullW / k, height: fullH / k },
+        area: fullW * fullH, fullArea: fullW * fullH,
+      };
+    }
+
+    const vwCss = Math.min(cw, ww);
+    const vhCss = Math.min(ch, Math.max(0, wh - top));
+    const leftCss = (cw - vwCss) / 2;                // 画布在 stage 内水平居中
+    const visible = {
+      x: leftCss * k,
+      y: 0,
+      w: vwCss * k,
+      h: vhCss * k,
+    };
+    const clip = clipRect({
+      modelW: fullW, modelH: fullH,
+      canvasW: cw, canvasH: ch,
+      stageW: ww, stageH: wh,
+      canvasTop: top, margin: margin,
+    });
+    const x = Math.max(0, Math.min(fullW - 1, Math.min(clip.x, Math.floor(visible.x) - margin)));
+    const y = Math.max(0, Math.min(fullH - 1, Math.min(clip.y, Math.floor(visible.y) - margin)));
+    const x2 = Math.min(fullW, Math.max(clip.x + clip.w, Math.ceil(visible.x + visible.w) + margin));
+    const y2 = Math.min(fullH, Math.max(clip.y + clip.h, Math.ceil(visible.y + visible.h) + margin));
+    const w = Math.max(1, x2 - x);
+    const h = Math.max(1, y2 - y);
+
+    return {
+      x: x, y: y, w: w, h: h, fullW: fullW, fullH: fullH,
+      visible: visible,
+      kx: 1, ky: 1, tx: -x, ty: -y, k: k,
+      css: { left: x / k, top: y / k, width: w / k, height: h / k },
+      area: w * h, fullArea: fullW * fullH,
+    };
+  }
+
+  /**
    * 气泡卡片定位：优先放在宠物上方，空间不足放下方；水平居中对齐宠物并钳制。
    * @param pet    {x,y,width,height} 像素
    * @param screen {width,height} 像素
@@ -223,7 +287,7 @@
     KEYS, TAP_SLOP_PX, DOUBLE_MS, LONG_MS, NOTICE,
     appearance, gesture, isDoubleTap, suppressByPresence,
     reminderDecision, recordNotice, bubbleText,
-    clampPosition, bubbleLayout, clipRect, interactionFor,
+    clampPosition, bubbleLayout, clipRect, backingRect, interactionFor,
   };
 
   root.PetCore = api;
