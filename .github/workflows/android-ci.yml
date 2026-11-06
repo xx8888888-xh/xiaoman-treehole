@@ -284,6 +284,7 @@ jobs:
           path: |
             r5_landscape_before_ime.png
             r5_landscape_ime.png
+            r5_landscape_ime_closed.png
             r5_ime_metrics.json
             window_dump.xml
           if-no-files-found: ignore
