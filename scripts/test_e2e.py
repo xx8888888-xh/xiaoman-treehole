@@ -449,12 +449,18 @@ async def main():
             print("⑦e-3 里程碑跨100播报:", "PASS" if ok7e3 else f"FAIL（未见里程碑行）")
             check("⑦e-3 里程碑跨100播报", ok7e3)
 
-            # ⑦e-4 月度回放：预置 9 月真实记忆索引 → 清 month_done → reload greet 回放上月话题
+            # ⑦e-4 月度回放：预置上月真实记忆索引 → 清 month_done → reload greet 回放上月话题
+            # 前置必须"跨天首次进站"：f951149 起开场按本地日历日判定（web/js/greet_day.js），
+            # 同日重入只播"话没丢"、不再追加内容型开场；月度回放挂在 plan.full 上。
+            # 本跑里 ⑦d-2 那次开场已登记今天，若直接同日 reload，等价于同日重入（按设计不播），
+            # 故这里把 greet_day 回拨到昨天，还原真实触发场景（新月首次进站必然是当天首次开场）。
             await pg.evaluate(
                 "() => { localStorage.setItem('xiaoman_memories_v1', JSON.stringify(["
                 "{id:'e1', text:'大事：期中考试', tags:['大事'], kind:'fact', ts: Date.now()-32*86400000, hits:0},"
                 "{id:'e2', text:'宠物：橘猫', tags:['宠物'], kind:'fact', ts: Date.now()-31*86400000, hits:0}])); "
-                "localStorage.removeItem('xiaoman_month_done'); location.reload(); }")
+                "localStorage.removeItem('xiaoman_month_done'); "
+                "localStorage.setItem('xiaoman_greet_day', GreetDay.dayKey(Date.now()-86400000)); "
+                "location.reload(); }")
             replay = await wait_contains(pg, "#messages", "上个月你跟我聊过", timeout=12)
             ok7e4 = "上个月你跟我聊过" in replay and "期中考试" in replay
             print("⑦e-4 月度回放(真实记忆索引):", "PASS" if ok7e4 else f"FAIL {replay[-80:]!r}")
