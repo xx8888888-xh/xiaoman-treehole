@@ -1750,7 +1750,8 @@ def make_reply(messages, session_id=None):
     if name:
         if name not in reply:
             reply = "%s，%s" % (name, reply)
-        _STATE.mark_recall(session_id, "昵称", turn)
+        # 称呼不算 hook 回提，不占 RECALL_MAX 名额，只记冷却
+        _STATE.get_session(session_id).setdefault("memory_hits", {})["昵称"] = turn
     return {"reply": reply, "emotion": emo, "motion": motion,
             "memory_updates": mem_updates, "hook": hook, "crisis": False}
 

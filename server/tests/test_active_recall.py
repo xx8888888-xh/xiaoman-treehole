@@ -56,6 +56,19 @@ def test_mock_recalls_name_on_next_turn():
     assert _name_recalled(second, "阿秋"), "回复完全没提名字：%r" % second
 
 
+def test_name_recall_does_not_consume_hook_budget():
+    """称呼不算 hook 回提：不能挤掉大事/宠物等 RECALL_MAX 名额。"""
+    sid = "w21-name-budget"
+    _reply([{"role": "user", "content": "叫我阿秋就行"}], sid)
+    _reply([
+        {"role": "user", "content": "叫我阿秋就行"},
+        {"role": "user", "content": "今天上班被骂了"},
+    ], sid)
+    sess = mock_api._STATE.get_session(sid)
+    assert sess.get("recall_count", 0) == 0
+    assert "昵称" in sess.get("memory_hits", {})
+
+
 def test_negative_reply_without_name_is_flagged():
     """反例对照：同一判定器必须把“完全没提名字”的回复判红。"""
     assert _name_recalled("今天上班被骂了，真烦。", "阿秋") is False
