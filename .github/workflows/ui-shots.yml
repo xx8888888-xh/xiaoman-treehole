@@ -422,18 +422,18 @@ jobs:
           printf '#!/bin/sh\nsleep 0.12\ncat /tmp/r5-tts.wav\n' > /tmp/r5-tts-slow.sh
           chmod +x /tmp/r5-tts-slow.sh
 
-      - name: Start TTS servers (fast 8903 / +120ms 8904)
-        run: |
-          XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="cat /tmp/r5-tts.wav" XIAOMAN_TTS_PORT=8903 \
-            nohup python3 server/tts_server.py >/tmp/tts-fast.log 2>&1 &
-          XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="/tmp/r5-tts-slow.sh" XIAOMAN_TTS_PORT=8904 \
-            nohup python3 server/tts_server.py >/tmp/tts-slow.log 2>&1 &
-          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/health >/dev/null && curl -sf http://127.0.0.1:8904/health >/dev/null && break; sleep 0.5; done
-          curl -sf http://127.0.0.1:8903/health; echo
-          curl -sf http://127.0.0.1:8904/health; echo
-
       - name: Render R5 shots
         run: |
+          # GitHub Actions 每个 step 结束会回收该 step 的进程树：上一版把 TTS server
+          # 放在独立 step，到本 step 时进程已死（服务器日志为空、fetch 全失败，
+          # 12/12 探针都回落到 browser provider）。必须在同一 step 起、同一 step 用。
+          XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="cat /tmp/r5-tts.wav" XIAOMAN_TTS_PORT=8903 \
+            python3 -u server/tts_server.py >/tmp/tts-fast.log 2>&1 &
+          XIAOMAN_TTS_PROVIDER=cmd XIAOMAN_TTS_CMD="/tmp/r5-tts-slow.sh" XIAOMAN_TTS_PORT=8904 \
+            python3 -u server/tts_server.py >/tmp/tts-slow.log 2>&1 &
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/health >/dev/null && curl -sf http://127.0.0.1:8904/health >/dev/null && break; sleep 0.5; done
+          curl -sf http://127.0.0.1:8903/health || { echo "TTS 8903 未就绪"; exit 1; }
+          curl -sf http://127.0.0.1:8904/health || { echo "TTS 8904 未就绪"; exit 1; }
           python -u - <<'PY'
           import json, os, statistics, time
           from PIL import Image, ImageChops, ImageOps
