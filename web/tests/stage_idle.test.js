@@ -146,8 +146,8 @@ test("零动画：说话时按 ≤15fps 把口型推进引擎，收尾立即合�
     Stage.lipFrame(0.53);
     assert.equal(p.paints, 1, "首帧口型必须画出来（默认极简预设下也要动）");
     assert.ok(p.params.lipSync > 0.3, `口型目标要进引擎参数，实际 ${p.params.lipSync}`);
-    Stage.lipFrame(0.53);                 // 66ms 节流窗口内 → 不重绘
-    assert.equal(p.paints, 1, "零动画口型限频 ≤15fps");
+    Stage.lipFrame(0.53);                 // 第 2 帧（计数 2）：未到每 4 帧一画 → 不重绘
+    assert.equal(p.paints, 1, "零动画口型按每 4 帧画 1 帧节流（60fps→~15fps）");
     Stage.lipFrame(0);
     assert.equal(p.paints, 2, "说话结束立即合嘴重绘一次，不定格在张嘴");
     assert.equal(p.params.lipSync, 0);

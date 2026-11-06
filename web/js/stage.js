@@ -25,8 +25,8 @@ const Stage = (() => {
   let lipOpen = 0;            // 当前口型目标值
   let lipHold = 0;            // 剩余保持帧（无分析器时的兜底）
   let lipWasOpen = false;     // 零动画：上一帧是否张着嘴（用于收尾立即合嘴）
-  let lipPaintAt = 0;         // 零动画：口型重绘节流时间戳（ms）
-  const LIP_STILL_MS = 66;    // 零动画口型上限 ~15fps，只覆盖说话那几秒
+  let lipTicks = 0;           // 零动画：口型喂入计数（每 4 帧画 1 帧 ≈ 15fps，与墙钟无关）
+  const LIP_EVERY = 4;        // 不按 performance.now 节流：CI/慢机调度抖动会让帧数不可复现
   // 舞台改为"聊天落屏后再挂载"（见 app.js requestStageMount）：挂载前收到的
   // 表情/动作先记下，挂载完成后补放一次，开场白的 Greeting 动作不会丢。
   let pendingEmotion = null;
@@ -901,9 +901,10 @@ const Stage = (() => {
       lipWasOpen = target > 0.02;
       return;
     }
-    // 零动画：不启动 rAF/呼吸/眨眼/视线漫游，只在说话这几秒以 ≤15fps 推进口型参数。
+    // 零动画：不启动 rAF/呼吸/眨眼/视线漫游，只在说话这几秒推进口型参数。
     if (target <= 0.02) {
       lipHold = 0;
+      lipTicks = 0;
       if (!lipWasOpen) return;               // 本来就没张嘴：不产生空刷新
       puppet.setParam("lipSync", 0);
       if (typeof puppet.update === "function") puppet.update(0.12);
@@ -911,12 +912,11 @@ const Stage = (() => {
       lipWasOpen = false;
       return;
     }
-    const t = nowMs();
-    if (t - lipPaintAt < LIP_STILL_MS) return;
-    lipPaintAt = t;
+    lipTicks += 1;
+    if (lipTicks % LIP_EVERY !== 1) return;  // 60fps 喂入 → 画 1/4 ≈ 15fps；首帧必画
     lipWasOpen = true;
     puppet.setParam("lipSync", target);
-    if (typeof puppet.update === "function") puppet.update(LIP_STILL_MS / 1000);
+    if (typeof puppet.update === "function") puppet.update(LIP_EVERY / 60);
     renderOnce("lip");
   }
 
@@ -971,16 +971,16 @@ const Stage = (() => {
     /** 单测入口：零动画冻结帧签名 + 注入假 puppet（返回还原函数） */
     _stillFrameSig: stillFrameSig,
     _stillForTest(nextPuppet, motionOn) {
-      const prev = { puppet, motionEnabled, stillSig, mode, lipWasOpen, lipPaintAt };
+      const prev = { puppet, motionEnabled, stillSig, mode, lipWasOpen, lipTicks };
       puppet = nextPuppet;
       motionEnabled = !!motionOn;
       mode = "layers";                        // 注入的假 puppet 视作已挂载的 layer 模式
       lipWasOpen = false;
-      lipPaintAt = 0;
+      lipTicks = 0;
       stillSig = stillFrameSig(nextPuppet);   // 视作"该状态已经画在屏上"
       return () => {
         puppet = prev.puppet; motionEnabled = prev.motionEnabled; stillSig = prev.stillSig;
-        mode = prev.mode; lipWasOpen = prev.lipWasOpen; lipPaintAt = prev.lipPaintAt;
+        mode = prev.mode; lipWasOpen = prev.lipWasOpen; lipTicks = prev.lipTicks;
       };
     }
   };
