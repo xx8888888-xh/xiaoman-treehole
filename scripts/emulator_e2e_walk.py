@@ -1394,6 +1394,8 @@ def main():
         # ---- ⑧a 后端 500：提示条必须出现在可视区、按钮可点、文案无状态码/英文 ----
         be.mode = "http500"
         d_before = be.direct_count()
+        pre8 = cdp.eval(FAIL_PROBE_JS) or {}
+        pre8_notice = bool((pre8.get("notice") or {}).get("visible"))
         js_fill_tap(cdp, origin8, "zhe ju hua yao shi mei song chu qu")
         got8, p8e, wait8 = wait_fail_probe(cdp, timeout=25, want_visible=True)
         toast_text8 = (p8e.get("toast") or {}).get("text") or ""
@@ -1407,6 +1409,8 @@ def main():
         b8 = shot("e2e_08_fail_500.png")
 
         probs = fail_layout_problems(p8) + fail_copy_problems(p8, "http")
+        if pre8_notice:
+            probs.append("发送前提示条就已可见，无法证明是这次失败把它弹出来的")
         if not got8:
             probs.append("后端 500 后提示条没有出现")
         if not (p8.get("voiceTip") or {}).get("visible"):
@@ -1486,8 +1490,7 @@ def main():
         # ---- ⑧b 超时/断网分支：同一套提示、同样不掉回离线人格 ----
         be.mode = "hang"
         d_t0 = be.direct_count()
-        cdp.eval("window.__onVoiceUnavailable && window.__onVoiceUnavailable('e2e_fail'), 1")
-        time.sleep(0.3)
+        pre8b_notice = bool(((cdp.eval(FAIL_PROBE_JS) or {}).get("notice") or {}).get("visible"))
         js_fill_tap(cdp, origin8, "wang luo duan le hai zai ma")
         got8b, p8be, wait8b = wait_fail_probe(cdp, timeout=25, want_visible=True)
         toast_text8b = (p8be.get("toast") or {}).get("text") or ""
@@ -1498,6 +1501,8 @@ def main():
         p8b["toast"] = {"visible": False, "text": toast_text8b}
         b8b = shot("e2e_08b_fail_timeout.png")
         probs3 = fail_layout_problems(p8b) + fail_copy_problems(p8b, "timeout")
+        if pre8b_notice:
+            probs3.append("超时前提示条仍可见，无法证明超时走的是同一套提示")
         if not got8b:
             probs3.append("首字超时后提示条没有出现")
         if be.direct_count() != d_t0 + 1:
