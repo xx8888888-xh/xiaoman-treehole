@@ -311,6 +311,16 @@ def logcat_probe():
     return out
 
 
+def logcat_stage():
+    """全量 logcat 里 stage.js 的关键打点（清空后只覆盖本段窗口）。
+
+    `[probe] stage-repaint src=...` 用来定位空闲期那次重绘的来源。"""
+    _, out = sh("adb logcat -d -v brief -t 4000", timeout=60)
+    lines = [ln.strip()[:200] for ln in (out or "").splitlines()
+             if "[probe] stage-" in ln]
+    return lines[-30:]
+
+
 def fast_eval(cdp, js, timeout=10):
     """不触发自动重连的 eval（后台/回前台轮询用）。返回 (ok, value|err)。"""
     if cdp is None or getattr(cdp, "ws", None) is None:
@@ -488,6 +498,7 @@ def measure_foreground(cdp, name, seconds, preset, expectation):
     gfx_before, _ = gfx_total()
     gfx_reset()
     battery_reset()
+    sh("adb logcat -c", timeout=30)
     uid = uid_of()
     ticks0, tick_detail0 = procs_ticks()
     snap0, err0 = read_snap_recover(cdp)
@@ -588,6 +599,7 @@ def measure_foreground(cdp, name, seconds, preset, expectation):
         "pxPerSecond": px_series,
         "drawCalls": ints(samples[-1].get("drawCalls")) - s0["drawCalls"] if samples and "cdp" not in samples[-1] else None,
         "samples": samples,
+        "stageProbes": logcat_stage(),
         "verdict": verdict,
         "ok": ok,
         "reasons": reasons or ["零渲染：窗口内无 rAF、无画布填充"],
