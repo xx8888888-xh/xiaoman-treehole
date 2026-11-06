@@ -176,3 +176,57 @@ jobs:
           path: logcat_avd_r4.txt
           if-no-files-found: ignore
           retention-days: 7
+
+  avd-gate:
+    name: avd-gate
+    # 独立门：只比对 R6 基线（docs/perf_baseline_r6.json），不改 avd-probe 的通过条件。
+    # avd-probe 因既有严格判据（idle_minimal 零渲染）红时，本 job 仍按 R6 的可解释例外汇总。
+    runs-on: ubuntu-latest
+    needs: avd-probe
+    if: always()
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Unit test gate rules
+        run: python scripts/test_perf_gate.py
+
+      - name: Download probe artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: avd-r4-power
+          path: gate-artifacts
+
+      - name: Evaluate R6 baseline gate
+        run: |
+          set -uo pipefail
+          FLOAT=$(find gate-artifacts -name float_r4.json 2>/dev/null | head -1)
+          POWER=$(find gate-artifacts -name power_r4.json 2>/dev/null | head -1)
+          if [ -z "$FLOAT" ] && [ -z "$POWER" ]; then
+            echo "GATE: SKIP (avd-probe 未上传 float/power json，无法比对基线)"
+            exit 0
+          fi
+          REQ="float,power"
+          if [ "${{ inputs.float_only }}" = "true" ]; then REQ="float"; fi
+          if [ "${{ inputs.power_only }}" = "true" ]; then REQ="power"; fi
+          ARGS=()
+          if [ -n "$FLOAT" ]; then ARGS+=(--float "$FLOAT"); fi
+          if [ -n "$POWER" ]; then ARGS+=(--power "$POWER"); fi
+          python scripts/perf_gate.py "${ARGS[@]}" --require-sections "$REQ" \
+            --json-out gate-artifacts/avd_gate.json | tee gate-artifacts/avd_gate.txt
+
+      - name: Upload gate result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: avd-gate-result
+          path: |
+            gate-artifacts/avd_gate.json
+            gate-artifacts/avd_gate.txt
+          if-no-files-found: ignore
+          retention-days: 7

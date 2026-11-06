@@ -208,6 +208,11 @@ gh workflow run avd-r4.yml --ref feat/perf-r6 -f float_only=true -f float_rounds
 
 # 本地单测
 cd web && node --test --test-concurrency=1 "tests/*.test.js"
+
+# 基线门（CI 里随上面两条 run 自动执行；本地可直接比对已下载产物）
+python scripts/test_perf_gate.py
+python scripts/perf_gate.py --float <float_r4.json> --power <power_r4.json> --require-sections float,power
+python scripts/perf_gate.py --perf <r6.json> --require-sections firstsend
 ```
 
 ## 9. Run / commit 记录
@@ -220,3 +225,28 @@ cd web && node --test --test-concurrency=1 "tests/*.test.js"
 | 拖动回归（3 轮，几何 27/27、拖动 3/3） | `42276909668` | `b2913b7` |
 | CI（合并前） | `42273891058`、`42274308454`、`42274321467` | — |
 | main CI / E2E | CI `42279265097` success / E2E `42279265101` success | `7a9ff27` |
+
+## 10. R6 基线门（CI 回归）
+
+- **基线文件**：`docs/perf_baseline_r6.json`（schema 写在文件内 `schema.metricFields`；`reference` 记录 R6 的 285×346 / 469×1080）。
+- **比对器**：`scripts/perf_gate.py`，单元测试 `scripts/test_perf_gate.py`（13 项）。
+- **CI job**（都是新加的独立 job，不改原测量 job 的通过条件）：
+  - `perf-r4.yml` → **`perf-gate`**（`needs: perf`、`if: always()`；跑单测 → 下载 `perf-r4-*` → `--require-sections firstsend`）。
+  - `avd-r4.yml` → **`avd-gate`**（`needs: avd-probe`、`if: always()`；跑单测 → 下载 `avd-r4-power` → 按 `float_only/power_only` 决定 `--require-sections`）。
+  - 两个 job 都上传 `perf_gate.json/txt`、`avd_gate.json/txt`，失败即 job 红。
+- **三类输出**：`PASS` / `FAIL`（退出码 1）/ `EXEMPT`（仅限 `baseline.exemptions`，必须打印理由）；缺段默认 `SKIP`，被 `--require-sections` 点名后判红。
+- **阈值来源**：全部沿用 §1–§6 已定数字，没有为变绿放宽。4x 仍是分布判据（中位 ≤450、最差 ≤700），并强制 `n≥5`。
+- **豁免清单**（只有 1 条）：`float.full_tier_raf` —— 48–72 rAF/s 判据在 2 核 `swiftshader_indirect` 上不可达（本轮实测 22.5–24.67 rAF/s），标 `EXEMPT` 并打印“已知环境上限”；guard 要求 rAF ≥12 且帧 ≥12，低于此值仍判 `FAIL`，防止豁免掩盖进一步退化。
+- **绿 run**（commit `1ee4f54`）：
+  - `perf-r4` run **`42283170476`** → `perf-gate` success：1x 中位 165 / 最差 198；4x 中位 436 / 最差 503；n=5、5；`SUMMARY pass=5 fail=0`。
+  - `avd-r4`（float_only=true, 3 轮）run **`42283186137`** → `avd-gate` success：后备 98,610 ×3；占比 0.1947 ×3；每帧清屏 98,617 / 98,613 / 98,627；窗口外光栅 0.0031；throttle 11.25–11.75 帧/s；满帧档 `EXEMPT`（22.50–24.67 rAF/s）；`SUMMARY pass=8 fail=0 exempt=1`。
+  - `avd-r4`（power_only=true, 60/60）run **`42285699922`** → `avd-gate` success：重绘 1 次 / 151,655px / `src=emotion`；minimal rAF 0、CPU **0.47%**；idle_default **5.69 rAF/s**；后台 0 帧、CPU 0.01%；`SUMMARY pass=8 fail=0`。
+    - 该 run 的 workflow 结论是 **failure**，但原因是 `avd-probe` 既有严格判据（`idle_minimal` 零渲染，>20,000px 即红）——按用户要求**未改这个 job 的通过条件**；`avd-gate` 按 R6 的可解释例外汇总为 success。
+- **人为退化验证**（在本地对真实产物副本做，未提交任何改动）：
+  - 把 run `42276909668` 的 `float_r4.json` 复制一份，`minimal.canvas` 从 285×346 改成 **570×692**（×2），`clearPxPerSec` ×4，模拟“后备回到整窗大小”。
+  - `python scripts/perf_gate.py --float <mutated> --require-sections float` 输出 **`GATE: FAIL (fail=3)`**：
+    - `float.backing_area_px` 394,440 > 98,610
+    - `float.backing_share_of_window` 0.7787 > 0.195
+    - `float.clear_px_per_frame` 394,369–394,445 > 98,610 ±1%
+  - 删除副本、换回原始产物（run `42276909668` 的 `float_r4.json`）复跑：**`GATE: PASS (fail=0)`**，还原完成。
+  - 其余退化分支同样被单测钉住：清屏×2、窗口外光栅 2%、重绘 2 次/320kpx、无 `src=emotion` 打点、4x 中位 500ms、4x 只有 1 个样本、满帧档 rAF 8/s（豁免 guard 失效）、必需段缺数据。
