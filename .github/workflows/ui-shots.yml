@@ -395,6 +395,275 @@ jobs:
               )
           PY
 
+      # 第五轮：暗色浮窗对比度、flat/neutral 像素差、首音节包络延迟
+      - name: Install TTS + image deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq espeak-ng
+          python -m pip install --quiet pillow
+          espeak-ng --version | head -1
+
+      - name: Start TTS server (cmd → espeak-ng, 8903)
+        run: |
+          XIAOMAN_TTS_PROVIDER=cmd \
+          XIAOMAN_TTS_CMD="espeak-ng -v cmn --stdout" \
+          XIAOMAN_TTS_PORT=8903 \
+          nohup python3 server/tts_server.py >/tmp/tts.log 2>&1 &
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8903/health >/dev/null && break; sleep 0.5; done
+          curl -sf http://127.0.0.1:8903/health; echo
+
+      - name: Render R5 shots
+        run: |
+          python - <<'PY'
+          import json, os, statistics
+          from PIL import Image, ImageChops, ImageOps
+          from playwright.sync_api import sync_playwright
+
+          AFTER = "http://127.0.0.1:8911/index.html"
+          BEFORE = "http://127.0.0.1:8912/index.html"
+          PET = "http://127.0.0.1:8911/pet.html"
+          OUT = "shots"
+          M = {}
+
+          CFG = {"mode": "offline", "heartbeatOn": False, "tts": "off", "allowFreePersonal": False}
+          CFG_TTS = {"mode": "offline", "heartbeatOn": False, "tts": "server",
+                     "ttsServer": "http://127.0.0.1:8903", "allowFreePersonal": False}
+          MEM = {"称呼": "阿禾", "在意的人": "妈妈", "在意的事": "周三复诊", "最近": "在准备换工作"}
+          LONG_TIP = "今天降温了，出门记得把围巾带上；回来的时候我给你留了热水，别急着做别的。"
+
+          SEED_JS = """([cfg, mem, theme, appearance]) => {
+              localStorage.clear();
+              localStorage.setItem("xiaoman_cfg", JSON.stringify(cfg));
+              localStorage.setItem("xiaoman_memory", JSON.stringify(mem));
+              localStorage.setItem("xiaoman_theme", theme);
+              localStorage.setItem("xiaoman_appearance_v1", JSON.stringify(appearance));
+              localStorage.setItem("xiaoman_told_v", "999");
+              sessionStorage.setItem("xiaoman_degrade_off", "1");
+              sessionStorage.setItem("xiaoman_voice_tip_off", "1");
+          }"""
+
+          def seed(page, base, cfg=CFG, theme="light"):
+              page.goto(base, wait_until="domcontentloaded")
+              page.evaluate(SEED_JS, [cfg, MEM, theme, {"preset": "default"}])
+              page.reload(wait_until="domcontentloaded")
+
+          def shot(page, name, clip=None):
+              page.screenshot(path=os.path.join(OUT, name + ".png"), clip=clip)
+              print("shot", name)
+
+          # ---------- 3) 暗色浮窗：三档尺寸 + WCAG 对比度 ----------
+          DARK_JS = """() => {
+              const rgb = (s) => {
+                  const m = String(s || "").match(/rgba?\\(([^)]+)\\)/);
+                  if (!m) return null;
+                  return m[1].split(",").slice(0, 3).map((v) => parseFloat(v));
+              };
+              const lum = (c) => {
+                  if (!c) return 0;
+                  const a = c.map((v) => {
+                      const x = v / 255;
+                      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+                  });
+                  return 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
+              };
+              const ratio = (fg, bg) => {
+                  const L1 = lum(rgb(fg)), L2 = lum(rgb(bg));
+                  const hi = Math.max(L1, L2), lo = Math.min(L1, L2);
+                  return +((hi + 0.05) / (lo + 0.05)).toFixed(2);
+              };
+              const tip = document.querySelector("#petTip");
+              const cs = getComputedStyle(tip);
+              const btn = document.querySelector("#petMenu button");
+              const bs = getComputedStyle(btn);
+              const menu = getComputedStyle(document.querySelector("#petMenu"));
+              return {
+                  dark: matchMedia("(prefers-color-scheme: dark)").matches,
+                  tip: {color: cs.color, bg: cs.backgroundColor, border: cs.borderTopColor,
+                        borderPx: cs.borderTopWidth, shadow: cs.boxShadow,
+                        textContrast: ratio(cs.color, cs.backgroundColor),
+                        borderContrast: ratio(cs.borderTopColor, cs.backgroundColor),
+                        fontPx: parseFloat(cs.fontSize),
+                        lines: +(tip.clientHeight / (parseFloat(cs.lineHeight) || 1)).toFixed(1),
+                        clipped: tip.scrollHeight > tip.clientHeight + 1},
+                  menuBtn: {color: bs.color, bg: bs.backgroundColor, border: bs.borderTopColor,
+                            textContrast: ratio(bs.color, bs.backgroundColor),
+                            borderContrast: ratio(bs.borderTopColor, bs.backgroundColor),
+                            shadow: menu.boxShadow},
+                  headVisibleRatio: (() => {
+                      const c = document.querySelector("#petStage canvas");
+                      if (!c) return 0;
+                      const b = c.getBoundingClientRect();
+                      const h = {x: b.x + (349 / 1235) * b.width, y: b.y,
+                                 w: (540 / 1235) * b.width, h: (550 / 2841) * b.height};
+                      const ix = Math.max(0, Math.min(innerWidth, h.x + h.w) - Math.max(0, h.x));
+                      const iy = Math.max(0, Math.min(innerHeight, h.y + h.h) - Math.max(0, h.y));
+                      return +((ix * iy) / (h.w * h.h)).toFixed(3);
+                  })()
+              };
+          }"""
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(args=["--mute-audio",
+                                               "--autoplay-policy=no-user-gesture-required"])
+
+              for w, h in [(140, 180), (180, 180), (240, 160)]:
+                  ctx = browser.new_context(viewport={"width": w, "height": h},
+                                            device_scale_factor=2, locale="zh-CN",
+                                            color_scheme="dark")
+                  page = ctx.new_page()
+                  seed(page, PET)
+                  page.wait_for_timeout(3200)
+                  page.evaluate("(t) => window.__pet && window.__pet.tip(t)", LONG_TIP)
+                  page.wait_for_timeout(300)
+                  name = "60-pet-dark-%dx%d" % (w, h)
+                  shot(page, name)
+                  M[name] = page.evaluate(DARK_JS)
+                  page.evaluate("() => window.__pet && window.__pet.menu(true)")
+                  page.wait_for_timeout(250)
+                  shot(page, "61-pet-dark-%dx%d-menu" % (w, h))
+                  ctx.close()
+
+              # ---------- 2) flat vs neutral：同角度裁切 + 像素差 + 关键点 ----------
+              ctx = browser.new_context(viewport={"width": 390, "height": 844},
+                                        device_scale_factor=2, locale="zh-CN")
+              page = ctx.new_page()
+              seed(page, AFTER)
+              page.wait_for_timeout(3600)
+
+              geo = page.evaluate("""() => {
+                  const s = document.querySelector("#stage").getBoundingClientRect();
+                  const c = document.querySelector("#petStage canvas") ||
+                            document.querySelector("#stage canvas");
+                  const b = c.getBoundingClientRect();
+                  return {stage: {x: s.x, y: s.y, w: s.width, h: s.height},
+                          canvas: {dx: b.x - s.x, dy: b.y - s.y, w: b.width, h: b.height},
+                          dpr: devicePixelRatio || 1};
+              }""")
+              box = page.locator("#stage").bounding_box()
+              MANIFEST_JS = """() => {
+                  const m = window.PUPPET_MANIFEST;
+                  const h = (g, n) => (m.layers[g] && m.layers[g][n] && m.layers[g][n].h) || null;
+                  return {
+                      emotions: m.emotions,
+                      eyeOpenH: h("eye_l", "open"), eyeHalfH: h("eye_l", "half"),
+                      mouthClosedH: h("mouth", "closed"), mouthXsH: h("mouth", "open_xs"),
+                      mouthLevels: (m.layers.mouthLevels || []).length
+                  };
+              }"""
+              FACE = {}
+              for idx, emo in enumerate(["neutral", "flat", "tired"]):
+                  page.evaluate("() => window.Stage && window.Stage._poseForShot()")
+                  page.evaluate("(n) => window.Stage && window.Stage.setEmotion(n)", emo)
+                  page.wait_for_timeout(900)
+                  shot(page, "%d0-face-%s" % (5 + idx, emo), clip=box)
+                  FACE[emo] = {
+                      "state": page.evaluate("() => window.Stage && window.Stage._faceState()"),
+                  }
+              M["face"] = {"manifest": page.evaluate(MANIFEST_JS), "states": FACE,
+                           "crop": {"stage": geo["stage"], "canvas": geo["canvas"],
+                                    "dpr": geo["dpr"]}}
+              ctx.close()
+
+              # 像素差：同机同角度两张 2x 裁图；阈值 10/255 滤掉抗锯齿噪声
+              a = Image.open(os.path.join(OUT, "50-face-neutral.png")).convert("RGB")
+              b = Image.open(os.path.join(OUT, "51-face-flat.png")).convert("RGB")
+              d = ImageChops.difference(a, b)
+              r, g, bl = d.split()
+              mx = ImageChops.lighter(ImageChops.lighter(r, g), bl)
+              mask = Image.eval(mx, lambda v: 255 if v > 10 else 0)
+              total = mask.width * mask.height
+              changed = sum(1 for v in mask.getdata() if v)
+              bbox = mask.getbbox()
+              cg = geo["canvas"]
+              dpr = geo["dpr"]
+              head = {"x": (cg["dx"] + (349 / 1235) * cg["w"]) * dpr,
+                      "y": cg["dy"] * dpr,
+                      "w": (540 / 1235) * cg["w"] * dpr,
+                      "h": (550 / 2841) * cg["h"] * dpr}
+              def band(y0, y1):
+                  crop = mask.crop((0, int(head["y"] + y0 * head["h"]),
+                                    mask.width, int(head["y"] + y1 * head["h"])))
+                  bb = crop.getbbox()
+                  cnt = sum(1 for v in crop.getdata() if v)
+                  return {"changed": cnt, "bbox": bb,
+                          "bboxH": (bb[3] - bb[1]) if bb else 0}
+              M["face_diff"] = {
+                  "size": [mask.width, mask.height],
+                  "changedPx": changed,
+                  "changedRatio": round(changed / total, 4),
+                  "bbox": bbox,
+                  "headBox": {k: round(v, 1) for k, v in head.items()},
+                  "eyeBand": band(0.47, 0.72),
+                  "mouthBand": band(0.74, 0.86),
+                  "threshold": 10
+              }
+              # 放大差异图，作为肉眼证据
+              ImageOps.autocontrast(mx).save(os.path.join(OUT, "52-face-diff.png"))
+
+              # ---------- 4) 首音节延迟：点击 → 首个非零包络帧 ----------
+              LAT = """() => new Promise((resolve) => {
+                  const t0 = performance.now();
+                  const provider = window.TTS ? TTS.provider() : "none";
+                  let done = false;
+                  const finish = (why) => {
+                      if (done) return;
+                      done = true;
+                      resolve({why, provider, totalMs: +(performance.now() - t0).toFixed(1),
+                               timing: (window.TTS && TTS._lastTiming) ? TTS._lastTiming() : null});
+                  };
+                  TTS.speak("今天降温了，出门记得带围巾。",
+                            (lv) => { if (lv >= 0.12) finish("first-nonzero"); },
+                            () => finish("end"));
+                  setTimeout(() => finish("timeout"), 12000);
+              })"""
+
+              def latency(base, tag, texts):
+                  rows = []
+                  for text in texts:
+                      ctx = browser.new_context(viewport={"width": 390, "height": 844},
+                                                device_scale_factor=1, locale="zh-CN")
+                      page = ctx.new_page()
+                      seed(page, base, cfg=CFG_TTS)
+                      page.wait_for_timeout(900)
+                      r = page.evaluate(
+                          LAT.replace("今天降温了，出门记得带围巾。", text))
+                      page.evaluate("() => window.TTS && TTS.stop()")
+                      rows.append(r)
+                      ctx.close()
+                  m = {"tag": tag, "runs": rows}
+                  vals = [x["totalMs"] for x in rows if x["why"] == "first-nonzero"]
+                  m["medianMs"] = round(statistics.median(vals), 1) if vals else None
+                  # 分段中位数（毫秒，相对 speak() 入口）
+                  seg = {"fetch": [], "play": [], "envReady": [], "firstFrame": []}
+                  for x in rows:
+                      t = x.get("timing") or {}
+                      if not t.get("speakAt"):
+                          continue
+                      seg["fetch"].append(t["fetchEndAt"] - t["speakAt"])
+                      if t.get("playAt"):
+                          seg["play"].append(t["playAt"] - t["fetchEndAt"])
+                      if t.get("envReadyAt", 0) > 0:
+                          seg["envReady"].append(t["envReadyAt"] - t["fetchEndAt"])
+                      if t.get("firstNonZeroAt"):
+                          seg["firstFrame"].append(t["firstNonZeroAt"] - t["speakAt"])
+                  m["segmentsMedianMs"] = {k: (round(statistics.median(v), 1) if v else None)
+                                           for k, v in seg.items()}
+                  return m
+
+              TEXTS = ["今天降温了，出门记得带围巾。",
+                       "我把热水放在桌上了，你慢慢来。",
+                       "不用急着回我，先把自己照顾好。"]
+              M["latency_before"] = latency(BEFORE, "R4 顺序解码", TEXTS)
+              M["latency_after"] = latency(AFTER, "R5 并行解码", TEXTS)
+
+              browser.close()
+
+          with open(os.path.join(OUT, "metrics-r5.json"), "w", encoding="utf-8") as f:
+              json.dump(M, f, ensure_ascii=False, indent=2)
+          print(json.dumps({k: (v.get("medianMs") if isinstance(v, dict) and "medianMs" in v else "ok")
+                            for k, v in M.items()}, ensure_ascii=False))
+          PY
+
       - name: Upload shots
         if: always()
         uses: actions/upload-artifact@v4

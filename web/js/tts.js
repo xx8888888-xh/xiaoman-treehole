@@ -147,6 +147,8 @@ const TTS = (() => {
     let androidSettle = null;  // 当前 Android TTS 的完成回调（供原生 __ttsEnded 触发）
     let speakGen = 0;          // 播放代际：异步取音频返回时，过期的请求直接丢弃
     let muted = W.XIAOMAN_TTS_MUTED === "1" || W.XIAOMAN_TTS_MUTED === true;
+    let lastSpeakAt = 0;       // speak() 入口时刻（≈用户点击播放），供延迟探针取基准
+    let lastTiming = null;     // 上一次服务端播放的分段耗时（CI/探针只读取，不参与播放逻辑）
 
     /**
      * 读取前端配置（API.loadCfg 由 api.js 提供；缺失时用空配置走默认链路）。
@@ -241,6 +243,13 @@ const TTS = (() => {
       currentAudio = audio;
       let raf = 0, settled = false, env = null, last = 0;
       let startTimer = 0;
+      // 延迟探针：从 speak() 入口（≈用户点击）到首个"真语音"包络帧。
+      // 阈值 0.12 高于呼吸兜底峰值 0.09，避免把"没解码时的呼吸"误算成首音节。
+      const timing = {
+        speakAt: lastSpeakAt || now(), fetchEndAt: now(), playRequestAt: 0,
+        playAt: 0, envReadyAt: 0, firstNonZeroAt: 0,
+      };
+      lastTiming = timing;
       const settle = (failed) => {
         if (settled) return;
         settled = true;
@@ -259,6 +268,14 @@ const TTS = (() => {
         if (!audio.currentTime && audio.readyState < 3) settle(true);
       }, AUDIO_START_TIMEOUT);
 
+      // 解码与开播并行：旧实现等 audio.play() resolve 后才 fetch+decode，
+      // 白等一个"真正开播"的往返（Chromium/WebView 30-80ms）。现在同一轮启动，
+      // 包络先就绪就先按播放进度出帧，开播延迟不受影响。
+      computeEnvelope(url).then(e => {
+        env = e;
+        timing.envReadyAt = now();
+      }).catch(() => { env = null; timing.envReadyAt = -1; });
+
       const tick = () => {
         if (settled) return;
         let level;
@@ -267,6 +284,7 @@ const TTS = (() => {
           const target = env.levels[idx] || 0;
           last = last * 0.62 + target * 0.38;   // 起落平滑，避免嘴抖
           level = last;
+          if (!timing.firstNonZeroAt && level >= 0.12) timing.firstNonZeroAt = now();
         } else {
           level = breathLevel(now());   // 解码前 / 解码失败：轻微呼吸（不随机张嘴）
         }
@@ -274,9 +292,10 @@ const TTS = (() => {
         raf = W.requestAnimationFrame ? W.requestAnimationFrame(tick) : setTimeout(tick, 16);
       };
 
+      timing.playRequestAt = now();
       audio.play().then(() => {
+        timing.playAt = now();
         audio.onplaying = () => clearTimeout(startTimer);
-        computeEnvelope(url).then(e => { env = e; }).catch(() => { env = null; });
         tick();
       }).catch(() => settle(true));
     }
@@ -486,6 +505,7 @@ const TTS = (() => {
      * 文字渲染由调用方先完成，本函数不阻塞、不抛异常。
      */
     async function speak(text, onFrame, onEnd) {
+      lastSpeakAt = now();   // 延迟探针基准：入口即"点击播放"
       const cfg = loadCfg();
       const frame = typeof onFrame === "function" ? onFrame : () => {};
       const finish = typeof onEnd === "function" ? onEnd : () => {};
@@ -569,6 +589,8 @@ const TTS = (() => {
     _speechPlan: speechPlan,
     _speechLevel: speechLevel,
     _charMs: CHAR_MS,
+    /** 探针：上一次服务端播放的分段耗时（毫秒，性能时间轴；不参与播放逻辑） */
+    _lastTiming: () => lastTiming,
     /** 单测入口：注入 fake window 造独立引擎（不触碰真实浏览器/音频） */
     _create: createEngine
   });

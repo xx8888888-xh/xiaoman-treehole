@@ -190,6 +190,22 @@ test("pet.css：透明背景 + 零动画/大字号/扁平预设接线", () => {
   assert.ok(PET_CSS.includes('html[data-flat="true"]'));
 });
 
+test("pet.css 暗色：气泡文字 ≥4.5:1、描边 ≥3:1（WCAG 非文本）", () => {
+  assert.ok(PET_CSS.includes("@media (prefers-color-scheme: dark)"));
+  const lum = (hex) => {
+    const rgb = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const lin = rgb.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  };
+  const ratio = (a, b) => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  // 与 pet.css 的暗色块保持同值：底 #201D1A、字 #F4EFE7、边 #9A938A
+  assert.ok(ratio("#F4EFE7", "#201D1A") >= 4.5, "气泡文字对比度不足");
+  assert.ok(ratio("#9A938A", "#201D1A") >= 3.0, "描边非文本对比度不足");
+});
+
 test("设置页：悬浮入口已改为桌宠文案，并引导授权后自动续开", () => {
   assert.ok(INDEX_HTML.includes("悬浮小满（桌宠）"));
   assert.ok(INDEX_HTML.includes("开启桌宠"));

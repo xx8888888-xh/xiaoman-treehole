@@ -268,6 +268,79 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # 第五轮：横屏软键盘遮挡（真机 AVD 截图，不用 CSS 推算屏高）
+  # 证据链：screencap PNG 尺寸 = 合成屏幕；uiautomator WebView bounds = 可视容器；
+  # dumpsys input_method = 键盘确实弹起；dumpsys window = IME 窗口高度；
+  # CDP DOM rect = 最后一条消息/输入框真实盒子。断言在 scripts/emulator_ime_check.py。
+  landscape-ime:
+    runs-on: ubuntu-latest
+    needs: build-apk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Debug APK from build-apk
+        uses: actions/download-artifact@v4
+        with:
+          name: xiaoman-treehole-apk
+          path: downloaded-apk/
+
+      - name: Locate downloaded APK
+        run: |
+          APK_PATH=$(find . -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK_PATH" ]; then echo "ERROR: no APK found after download"; exit 1; fi
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run emulator & landscape IME check
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          profile: pixel_4
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -memory 3072 -no-audio
+          emulator-boot-timeout: 600
+          script: |
+            APK_PATH=${APK_PATH:?no apk located in earlier step}
+            adb install -r "$APK_PATH"
+            pip3 install --quiet --user requests websockets 2>/dev/null || pip3 install --quiet requests websockets || true
+            python3 -c "import websockets, requests; print('ime probe deps ok')" || { echo "ERROR: python probe deps unavailable"; exit 1; }
+
+            # 横屏 + 强制显示软键盘（AVD 默认挂硬件键盘，不设这个 IME 不会弹）
+            adb shell settings put system accelerometer_rotation 0
+            adb shell settings put system user_rotation 1
+            adb shell settings put secure show_ime_with_hard_keyboard 1
+            IME_ID=$(adb shell ime list -s | tr -d '\r' | head -1)
+            echo "IME=$IME_ID"
+            adb shell ime enable "$IME_ID" || true
+            adb shell ime set "$IME_ID" || true
+            # AOSP 键盘在某些 API 上需要显式开启输入法窗口
+            adb shell settings put secure default_input_method "$IME_ID" || true
+
+            adb shell am start -n com.xiaoman.treehole/.MainActivity
+            sleep 10
+            adb shell pidof com.xiaoman.treehole || { echo "ERROR: app not running"; adb logcat -d | tail -150; exit 1; }
+
+            python3 scripts/emulator_ime_check.py || { echo "ERROR: landscape IME check failed"; adb shell dumpsys input_method | tail -120; adb shell dumpsys window windows | tail -200; exit 1; }
+
+      - name: Upload IME evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r5-ime-evidence
+          path: |
+            r5_landscape_before_ime.png
+            r5_landscape_ime.png
+            r5_ime_metrics.json
+            window_dump.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Web 端测试门禁（scripts/ 审计 D54）：四套脚本失败即非零退出，接入后失败可传播
   web-tests:
     runs-on: ubuntu-latest

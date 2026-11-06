@@ -160,4 +160,30 @@ html[data-flat="true"] #petMenu {
   html[data-motion="off"] * { animation: none !important; transition: none !important; }
 }
 
+/* 暗色浮窗：宿主处于夜间模式时 WebView 上报 prefers-color-scheme: dark。
+ * 气泡/菜单改为深色底 + 近白字，文字对比度 14.6:1；描边换浅灰
+ * （对深底 5.5:1，高于非文本 3:1），并用 1px 内亮边 + 外深投影代替
+ * 纯黑阴影——纯黑在暗背景上几乎不可见，描边会"糊"进背景。 */
+@media (prefers-color-scheme: dark) {
+  #petTip {
+    background: #201D1A;
+    color: #F4EFE7;
+    border-color: #9A938A;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.65);
+  }
+  #petMenu {
+    background: #201D1A;
+    border-color: #9A938A;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
+  }
+  #petMenu button {
+    background: #2C2926;
+    color: #F4EFE7;
+    border-color: #8A837A;
+  }
+  #petMenu button:active { background: #3A3632; }
+  html[data-flat="true"] #petTip,
+  html[data-flat="true"] #petMenu { background: #22201D; }
+}
+
 /* 调试背景已移除：悬浮窗必须完全透明 */

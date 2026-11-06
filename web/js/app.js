@@ -2289,6 +2289,22 @@ const App = (() => {
       }
     } catch (e) { console.warn("[probe] PAGER_FAIL", e.message); }
 
+    // 1.6) 软键盘/旋转导致可视高度骤减时，若用户原本贴在底部就继续贴底：
+    // 否则 adjustResize 缩短后 scrollTop 不变，最后一条消息会被列表容器裁掉。
+    // 用"缩放前的 gap"判断意图（resize 之后的 scroll 事件会把 gap 变大，不能事后判断）。
+    try {
+      const s = $("chatScroll");
+      if (s) {
+        const gap = () => s.scrollHeight - s.scrollTop - s.clientHeight;
+        let lastGap = gap();
+        s.addEventListener("scroll", () => { lastGap = gap(); }, { passive: true });
+        window.addEventListener("resize", () => {
+          if (lastGap <= 60) s.scrollTop = s.scrollHeight;
+          lastGap = gap();
+        });
+      }
+    } catch (e) { console.warn("[probe] VIEWPORT_FAIL", e.message); }
+
     // 2) 服务端默认配置改为非阻塞：慢网/离线时不再拖住首屏
     API.bootstrap().catch(e => console.warn("[probe] BOOTSTRAP_FAIL", e.message));
 
