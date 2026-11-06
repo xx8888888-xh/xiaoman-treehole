@@ -495,6 +495,13 @@ def main():
     chat_bottom_dev = wr2["y"] + metrics["chat"]["bottom"] * dpr if metrics.get("chat") else None
     last_clipped_by_chat = (max(0, round(last_bottom_dev - chat_bottom_dev))
                             if last_bottom_dev and chat_bottom_dev else None)
+    # 可视带 = chat.y ~ min(chat.bottom, inputBar.y)：列底 padding 预留给了浮层输入栏，
+    # 气泡高过这段可视带时，顶部滚出可视区属正常滚动，不算被裁。
+    chat_box = metrics.get("chat") or {}
+    chat_top = chat_box.get("y") or 0
+    chat_bottom = chat_box.get("bottom") or 0
+    band_bottom = min(chat_bottom, (inp or {}).get("y") or chat_bottom)
+    last_fits = bool(last) and last["h"] <= (band_bottom - chat_top) + 1
 
     metrics.update({
         "dpr": dpr,
@@ -511,9 +518,13 @@ def main():
         "topbarH": (metrics.get("topbar") or {}).get("h"),
         "chatH": (metrics.get("chat") or {}).get("h"),
         "inputBarBottom": (metrics.get("inputBar") or {}).get("bottom"),
+        # 「最后一条在可视区内」= 底部没被列表容器下沿截断；顶部条件只对"装得下"的气泡生效。
+        # 能看见的区域是 chat.y~inputBar.y（列底 68px 被浮层输入栏占掉），149px 视口实测只剩
+        # 81.1px；长回复气泡 109.6px 比它还高，顶部被滚出可视区是正常滚动（上滑能看全）。
+        # 不加这层判断，同一份代码会按回复长短随机红绿（run 42283269856 就是这么红的老 flaky）。
         "lastMessageVisible": bool(last and metrics["chat"]
                                    and last["bottom"] <= metrics["chat"]["bottom"] + 1
-                                   and last["y"] >= metrics["chat"]["y"] - 1)
+                                   and (not last_fits or last["y"] >= chat_top - 1))
     })
     with open("r5_ime_metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
@@ -539,7 +550,8 @@ def main():
     check("最后一条消息在聊天可视区内（未被列表容器裁掉）",
           bool(metrics["lastMessageVisible"]),
           f"lastBottomCSS={last and last['bottom']} chatBottomCSS={metrics['chat'] and metrics['chat']['bottom']} "
-          f"clippedByChat={last_clipped_by_chat}px")
+          f"clippedByChat={last_clipped_by_chat}px lastH={last and last['h']} "
+          f"band={chat_top}~{band_bottom} fits={last_fits}")
     check("输入框获得焦点", str(metrics.get("focused")) == "textInput", f"focused={metrics.get('focused')}")
 
     if not all(RESULTS):
