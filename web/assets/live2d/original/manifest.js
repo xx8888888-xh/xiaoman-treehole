@@ -242,8 +242,8 @@ window.PUPPET_MANIFEST = {
       "label": "疲惫"
     },
     "flat": {
-      "eye_l": "open",
-      "eye_r": "open",
+      "eye_l": "half",
+      "eye_r": "half",
       "mouth": "open_xs",
       "label": "敷衍"
     }

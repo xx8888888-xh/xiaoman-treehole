@@ -869,6 +869,33 @@ const Stage = (() => {
     _createIdleGovernor: createIdleGovernor,
     _idleRate: () => idleGov.rateAt(nowMs()),
     _idleState: () => idleGov.state(),
+    /** 截图取证：停视线漫游、把视线/平移/摆动目标归零（表情对比必须同角度） */
+    _poseForShot: () => {
+      if (!puppet) return false;
+      stopWander();
+      puppet.setParam("gazeX", 0);
+      puppet.setParam("gazeY", 0);
+      puppet.setParam("headTurn", 0);
+      puppet.setParam("bodySway", 0);
+      return true;
+    },
+    /** 探针：当前表情的图层与关键参数（表情差异取证用，不参与渲染） */
+    _faceState: () => {
+      if (!puppet) return null;
+      const mx = typeof puppet.mouthMix === "function"
+        ? puppet.mouthMix() : { a: puppet.mouthFrame, b: puppet.mouthFrame, p: 0 };
+      return {
+        emotion: puppet.emotion || null,
+        eyeL: puppet.eye ? puppet.eye.l : null,
+        eyeR: puppet.eye ? puppet.eye.r : null,
+        mouth: puppet.mouthFrame || null,
+        mouthMix: { a: mx.a, b: mx.b, p: Math.round((mx.p || 0) * 1000) / 1000 },
+        headTilt: puppet.getParam("headTilt"),
+        lipSync: puppet.getParam("lipSync"),
+        gazeX: puppet.getParam("gazeX"),
+        gazeY: puppet.getParam("gazeY")
+      };
+    },
     /** 单测入口：口型目标纯函数与当前内部状态 */
     _lipFor: lipFor,
     _lipState: () => ({ lipOpen, lipHold })

@@ -67,6 +67,21 @@ test("情绪映射：疲惫/敷衍/惊讶有独立表情；沉默与未知值落
   assert.equal(Stage._emotionFor("???"), "neutral");
 });
 
+test("表情差异契约：flat 半睁眼、neutral 全睁，浮动不再只靠 1° 低头", () => {
+  const m = require("../assets/live2d/original/manifest.json");
+  assert.equal(m.emotions.flat.eye_l, "half");
+  assert.equal(m.emotions.flat.eye_r, "half");
+  assert.equal(m.emotions.neutral.eye_l, "open");
+  // 关键点：眼睑可见高度 = 对应图层高度。半睁 56px vs 全睁 115px → 48.7%
+  const openH = m.layers.eye_l.open.h;
+  const halfH = m.layers.eye_l.half.h;
+  assert.ok(halfH / openH <= 0.6, `半睁/全睁 = ${(halfH / openH).toFixed(3)}，差异太小`);
+  // 嘴：neutral closed 14px vs flat open_xs 9px，且两档图层名必须不同
+  assert.notEqual(m.emotions.flat.mouth, m.emotions.neutral.mouth);
+  // 7 档口型契约不动
+  assert.equal(m.layers.mouthLevels.length, 7);
+});
+
 test("动作映射：旧 Hiyori 动作名落到 manifest 的 nod/shake/talk", () => {
   assert.equal(Stage._motionFor("Greeting"), "nod");
   assert.equal(Stage._motionFor("Nod"), "nod");

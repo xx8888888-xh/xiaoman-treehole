@@ -41,7 +41,7 @@ class Cdp:
         self.n = 0
         self.url_filter = "index.html"
 
-    def attach(self, url_filter="index.html", timeout=90):
+    def attach(self, url_filter="index.html", timeout=90, fallback_url=None):
         """等到 page 真正 commit（/json/list 里 url 非空且匹配）再连。
         WebView 冷启动 + assets 首次加载在慢 runner 上可能要十几秒，
         之前只查一次会拿到 url="" 的空 target，直接把"页面还没起"误判成"注入失败"。"""
@@ -53,23 +53,52 @@ class Cdp:
         sockets = [s for s in sockets if s in mypids] or sockets
         if not sockets:
             raise RuntimeError("找不到 WebView devtools socket")
-        sh(f"adb forward tcp:{self.port} localabstract:webview_devtools_remote_{sockets[0]}")
+        # 一个进程里可能有多个 WebView（主界面 + 悬浮窗）。旧实现只连 sockets[0]，
+        # 真机上曾连到 URL 为空的悬浮窗 target，120s 误判"页面没起"。
+        # 逐个 socket 轮询，直到出现 URL 匹配的 target。
         end = time.time() + timeout
+        t_start = time.time()
         last = []
         while time.time() < end:
-            try:
-                lst = requests.get(f"http://127.0.0.1:{self.port}/json/list", timeout=5).json()
-            except Exception:
-                lst = []
-            last = [t.get("url") for t in lst]
-            cand = [t for t in lst if url_filter in (t.get("url") or "")]
-            if cand:
-                target = cand[0]
-                # 关掉 websockets 默认的 20s ping：WebView devtools 不回 pong，
-                # 长时间静置（耗电探针 60s/300s）会在第 20s 被客户端误判断线。
-                self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024,
-                                  ping_interval=None, ping_timeout=None)
-                return target["url"]
+            for sk in list(sockets):
+                sh(f"adb forward tcp:{self.port} localabstract:webview_devtools_remote_{sk}")
+                try:
+                    lst = requests.get(f"http://127.0.0.1:{self.port}/json/list", timeout=5).json()
+                except Exception:
+                    lst = []
+                last = [t.get("url") for t in lst]
+                cand = [t for t in lst if url_filter in (t.get("url") or "")]
+                if cand:
+                    # 同一 URL 前缀会有两个 target：主窗口 index.html 与悬浮面板
+                    # index.html?float=1。后者常常是尚未导航的空文档，优先没有 query 的。
+                    cand.sort(key=lambda t: 0 if (t.get("url") or "").split("?")[0]
+                              .endswith(url_filter) else 1)
+                    target = cand[0]
+                    print("[cdp] attach", target.get("type"), target.get("url"), flush=True)
+                    # 关掉 websockets 默认的 20s ping：WebView devtools 不回 pong，
+                    # 长时间静置（耗电探针 60s/300s）会在第 20s 被客户端误判断线。
+                    self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024,
+                                      ping_interval=None, ping_timeout=None)
+                    return target["url"]
+                # 兜底：只有一个 target 且 url 为空（WebView 已创建但页面没 commit，
+                # 锁屏/冷启动时见过），主动 Page.navigate 拉一次同一入口再等它自己 commit。
+                if (fallback_url and time.time() - t_start > 30
+                        and len(lst) == 1 and not (lst[0].get("url") or "")):
+                    try:
+                        print("[cdp] blank target → Page.navigate", fallback_url, flush=True)
+                        self.ws = connect(lst[0]["webSocketDebuggerUrl"],
+                                          max_size=8 * 1024 * 1024,
+                                          ping_interval=None, ping_timeout=None)
+                        self._send("Page.navigate", {"url": fallback_url}, timeout=10)
+                    except Exception as e:
+                        print("[cdp] navigate fallback 失败:", str(e)[:120], flush=True)
+                    finally:
+                        try:
+                            self.ws.close()
+                        except Exception:
+                            pass
+                        self.ws = None
+
             time.sleep(1)
         raise RuntimeError(f"{timeout}s 内没有匹配 {url_filter} 的 WebView target，"
                            f"最近一次 url 列表={last}")
@@ -101,8 +130,15 @@ class Cdp:
         raise RuntimeError(f"CDP {method} 超时")
 
     def _eval(self, js, timeout=20):
+        # 根因：Runtime.evaluate 只求值表达式，裸箭头函数 `() => ({...})` 返回的是
+        # Function 远程对象（returnByValue 序列化成 {}），不会执行函数体。
+        # Playwright 的 page.evaluate 会自动调用，CDP 不会；这里统一包成 IIFE，
+        # 老脚本里手写的 `(() => {...})()` 不受影响（正则不匹配已包裹形式）。
+        expr = js
+        if re.match(r"^\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>", js):
+            expr = f"({js})()"
         r = self._send("Runtime.evaluate",
-                       {"expression": js, "returnByValue": True, "awaitPromise": True},
+                       {"expression": expr, "returnByValue": True, "awaitPromise": True},
                        timeout=timeout)
         if "exceptionDetails" in r:
             raise RuntimeError(str(r["exceptionDetails"])[:300])

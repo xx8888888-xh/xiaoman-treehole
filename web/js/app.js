@@ -2331,6 +2331,73 @@ const App = (() => {
       }
     } catch (e) { console.warn("[probe] PAGER_FAIL", e.message); }
 
+    // 1.6) 软键盘/旋转导致可视高度骤减时，若用户原本贴在底部就继续贴底：
+    // 否则 adjustResize 缩短后 scrollTop 不变，最后一条消息会被列表容器裁掉。
+    // 用"缩放前的 gap"判断意图（resize 之后的 scroll 事件会把 gap 变大，不能事后判断）。
+    // 真机（横屏 2280×1080 + 键盘）实测：只设 scrollTop=scrollHeight 不够——
+    // #chatScroll 末尾还有 emptyState/占位块，滚到底后最后一条仍可能停在容器上方。
+    // 所以贴底后把"最后一条可见气泡"再 scrollIntoView 一次（nearest，不打断用户）。
+    try {
+      const s = $("chatScroll");
+      if (s) {
+        const gap = () => s.scrollHeight - s.scrollTop - s.clientHeight;
+        const lastVisibleRow = () => {
+          const rows = Array.from(s.querySelectorAll(".msg-row")).filter(
+            (el) => !el.classList.contains("hidden") && el.getBoundingClientRect().height > 0);
+          return rows.length ? rows[rows.length - 1] : null;
+        };
+        let lastGap = gap();
+        s.addEventListener("scroll", () => { lastGap = gap(); }, { passive: true });
+        const stick = () => {
+          s.scrollTop = s.scrollHeight;
+          const row = lastVisibleRow();
+          if (row) row.scrollIntoView({ block: "nearest" });
+        };
+        // 极矮横屏 + 输入框获焦（键盘弹起后 WebView 只剩 ~149 CSS px）时，
+        // 聊天区只有几十像素，等于"最新一条"的预览条：此时无条件贴底，
+        // 不把用户的微小滚动当成"正在翻历史"。
+        const tinyFocused = () => window.innerHeight <= 260
+          && document.activeElement && document.activeElement.id === "textInput";
+        window.addEventListener("resize", () => {
+          const follow = lastGap <= 60 || tinyFocused();
+          if (follow) stick();
+          lastGap = gap();
+          if (!follow) return;
+          // 安卓 adjustResize 分两拍：resize 事件先到，媒体查询/dvh 触发的布局晚一拍。
+          // 真机实测（横屏 782×149 + 键盘）只贴一次底会停在旧 scrollTop=8：
+          // 内容 276 / 视口 82，最后一条气泡底边 92.5 被裁掉 10px。补两拍兜住。
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => stick());
+          setTimeout(() => { stick(); lastGap = gap(); }, 240);
+        });
+        // 真机实测 window resize 在部分 WebView 上不随 adjustResize 触发，
+        // resize 监听因此整个是死代码（scrollTop 仍停在 8）。直接盯容器自身的尺寸变化，
+        // 键盘弹起（304→82）一定会命中；且不依赖任何系统事件。
+        if (typeof ResizeObserver !== "undefined") {
+          let w = s.clientHeight;
+          const ro = new ResizeObserver(() => {
+            const next = s.clientHeight;
+            if (next === w) return;
+            const shrunk = next < w;
+            w = next;
+            if (lastGap <= 60 || shrunk) { stick(); lastGap = gap(); }
+          });
+          ro.observe(s);
+        }
+        // 真机复现：键盘已弹起后再追加消息，append 路径不会重算 scrollTop，
+        // 最后一条会停在容器下方（实测 38px 落到键盘后面）。用 MutationObserver
+        // 兜住所有追加/流式更新，仅在用户原本贴底时才跟随，不打断翻看历史。
+        if (typeof MutationObserver !== "undefined") {
+          const mo = new MutationObserver(() => {
+            if (lastGap > 60 && !tinyFocused()) return;
+            const row = lastVisibleRow();
+            if (row) row.scrollIntoView({ block: "nearest" });
+            lastGap = gap();
+          });
+          mo.observe(s, { childList: true, subtree: true });
+        }
+      }
+    } catch (e) { console.warn("[probe] VIEWPORT_FAIL", e.message); }
+
     // 2) 服务端默认配置改为非阻塞：慢网/离线时不再拖住首屏
     API.bootstrap().catch(e => console.warn("[probe] BOOTSTRAP_FAIL", e.message));
 
