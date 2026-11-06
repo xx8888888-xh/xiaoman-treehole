@@ -17,6 +17,7 @@
 用法：
   python scripts/offline_rubric_audit.py
   python scripts/offline_rubric_audit.py --self-test
+  python scripts/offline_rubric_audit.py --changes   # 3 处改动的改前红/改后绿断言
 """
 
 import json
@@ -27,7 +28,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "server"))
 import eval_human_feel as ev  # noqa: E402  只复用判定常量/函数，不触发网络
+import prompt_core as pc  # noqa: E402  只读常量，不联网
 
 ARCHIVE = ROOT / "docs" / "eval_real_w20.json"
 CASES = ROOT / "server" / "tests" / "human_feel_cases.json"
@@ -279,6 +282,95 @@ def fragment_audit():
             "hits": dict(out), "details": details, "repeat_openings": repeat}
 
 
+# ---------------- 3 处改动的离线断言（改前红 / 改后绿） ----------------
+STRICT_CATS = ("具体细节", "追问")
+
+
+def literal_hit(reply, terms):
+    """只认字面命中：用于证明“锚点必须原样接住”，不接受同义替换。"""
+    return [t for t in terms if t and t in (reply or "")]
+
+
+def advice_hit_for(case, reply):
+    """走评测器真正使用的入口；改前没有 helper 时退回旧 ADVICE_RE。"""
+    fn = getattr(ev, "advice_hits", None)
+    if fn:
+        return bool(fn(case, reply))
+    return bool(ev.ADVICE_RE.search(reply or ""))
+
+
+def effective_limit(case, universal):
+    """走评测器真正使用的上限；改前没有 helper 时退回旧默认值。"""
+    fn = getattr(ev, "_advice_limit", None)
+    if fn:
+        return fn(case, universal)
+    return case.get("max_advice_turns", universal["max_advice_turns"])
+
+
+def changes_audit():
+    """三处改动的硬钩子：每条都给期望值，改前红、改后绿。
+
+    红样本 = 归档里真实出现过的失败回复（docs/eval_real_w20.json）；
+    绿样本 = 同一场景下符合提示词要求的合成回复。
+    """
+    universal = json.loads(CASES.read_text(encoding="utf-8"))["universal"]
+    prompt = pc.SERVER_SYSTEM_PROMPT
+    detail = {"category": "具体细节"}
+    followup = {"category": "追问"}
+    checks = []
+
+    def add(change, name, got, want):
+        checks.append({"change": change, "name": name,
+                       "got": got, "want": want,
+                       "pass": got == want})
+
+    # 1) 具体锚点：提示词必须写“原样接住具体名词/时间”，并把“不复述”限定为整句/总结
+    anchor_red = "太棒了，抢到第一份！||你最喜欢的酱料是甜酸还是浓郁？"
+    anchor_green = "糖醋排骨抢到第一份了？运气可以啊"
+    add("锚点", "prompt.原样接住具体名词/时间", "原样接住" in prompt, True)
+    add("锚点", "prompt.不复述限定为整句", "不复述整句" in prompt, True)
+    anchor_red_hit = bool(literal_hit(anchor_red, ["糖醋排骨"]))
+    anchor_green_hit = bool(literal_hit(anchor_green, ["糖醋排骨"]))
+    add("锚点", "rubric 字面钩子:红样本不通过", anchor_red_hit, False)
+    add("锚点", "rubric 字面钩子:绿样本通过", anchor_green_hit, True)
+
+    # 2) 细节/追问默认 0 轮建议 + 补全建议词表
+    add("建议", "默认上限.具体细节", effective_limit(detail, universal), 0)
+    add("建议", "默认上限.追问", effective_limit(followup, universal), 0)
+    add("建议", "strict 词表:红样本命中",
+        advice_hit_for(detail, "别太熬夜，先休息再改"), True)
+    add("建议", "strict 词表:绿样本不误杀",
+        advice_hit_for(detail, "简历改到第几版了？"), False)
+    # 回归守卫：非这两类不受影响（旧通过项不能退化）
+    add("建议", "回归.情绪低落仍默认 1", effective_limit({"category": "情绪低落"}, universal), 1)
+    add("建议", "回归.显式配置仍优先",
+        effective_limit({"category": "追问", "max_advice_turns": 1}, universal), 1)
+
+    # 3) 主动记忆回带：名字/计划/时间过 1-2 轮自然带一句
+    add("记忆", "prompt.主动回带 1-2 轮",
+        ("1-2 轮" in prompt) or ("1–2 轮" in prompt) or ("1~2 轮" in prompt), True)
+    mem_red_hit = bool(literal_hit("咱们一起拆改吧||他也肯定没准备好", ["张三"]))
+    mem_green_hit = bool(literal_hit("张三让你改的？他也太会挑时候了", ["张三"]))
+    add("记忆", "rubric 字面钩子:红样本不通过", mem_red_hit, False)
+    add("记忆", "rubric 字面钩子:绿样本通过", mem_green_hit, True)
+
+    # 分享约束：三处改动不能撑破长度上限，也不能删掉既有测试锚点
+    add("约束", "SERVER_SYSTEM_PROMPT<=1850", len(prompt) <= 1850, True)
+    add("约束", "HF+MEM<=400",
+        len(pc.HUMAN_FEEL_RULES) + len(pc.MEMORY_SLOT_RULES) <= 400, True)
+    anchors = ("记忆像人回忆", "默认不给建议", "拒绝要落地",
+               "不追问、不逼话，下一轮也不翻旧账", "ta 没问“怎么办/该怎么做”就不出主意")
+    for a in anchors:
+        add("约束", "保留测试锚点:%s" % a, a in prompt, True)
+
+    groups = OrderedDict()
+    for c in checks:
+        groups.setdefault(c["change"], []).append(c)
+    return {"checks": checks, "groups": groups,
+            "all_pass": all(c["pass"] for c in checks),
+            "red": [c for c in checks if not c["pass"]]}
+
+
 # ---------------- 自测 ----------------
 def self_test():
     t = []
@@ -312,6 +404,17 @@ def self_test():
 
 
 def main():
+    if "--changes" in sys.argv:
+        ch = changes_audit()
+        print("== 3 处改动审计（改前红 / 改后绿） ==")
+        for group, items in ch["groups"].items():
+            for c in items:
+                print("  [%s] %-6s %s -> got=%r want=%r"
+                      % ("PASS" if c["pass"] else "RED", group,
+                         c["name"], c["got"], c["want"]))
+        print("\n红项 %d / 共 %d" % (len(ch["red"]), len(ch["checks"])))
+        return 0 if ch["all_pass"] else 1
+
     audit = audit_archive()
     cover = classify_rubric()
     frag = fragment_audit()

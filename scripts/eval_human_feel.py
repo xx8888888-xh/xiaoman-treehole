@@ -54,6 +54,11 @@ LECTURE_RE = re.compile(
 ADVICE_RE = re.compile(
     "建议|试试|试着|不妨|最好|你可以|你应该|你必须|去看看|去看医生|"
     "早睡|早点睡|作息|手机放远|晒晒太阳|调整心态|放松心态|多沟通|找人聊聊")
+# “具体细节/追问”是接话不指导的两类：默认 0 轮建议，并用更宽的养生/指导词表。
+ADVICE_STRICT_CATEGORIES = ("具体细节", "追问")
+ADVICE_RE_STRICT = re.compile(
+    ADVICE_RE.pattern + "|早点休息|注意保暖|多喝|别熬夜|熬夜|去医院|看医生|"
+    "休息一下|记得休息|别忘休息|多穿点|穿厚点")
 CRISIS_RE = re.compile("12356|心理援助|需要真人的帮助|心理咨询")
 QUESTION_RE = re.compile("[?？]")
 PUSH_RE = re.compile("说说|然后呢|接着|聊聊|展开|怎么了|发生什么|在吗|还有呢|继续|快说")
@@ -167,11 +172,27 @@ class CaseResult:
 
 
 # ---------------- 判定 ----------------
+def advice_hits(case: dict, reply: str):
+    """按用例类别选建议词表：细节/追问用 strict（宽词表），其余用原表。"""
+    rx = (ADVICE_RE_STRICT if case.get("category") in ADVICE_STRICT_CATEGORIES
+          else ADVICE_RE)
+    return rx.search(reply or "")
+
+
+def _advice_limit(case: dict, universal: dict) -> int:
+    """细节/追问默认 0 轮建议；显式配置仍优先，其余类沿用通用默认。"""
+    if "max_advice_turns" in case:
+        return case["max_advice_turns"]
+    if case.get("category") in ADVICE_STRICT_CATEGORIES:
+        return 0
+    return universal["max_advice_turns"]
+
+
 def _case_cfg(case: dict, universal: dict) -> dict:
     return {
         "max_chars": case.get("max_chars", universal["max_chars"]),
         "max_msgs": case.get("max_msgs", universal["max_msgs"]),
-        "max_advice_turns": case.get("max_advice_turns", universal["max_advice_turns"]),
+        "max_advice_turns": _advice_limit(case, universal),
         "max_questions": case.get("max_questions_per_reply",
                                   universal["max_questions_per_reply"]),
     }
@@ -263,7 +284,7 @@ def check_turn(result: CaseResult, turn: Turn, prev: list, cfg: dict,
                 and opening_key(reply):
             result.fail(idx, "开头复读“%s”" % opening_key(reply)[:4])
 
-    return bool(ADVICE_RE.search(reply))
+    return bool(advice_hits(case, reply))
 
 
 def check_case_expect(result: CaseResult, universal: dict):
@@ -277,8 +298,8 @@ def check_case_expect(result: CaseResult, universal: dict):
             result.fail(len(result.turns),
                         "未体现期望内容（期望其一：%s；实际：%s）"
                         % ("/".join(expect), result.turns[-1].text))
-    advice_turns = sum(1 for t in result.turns if ADVICE_RE.search(t.reply))
-    limit = case.get("max_advice_turns", universal["max_advice_turns"])
+    advice_turns = sum(1 for t in result.turns if advice_hits(case, t.reply))
+    limit = _advice_limit(case, universal)
     if advice_turns > limit:
         result.fail(0, "建议轮次 %d>%d（默认不给建议）" % (advice_turns, limit))
 
@@ -852,7 +873,7 @@ def case_stats(res) -> dict:
         "passed": res.passed,
         "turns": len(turns),
         "protocol_errors": sum(1 for t in turns if t.payload.get("_parse_error")),
-        "advice_turns": sum(1 for t in turns if ADVICE_RE.search(t.reply)),
+        "advice_turns": sum(1 for t in turns if advice_hits(res.case, t.reply)),
         "summary_empathy": sum(1 for t in turns
                                if any(w in t.reply for w in SUMMARY_EMPATHY)),
         "tic": dict(tic),
