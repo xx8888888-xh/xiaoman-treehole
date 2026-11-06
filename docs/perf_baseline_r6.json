@@ -1,0 +1,238 @@
+{
+  "schema": {
+    "version": 1,
+    "purpose": "把 R6 已实测的性能/耗电数字固化成 CI 可比对的基线：任何一次 push 改坏关键指标，perf_gate 立刻判红。",
+    "consumer": "scripts/perf_gate.py（读完测结果 JSON + 本文件，输出 PASS / FAIL / EXEMPT 三类）",
+    "sections": {
+      "float": "scripts/emulator_float_r4.py 产物 float_r4.json（AVD 浮窗探针）",
+      "power": "scripts/emulator_power_r4.py 产物 power_r4.json（AVD 耗电探针）",
+      "firstsend": "scripts/perf_r4.py 产物 r6.json（Playwright 1x / CPU 4x）"
+    },
+    "metricFields": {
+      "id": "脚本内提取器名；改 id 必须同步改 perf_gate.py",
+      "section": "float | power | firstsend；缺该段数据时记为 SKIP（除非 --require-sections 要求）",
+      "rule.type": "max | min | range | near | bool",
+      "rule.value": "阈值。所有值来自 docs/PERF_R6.md；未为让门变绿而放宽",
+      "r6": "R6 实测值（run 42269769325 / 42273924909 / 42274326628），仅供对照",
+      "unit": "px | ratio | per_sec | ms | pct | count",
+      "note": "为什么是这个阈值"
+    },
+    "classes": {
+      "PASS": "实测在阈值内",
+      "FAIL": "超阈值红（退出码 1）",
+      "EXEMPT": "已知环境上限豁免：只允许 exemptions 清单里的条目，且必须打印理由；豁免不是放宽阈值",
+      "SKIP": "本次 run 未采集该段（默认可跳过；--require-sections 指定后视为缺数据红）"
+    },
+    "exemptionPolicy": [
+      "豁免只给「2 核 swiftshader_indirect 软件渲染」这类环境上限，不给产品行为开绿灯",
+      "每条豁免必须带 reason + evidence + guard；guard 不满足时仍判 FAIL，避免豁免掩盖进一步退化",
+      "空闲问候那 1 次重绘不走豁免：它按 R6 的可解释例外判据（<=1 次 / <=160,000px / 有 src=emotion 打点）直接判 PASS/FAIL"
+    ]
+  },
+  "baselineOf": {
+    "round": "R6",
+    "doc": "docs/PERF_R6.md",
+    "runs": {
+      "perf": "42269769325",
+      "float5": "42273924909",
+      "power": "42274326628",
+      "floatDrag": "42276909668"
+    },
+    "device": "Pixel 4 API 30 x86_64, 2 cores, -gpu swiftshader_indirect; Playwright Chromium headless + CPUThrottlingRate(4)"
+  },
+  "reference": {
+    "floatWindowCss": [140, 180],
+    "floatDpr": 2.75,
+    "backingCanvas": [285, 346],
+    "backingAreaPx": 98610,
+    "fullLogicalCanvas": [469, 1080],
+    "fullLogicalAreaPx": 506520,
+    "backingShareOfWindow": 0.1947
+  },
+  "exemptions": [
+    {
+      "id": "float.full_tier_raf",
+      "section": "float",
+      "criterion": "R6 判据 48–72 rAF/s（0–6s 满帧档）",
+      "r6Observed": "22.17–25.0 rAF/s；25.0–26.5 帧/s",
+      "class": "EXEMPT",
+      "reason": "2 核 + swiftshader_indirect 软件渲染的调度上限：同一产品代码跨 run 实测 19.32(R4) / 12.0-18.66(R5) / 22.17-25.0(R6)，在真机/GPU 合成上才有意义，因此本装置不按 48–72 判红。",
+      "evidence": "docs/PERF_R6.md §6.3",
+      "guard": {
+        "minRafPerSec": 12.0,
+        "minFramesPerSec": 12.0,
+        "why": "豁免不得掩盖进一步退化：低于 12 rAF/s 或 12 帧/s 说明比 R6 环境基线还差，判 FAIL"
+      }
+    }
+  ],
+  "metrics": [
+    {
+      "id": "float.backing_area_px",
+      "section": "float",
+      "rule": {"type": "max", "value": 98610.0},
+      "r6": 98610,
+      "unit": "px",
+      "note": "R6 后备 285×346=98,610；超过即说明又回到整窗后备"
+    },
+    {
+      "id": "float.backing_share_of_window",
+      "section": "float",
+      "rule": {"type": "max", "value": 0.195},
+      "r6": 0.1947,
+      "unit": "ratio",
+      "note": "98,610 / 469×1080 = 19.47%；门取 19.5%，即 R6 值四舍五入，不放宽"
+    },
+    {
+      "id": "float.visible_share_of_canvas",
+      "section": "float",
+      "rule": {"type": "min", "value": 0.98},
+      "r6": 0.9802,
+      "unit": "ratio",
+      "note": "可见区占后备 98.02%；低于 98% 说明取景余量被浪费"
+    },
+    {
+      "id": "float.clear_px_per_frame",
+      "section": "float",
+      "rule": {"type": "near", "value": 98610.0, "tolerance": 0.01},
+      "r6": 98610,
+      "unit": "px",
+      "note": "每帧清屏光栅 = 后备面积（恒等式）；±1% 只吸收每秒采样的整除误差"
+    },
+    {
+      "id": "float.raster_outside_ratio",
+      "section": "float",
+      "rule": {"type": "max", "value": 0.01},
+      "r6": 0.0031,
+      "unit": "ratio",
+      "note": "R6 判据：窗口外光栅 / pageFill <= 1%"
+    },
+    {
+      "id": "float.throttle_frames_per_sec",
+      "section": "float",
+      "rule": {"type": "range", "value": [10.0, 20.0]},
+      "r6": [10.25, 12.0],
+      "unit": "per_sec",
+      "note": "6–10s 降档档位（R6 判据下限 10，沿用 R6 前的 10–20 带）"
+    },
+    {
+      "id": "float.stopped_frames_per_sec",
+      "section": "float",
+      "rule": {"type": "max", "value": 0.5},
+      "r6": 0.04,
+      "unit": "per_sec",
+      "note": ">10s 停循环，每 10s 补 1 帧 ≈0.1/s；沿用既有上限 0.5"
+    },
+    {
+      "id": "float.geometry_matrix_ok",
+      "section": "float",
+      "rule": {"type": "bool", "value": true},
+      "r6": true,
+      "unit": "bool",
+      "note": "3 尺寸 × 3 DPR 矩阵必须全过（R6 45/45）；单轮 9/9"
+    },
+    {
+      "id": "power.idle_minimal_repaints_60s",
+      "section": "power",
+      "rule": {"type": "max", "value": 1.0},
+      "r6": 1,
+      "unit": "count",
+      "note": "R6 可解释例外：60s 内最多 1 次内容变化重绘"
+    },
+    {
+      "id": "power.idle_minimal_px_60s",
+      "section": "power",
+      "rule": {"type": "max", "value": 160000.0},
+      "r6": 151655,
+      "unit": "px",
+      "note": "R6 例外上限 160,000px；R5 为 303,309px（2 帧），退回即红"
+    },
+    {
+      "id": "power.repaint_attribution_present",
+      "section": "power",
+      "rule": {"type": "bool", "value": true},
+      "r6": true,
+      "unit": "bool",
+      "note": "重绘 >0 时 logcat 必须有 [probe] stage-repaint src=emotion；否则是无来源兜底刷新"
+    },
+    {
+      "id": "power.idle_minimal_raf_60s",
+      "section": "power",
+      "rule": {"type": "max", "value": 10.0},
+      "r6": 0,
+      "unit": "count",
+      "note": "沿用 power 探针既有 RAF_ZERO_MAX=10（60s 内 rAF 回调）"
+    },
+    {
+      "id": "power.idle_minimal_cpu_pct",
+      "section": "power",
+      "rule": {"type": "max", "value": 1.0},
+      "r6": 0.67,
+      "unit": "pct",
+      "note": "R4–R6 观测 0.58–0.74%；1% 是噪声包络，超过即真回退"
+    },
+    {
+      "id": "power.idle_default_raf_per_sec",
+      "section": "power",
+      "rule": {"type": "range", "value": [4.0, 7.0]},
+      "r6": 5.19,
+      "unit": "per_sec",
+      "note": "R5/R6 观测 5.14–5.19（30s 后 1fps 降档的混合均值）；4–7 为噪声包络，不是 55–62 满帧判据"
+    },
+    {
+      "id": "power.background_frames_hidden",
+      "section": "power",
+      "rule": {"type": "max", "value": 10.0},
+      "r6": 0,
+      "unit": "count",
+      "note": "沿用 BG_FRAME_MAX=10；R6 实测 0"
+    },
+    {
+      "id": "power.background_cpu_pct",
+      "section": "power",
+      "rule": {"type": "max", "value": 1.0},
+      "r6": 0.01,
+      "unit": "pct",
+      "note": "后台隐藏期 CPU 上限 1%"
+    },
+    {
+      "id": "firstsend.sample_count",
+      "section": "firstsend",
+      "rule": {"type": "min", "value": 5.0},
+      "r6": 5,
+      "unit": "count",
+      "note": "分布判据要求 1x/4x 各至少 5 次；样本不足不得用单点冒充分布"
+    },
+    {
+      "id": "firstsend.1x_median_ms",
+      "section": "firstsend",
+      "rule": {"type": "max", "value": 200.0},
+      "r6": 152,
+      "unit": "ms",
+      "note": "R4–R6 中位 152–166、最差 184；200 为噪声包络，非判据放宽"
+    },
+    {
+      "id": "firstsend.1x_worst_ms",
+      "section": "firstsend",
+      "rule": {"type": "max", "value": 250.0},
+      "r6": 184,
+      "unit": "ms",
+      "note": "同上；最差 184 -> 250 留约 36% runner 抖动余量"
+    },
+    {
+      "id": "firstsend.4x_median_ms",
+      "section": "firstsend",
+      "rule": {"type": "max", "value": 450.0},
+      "r6": 403,
+      "unit": "ms",
+      "note": "R6 已定分布判据：5 次中位 <=450ms"
+    },
+    {
+      "id": "firstsend.4x_worst_ms",
+      "section": "firstsend",
+      "rule": {"type": "max", "value": 700.0},
+      "r6": 638,
+      "unit": "ms",
+      "note": "R6 已定分布判据：最差 <=700ms；不退回单点 425ms"
+    }
+  ]
+}
