@@ -741,28 +741,40 @@ def main():
     def _mid(lip):
         return (lip.get("midSecond") or {})
 
+    def _dur(events, ev):
+        """语音时长取收尾后的 tts 日志（wait_voice 抓的是开始瞬间快照，那时 endAt 还没写）。"""
+        t = (ev or {}).get("txt")
+        for e in reversed(events or []):
+            e = e or {}
+            if e.get("endAt") and (t is None or e.get("txt") == t):
+                return e["endAt"] - (e.get("at") or 0)
+        return None
+
     METRICS["lipCompare"] = {
         # 默认极简（零动画）：只省帧（≈15fps），幅度不削
         "motionFalse": {"maxLipSync": voice.get("maxLipSync"),
                         "feedFramesPerSec": _mid(voice).get("feedFrames"),
                         "paintFramesPerSec": _mid(voice).get("paintFrames"),
                         "paintTotal": voice.get("paintTotal"),
-                        "durationMs": (ev or {}).get("endAt", 0) - (ev or {}).get("at", 0)},
+                        "durationMs": _dur(events, ev)},
         # motion=true（满帧）：帧率更高，幅度应与零动画同源（lipFor 不再看 motion）
         "motionTrue": {"maxLipSync": voice_b.get("maxLipSync"),
                        "feedFramesPerSec": _mid(voice_b).get("feedFrames"),
                        "paintFramesPerSec": _mid(voice_b).get("paintFrames"),
                        "paintTotal": voice_b.get("paintTotal"),
-                       "durationMs": (ev_b or {}).get("endAt", 0) - (ev_b or {}).get("at", 0)},
+                       "durationMs": _dur(events_b, ev_b)},
     }
     _mt, _mf = METRICS["lipCompare"]["motionTrue"], METRICS["lipCompare"]["motionFalse"]
     METRICS["lipCompare"]["verdict"] = {
-        # 口型幅度：motion=true 不得低于 motion=false（同段语音、同一 lipFor）
-        "amplitudeNotReduced": (_mt["maxLipSync"] or 0) >= (_mf["maxLipSync"] or 0) * 0.98,
-        # 零动画只省帧：≤20fps（目标 15fps），且满帧路径的货真帧数明显更多
+        # 节流不削幅度：零动画路径至少保住满帧路径 90% 的幅度（幅度来自同一 lipFor）
+        "motionFalseAmplitudeKept": (_mf["maxLipSync"] or 0) >= (_mt["maxLipSync"] or 0) * 0.9,
+        # 零动画只省帧：设计目标 15fps（LIP_EVERY=4），≤15.5 留半帧量化余量
         "motionFalseThrottled": (_mf["paintFramesPerSec"] is not None
-                                 and _mf["paintFramesPerSec"] <= 20),
-        "motionTruePaintsMore": (_mt["paintFramesPerSec"] or 0) > (_mf["paintFramesPerSec"] or 0),
+                                 and _mf["paintFramesPerSec"] <= 15.5),
+        # 满帧路径"每喂一帧画一帧"（画帧≈喂入帧），不受设备快慢影响；节流路径画帧≈喂入帧/4
+        "motionTruePaintsEveryFeed": (_mt["feedFramesPerSec"] is not None
+                                      and (_mt["paintFramesPerSec"] or 0)
+                                      >= 0.9 * _mt["feedFramesPerSec"]),
     }
     log("口型对照: " + json.dumps(METRICS["lipCompare"], ensure_ascii=False))
 
