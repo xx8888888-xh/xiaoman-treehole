@@ -59,6 +59,10 @@ ADVICE_STRICT_CATEGORIES = ("具体细节", "追问")
 ADVICE_RE_STRICT = re.compile(
     ADVICE_RE.pattern + "|早点休息|注意保暖|多喝|别熬夜|熬夜|去医院|看医生|"
     "休息一下|记得休息|别忘休息|多穿点|穿厚点")
+# 别名接住的守门词：同义命中若发生在“叮嘱/指导”里，不算接住（防“顺带提一句+说教”刷绿）
+INSTRUCTION_RE = re.compile(
+    "记得|别忘|别忘了|要注意|注意保暖|注意暖和|别着凉|多穿|穿厚|"
+    "早点睡|早点休息|早睡|别熬夜|多喝|赶紧去看|得去医院")
 CRISIS_RE = re.compile("12356|心理援助|需要真人的帮助|心理咨询")
 QUESTION_RE = re.compile("[?？]")
 PUSH_RE = re.compile("说说|然后呢|接着|聊聊|展开|怎么了|发生什么|在吗|还有呢|继续|快说")
@@ -77,6 +81,9 @@ RECALL_MARKERS = ("你上次", "你之前", "你说过", "你提过", "上次说
                   "那个", "那件事", "还在", "怎么样了")
 MUTE_RE = re.compile(
     "别问|不想说|不想聊|不想提|别追问|换个话题|不想讲|算了|不说了|别打听|别提")
+# 情绪类场景的“接住”判据：必须有情绪/站队词，不能只做通用检查
+EMOTION_ACK_RE = re.compile(
+    "烦|累|炸|难受|过分|不容易|憋屈|火大|委屈|离谱|窒息|心累|顶不住|遭罪|气人|无语|崩溃|心疼")
 
 # ---------------- 免费额度白名单（只准免费，付费一律拒绝） ----------------
 # 规则（用户硬约束）：只准用免费额度，任何付费模型都不许调。
@@ -283,6 +290,13 @@ def check_turn(result: CaseResult, turn: Turn, prev: list, cfg: dict,
         if opening_key(prev[-1].reply)[:4] == opening_key(reply)[:4] \
                 and opening_key(reply):
             result.fail(idx, "开头复读“%s”" % opening_key(reply)[:4])
+    # 重复话题类：隔轮也不许复用同一开头（旧判据只看相邻轮，隔一轮换个说法就漏）
+    if case.get("no_session_repeat") and visible_len(reply) >= 4:
+        key = opening_key(reply)[:4]
+        for old in prev[:-1]:
+            if visible_len(old.reply) >= 4 and opening_key(old.reply)[:4] == key:
+                result.fail(idx, "会话内开头重复“%s”（隔轮复读）" % key)
+                break
 
     return bool(advice_hits(case, reply))
 
@@ -304,6 +318,32 @@ def _expect_pool(result: CaseResult) -> list:
     return result.turns[-1:]
 
 
+def expect_term_hit(case: dict, turn: Turn):
+    """同义/近义集合 + 语义角色判定。
+
+    旧判据只认字面词，模型换个说法就判红（假红来源）；这里把每个锚点扩成
+    同义集合（`expect_alias`），但别名命中只在**该轮没有任何建议/指导**时
+    才算接住——避免“顺带提一句锚点、主体仍是说教”被算绿。
+    返回 (是否命中, "literal"/"alias"/""，命中的词)。
+    """
+    terms = case.get("expect_any") or []
+    aliases = case.get("expect_alias") or {}
+    for w in terms:
+        if w and w in turn.text:
+            return True, "literal", w
+    hit = ""
+    for w in terms:
+        for a in aliases.get(w) or ():
+            if a and a in turn.text:
+                hit = a
+                break
+        if hit:
+            break
+    if hit and not advice_hits(case, turn.reply) and not INSTRUCTION_RE.search(turn.reply or ""):
+        return True, "alias", hit
+    return False, "", hit
+
+
 def check_case_expect(result: CaseResult, universal: dict):
     case = result.case
     if not result.turns:
@@ -311,10 +351,14 @@ def check_case_expect(result: CaseResult, universal: dict):
     expect = case.get("expect_any")
     if expect:
         pool = _expect_pool(result)
-        if not any(w in t.text for t in pool for w in expect):
+        if not any(expect_term_hit(case, t)[0] for t in pool):
             result.fail(len(result.turns),
                         "未体现期望内容（期望其一：%s；实际：%s）"
                         % ("/".join(expect), result.turns[-1].text))
+    if case.get("require_emotion"):
+        if not any(EMOTION_ACK_RE.search(t.text) for t in result.turns):
+            result.fail(len(result.turns),
+                        "没有接住情绪（缺情绪词回应）：%s" % result.turns[-1].text)
     advice_turns = sum(1 for t in result.turns if advice_hits(case, t.reply))
     limit = _advice_limit(case, universal)
     if advice_turns > limit:

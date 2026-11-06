@@ -180,9 +180,9 @@ def audit_archive():
 # ---------------- rubric 覆盖分类 ----------------
 def classify_rubric():
     cases = json.loads(CASES.read_text(encoding="utf-8"))["cases"]
-    hooks = ("expect_any", "forbid_any", "silence", "refusal",
+    hooks = ("expect_any", "expect_alias", "forbid_any", "silence", "refusal",
              "max_advice_turns", "memory_values", "forget_after",
-             "mute_any", "expect_scope")
+             "mute_any", "expect_scope", "require_emotion", "no_session_repeat")
     specific = [c for c in cases if any(k in c for k in hooks)]
     universal_only = [c for c in cases if not any(k in c for k in hooks)]
     human_words = ("接住", "自然", "像朋友", "像聊天", "不抢", "分寸",
@@ -212,12 +212,14 @@ RUBRIC_ITEMS = [
      "已固化；W20 剩 refuse-04 一条模型侧未翻转"),
     ("记忆连引/回指标记/遗忘后消失", "case_stats + check_turn", "deterministic", True,
      "有 memory_values 才生效；112 条里只有 5 条，recall 指标 0/0"),
-    ("逐字复读 / 相邻开头 4 字重复", "check_turn", "deterministic", True,
-     "只比相邻两轮；会话内隔轮重复只在指标里统计，不判红"),
+    ("逐字复读 / 开头 4 字重复", "check_turn", "deterministic", True,
+     "相邻轮对所有类判红；重复话题类（repeat-01~06）隔轮复用开头也判红"),
     ("禁用词 forbid_any", "check_turn", "deterministic", True,
      "字面匹配；否定句也会命中（refuse-04 的“不聊工作”即证据）"),
-    ("期望内容 expect_any", "check_case_expect", "keyword", "partial",
-     "字面子串，同义词/代词会误杀（下雨→淋着/伞、睡→午夜），也能被关键词堆砌骗过"),
+    ("期望内容 expect_any", "check_case_expect", "keyword+v2", "partial",
+     "旧：字面子串（同义改写误杀）；新：expect_alias 同义集合 + 该轮无建议才算接住"),
+    ("场景专项判据（情绪/重复话题）", "require_emotion / no_session_repeat", "deterministic", True,
+     "情绪类必须有情绪词回应；重复话题类隔轮也不许复用开头 4 字"),
     ("四字总结式共情", "case_stats.summary_empathy", "keyword", "partial",
      "只做统计、不判红；词表 13 个，首句变体未覆盖"),
     ("高频开头（客服腔）", "case_stats.tic", "keyword", "partial",
@@ -402,6 +404,59 @@ def self_test():
        detail_anchor_hit("估计午夜左右吧", ["睡"]))
     ok("锚点不误杀", not detail_anchor_hit("真的假的？||团子闻闻也好", ["关东煮"])["hit"], 
        detail_anchor_hit("真的假的？||团子闻闻也好", ["关东煮"]))
+
+    # ---- W21 v2 判据自测：同义集合 + 语义角色 + 场景专项 ----
+    uni = json.loads(CASES.read_text(encoding="utf-8"))["universal"]
+
+    def sim_expect(case, replies):
+        r = ev.CaseResult(dict(case))
+        for i, x in enumerate(replies, 1):
+            r.turns.append(ev.Turn("u", {"reply": x}, i))
+        ev.check_case_expect(r, uni)
+        return r.passed
+
+    alias_case = {"id": "sim-alias", "category": "具体细节",
+                  "expect_any": ["下雨"], "expect_alias": {"下雨": ["淋", "伞"]}}
+    ok("v2 同义命中(淋)->绿",
+       sim_expect(alias_case, ["别淋着啊，赶紧找个地方躲"]), True)
+    ok("v2 同义但带建议->仍红",
+       not sim_expect(alias_case, ["别淋着啊||记得回去收伞"]), False)
+    ok("v2 无锚点->仍红",
+       not sim_expect(alias_case, ["真的假的？||团子闻闻也好"]), False)
+    role_case = {"id": "sim-role", "category": "具体细节",
+                 "expect_any": ["嗓子疼"], "expect_alias": {"嗓子疼": ["嗓子", "喉咙"]}}
+    ok("v2 语义角色(喉咙)->绿", sim_expect(role_case, ["喉咙吞口水都疼"]), True)
+    ok("v2 只提感觉不提部位->仍红",
+       not sim_expect(role_case, ["听起来好疼"]), False)
+
+    emotion_case = {"id": "sim-emo", "category": "日常倾诉",
+                    "expect_any": ["需求"], "expect_scope": "any",
+                    "require_emotion": True}
+    ok("v2 情绪词回应->绿",
+       sim_expect(emotion_case, ["需求堆成这样，换谁都得炸"]), True)
+    ok("v2 只敷衍没情绪词->红",
+       not sim_expect(emotion_case, ["需求我看到了，然后呢"]), False)
+
+    def sim_turns(case, replies):
+        r = ev.CaseResult(dict(case))
+        cfg = ev._case_cfg(dict(case), uni)
+        prev = []
+        for i, x in enumerate(replies):
+            turn = ev.Turn("u", {"reply": x}, i)
+            ev.check_turn(r, turn, prev, cfg, uni)
+            prev.append(turn)
+            r.turns.append(turn)
+        ev.check_case_expect(r, uni)
+        return r.passed
+
+    rep_case = {"id": "sim-rep", "category": "重复话题", "no_session_repeat": True}
+    ok("v2 隔轮复用开头->红",
+       not sim_turns(rep_case, ["太烦了吧", "换个角度", "太烦了吧真"]), False)
+    ok("v2 开头不同->绿",
+       sim_turns(rep_case, ["太烦了吧", "又是这事", "行吧"]), True)
+    ok("v2 非重复话题类不追溯隔轮",
+       sim_turns({"id": "sim-daily", "category": "日常倾诉"},
+                 ["太烦了吧", "换个角度", "太烦了吧真"]), True)
     return t
 
 
@@ -515,6 +570,143 @@ def advice_scope_audit():
     return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
 
 
+# ---------------- W21 rubric v2：逐条改前/改后对照 ----------------
+# 13 条原来只有通用硬约束的用例（专项判据由 W21 补齐）
+SCENE_IDS = ("daily-02", "daily-03", "daily-04", "daily-05", "daily-06",
+             "daily-07", "daily-08", "repeat-01", "repeat-02", "repeat-03",
+             "repeat-04", "repeat-05", "repeat-06")
+
+
+def mock_corpus(cases):
+    """用 mock 模板引擎在同一进程里重放全部用例（确定性、不联网）。"""
+    backend = ev.MockBackend(CASES)
+    corpus = {}
+    for c in cases:
+        backend.reset_case(c)
+        hist, turns = [], []
+        for i, u in enumerate(c["turns"], 1):
+            payload = backend.chat(hist, u, c)
+            turns.append(ev.Turn(u, payload, i))
+            hist.append({"role": "assistant",
+                         "content": ev.assistant_text(payload) or " "})
+        corpus[c["id"]] = turns
+    return corpus
+
+
+def old_expect_pass(case, turns):
+    """旧判据：expect_any 字面子串 + 旧取轮窗口。"""
+    terms = case.get("expect_any") or []
+    if case.get("expect_scope") == "any":
+        pool = turns
+    elif case.get("category") in ev.ANCHOR_WINDOW_CATEGORIES:
+        pool = turns[-2:]
+    else:
+        pool = turns[-1:]
+    return any(w in t.text for t in pool for w in terms)
+
+
+def new_expect_pass(case, turns):
+    """新判据：评测器实际实现（同义集合 + 该轮无建议才算接住）。"""
+    res = ev.CaseResult(dict(case))
+    res.turns = list(turns)
+    pool = ev._expect_pool(res)
+    return any(ev.expect_term_hit(case, t)[0] for t in pool)
+
+
+def hook_desc(case):
+    """一条用例当前的专项判据（人类可读）。"""
+    bits = []
+    if case.get("expect_any"):
+        alias_n = sum(len(v) for v in (case.get("expect_alias") or {}).values())
+        bits.append("expect_any(%d 词/%d 别名)" % (len(case["expect_any"]), alias_n))
+    if case.get("forbid_any"):
+        bits.append("forbid_any(%s)" % "/".join(case["forbid_any"]))
+    if case.get("require_emotion"):
+        bits.append("require_emotion")
+    if case.get("no_session_repeat"):
+        bits.append("no_session_repeat")
+    if case.get("expect_scope"):
+        bits.append("expect_scope=%s" % case["expect_scope"])
+    return "、".join(bits) or "（无）"
+
+
+def rubric_v2_audit():
+    """同一批语料上，逐条给出旧判据 vs 新判据的判定结果。
+
+    语料 A：mock 模板引擎重放 112 条（确定性离线语料）。
+    语料 B：docs/eval_real_w20.json 里“未体现期望内容”的真实失败回复片段。
+    """
+    data = json.loads(CASES.read_text(encoding="utf-8"))
+    cases = data["cases"]
+    by_id = {c["id"]: c for c in cases}
+    corpus = mock_corpus(cases)
+
+    # A. mock 语料：旧/新
+    mock_rows = []
+    for c in cases:
+        turns = corpus[c["id"]]
+        if c.get("expect_any"):
+            mock_rows.append({"case": c["id"], "old": old_expect_pass(c, turns),
+                              "new": new_expect_pass(c, turns), "why": hook_desc(c)})
+    mock_regress = [r for r in mock_rows if r["old"] and not r["new"]]
+
+    # B. 归档真实失败片段：旧判据红（归档已判红），新判据是否翻绿
+    arch = json.loads(ARCHIVE.read_text(encoding="utf-8"))
+    frag_rows = []
+    for s in arch["case_stats"]:
+        if s.get("passed"):
+            continue
+        case = by_id.get(s["id"])
+        if not case:
+            continue
+        for f in s.get("failures") or []:
+            reason = f.get("reason", "")
+            if not reason.startswith("未体现期望内容"):
+                continue
+            reply = reply_from_reason(reason)
+            turn = ev.Turn("u", {"reply": reply}, 1)
+            hit, mode, word = ev.expect_term_hit(case, turn)
+            guarded = bool(ev.advice_hits(case, reply) or
+                           ev.INSTRUCTION_RE.search(reply or ""))
+            frag_rows.append({
+                "case": s["id"], "reply": reply, "old": False, "new": bool(hit),
+                "mode": mode, "word": word, "advice": guarded,
+                "why": ("别名“%s”命中且无建议" % word if hit and mode == "alias"
+                        else "字面命中" if hit
+                        else ("别名“%s”命中，但该轮在叮嘱/指导→仍红" % word if word
+                              else "没有任何锚点/同义命中")),
+            })
+
+    # C. 13 条场景专项：旧=无专项判据，新=有
+    scene_rows = []
+    for cid in SCENE_IDS:
+        c = by_id[cid]
+        turns = corpus[cid]
+        res = ev.CaseResult(dict(c))
+        res.turns = list(turns)
+        ev.check_case_expect(res, data["universal"])
+        scene_rows.append({"case": cid, "old_hook": "无（仅通用检查）",
+                           "new_hook": hook_desc(c), "mock_pass": res.passed,
+                           "reasons": [f["reason"] for f in res.failures]})
+
+    return {
+        "mock": mock_rows,
+        "mock_regress": mock_regress,
+        "frags": frag_rows,
+        "scene": scene_rows,
+        "totals": {
+            "mock_old_green": sum(1 for r in mock_rows if r["old"]),
+            "mock_new_green": sum(1 for r in mock_rows if r["new"]),
+            "mock_total": len(mock_rows),
+            "frag_red_to_green": sum(1 for r in frag_rows if r["new"]),
+            "frag_still_red": sum(1 for r in frag_rows if not r["new"]),
+            "frag_total": len(frag_rows),
+            "scene_mock_pass": sum(1 for r in scene_rows if r["mock_pass"]),
+            "scene_total": len(scene_rows),
+        },
+    }
+
+
 def main():
     if "--advice-scope" in sys.argv:
         a = advice_scope_audit()
@@ -546,6 +738,35 @@ def main():
                          c["name"], c["got"], c["want"]))
         print("\n红项 %d / 共 %d" % (len(ch["red"]), len(ch["checks"])))
         return 0 if ch["all_pass"] else 1
+
+    if "--rubric-v2" in sys.argv:
+        a = rubric_v2_audit()
+        print("== A. mock 112 语料：expect_any 用例 旧/新判定 ==")
+        for r in a["mock"]:
+            print("  %-16s 旧=%s 新=%s  %s"
+                  % (r["case"], "GREEN" if r["old"] else "RED",
+                     "GREEN" if r["new"] else "RED", r["why"]))
+        print("  合计：旧绿 %d/%d，新绿 %d/%d；绿→红回归 %d 条"
+              % (a["totals"]["mock_old_green"], a["totals"]["mock_total"],
+                 a["totals"]["mock_new_green"], a["totals"]["mock_total"],
+                 len(a["mock_regress"])))
+        print("\n== B. 归档真实失败片段（旧判据红）→ 新判据 ==")
+        for r in a["frags"]:
+            print("  %-16s 旧=RED 新=%s  %s | %s"
+                  % (r["case"], "GREEN" if r["new"] else "RED", r["why"],
+                     r["reply"][:60]))
+        print("  合计：红→绿 %d 条，仍红 %d 条（共 %d 条片段）"
+              % (a["totals"]["frag_red_to_green"], a["totals"]["frag_still_red"],
+                 a["totals"]["frag_total"]))
+        print("\n== C. 13 条场景专项判据（mock 重放） ==")
+        for r in a["scene"]:
+            print("  %-10s 旧=%s | 新=%s | mock=%s%s"
+                  % (r["case"], r["old_hook"], r["new_hook"],
+                     "PASS" if r["mock_pass"] else "RED",
+                     (" | " + "；".join(r["reasons"])) if r["reasons"] else ""))
+        print("  合计：mock 通过 %d/%d"
+              % (a["totals"]["scene_mock_pass"], a["totals"]["scene_total"]))
+        return 0 if not a["mock_regress"] and a["totals"]["scene_mock_pass"] == a["totals"]["scene_total"] else 1
 
     audit = audit_archive()
     cover = classify_rubric()

@@ -246,5 +246,79 @@ class OnlyMissingSelectionTest(unittest.TestCase):
         self.assertEqual(ids, ["memory-01", "memory-02", "memory-03", "memory-04"])
 
 
+class RubricV2Test(unittest.TestCase):
+    """W21: 同义集合 + 语义角色 + 场景专项判据（改前红/改后绿/仍红都要锁住）。"""
+
+    def setUp(self):
+        self.universal = ev.load_cases(CASES_FILE)["universal"]
+        self.cases = {c["id"]: c for c in ev.load_cases(CASES_FILE)["cases"]}
+
+    def _expect_pass(self, case, replies):
+        res = ev.CaseResult(dict(case))
+        for i, text in enumerate(replies, 1):
+            res.turns.append(ev.Turn("u", {"reply": text}, i))
+        ev.check_case_expect(res, self.universal)
+        return res.passed
+
+    def test_alias_hit_is_green(self):
+        case = {"id": "sim", "category": "具体细节", "expect_any": ["下雨"],
+                "expect_alias": {"下雨": ["淋", "伞"]}}
+        self.assertTrue(self._expect_pass(case, ["别淋着啊，赶紧找个地方躲"]))
+
+    def test_alias_inside_advice_stays_red(self):
+        case = {"id": "sim", "category": "具体细节", "expect_any": ["下雨"],
+                "expect_alias": {"下雨": ["淋", "伞"]}}
+        self.assertFalse(self._expect_pass(case, ["别淋着啊||记得回去收伞"]))
+
+    def test_semantic_role_needs_object(self):
+        case = {"id": "sim", "category": "具体细节", "expect_any": ["嗓子疼"],
+                "expect_alias": {"嗓子疼": ["嗓子", "喉咙"]}}
+        self.assertTrue(self._expect_pass(case, ["喉咙吞口水都疼"]))
+        self.assertFalse(self._expect_pass(case, ["听起来好疼"]))
+
+    def test_scene_hooks_are_wired(self):
+        for cid in ("daily-02", "daily-03", "daily-04", "daily-05",
+                    "daily-06", "daily-07", "daily-08",
+                    "repeat-01", "repeat-02", "repeat-03",
+                    "repeat-04", "repeat-05", "repeat-06"):
+            case = self.cases[cid]
+            self.assertTrue(
+                case.get("expect_any") or case.get("forbid_any")
+                or case.get("require_emotion") or case.get("no_session_repeat"),
+                "%s 仍只有通用硬约束" % cid)
+        self.assertTrue(self.cases["daily-02"].get("require_emotion"))
+        self.assertTrue(self.cases["repeat-01"].get("no_session_repeat"))
+
+    def test_emotion_scene_requires_emotion_word(self):
+        case = {"id": "sim", "category": "日常倾诉",
+                "expect_any": ["需求"], "expect_scope": "any",
+                "require_emotion": True}
+        self.assertTrue(self._expect_pass(case, ["需求堆成这样，换谁都得炸"]))
+        self.assertFalse(self._expect_pass(case, ["需求我看到了，然后呢"]))
+
+    def test_repeat_topic_flags_non_adjacent_opening(self):
+        case = {"id": "sim", "category": "重复话题", "no_session_repeat": True}
+        res = ev.CaseResult(dict(case))
+        cfg = ev._case_cfg(dict(case), self.universal)
+        prev = []
+        for i, text in enumerate(["太烦了吧", "换个角度", "太烦了吧真"]):
+            turn = ev.Turn("u", {"reply": text}, i)
+            ev.check_turn(res, turn, prev, cfg, self.universal)
+            prev.append(turn)
+            res.turns.append(turn)
+        self.assertFalse(res.passed, "隔轮复用开头 4 字应判红")
+        self.assertTrue(any("隔轮复读" in f["reason"] for f in res.failures))
+
+    def test_every_case_has_specific_hook(self):
+        for case in self.cases.values():
+            self.assertTrue(
+                any(k in case for k in (
+                    "expect_any", "forbid_any", "silence", "refusal",
+                    "max_advice_turns", "memory_values", "forget_after",
+                    "mute_any", "expect_scope", "require_emotion",
+                    "no_session_repeat")),
+                "%s 没有任何专项判据" % case["id"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

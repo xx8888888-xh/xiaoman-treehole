@@ -79,6 +79,8 @@
 
 ### 2.3 新脚本断言与自测
 
+> W21 更新：上面 13 条“仅通用约束”和 30 条字面 `expect_any` 已按 `HUMAN_FEEL_R6_RUBRIC.md` 处理，覆盖数字为 112/112；本节的旧统计保留作对照。
+
 新增在 `scripts/offline_rubric_audit.py`：
 
 | 断言 | 作用 | 自测 |
