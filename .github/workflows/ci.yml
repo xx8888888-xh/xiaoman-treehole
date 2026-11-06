@@ -1,6 +1,6 @@
 name: ci
 
-# 快闸门（每次 push / PR）：Node 单测 + Biome + Python pytest + 发布物一致性。
+# 快闸门（每次 push / PR）：Node 单测 + Biome + Python pytest + 发布物一致性 + 旧 WebView CSS 语法扫描。
 # 刻意不碰 Docker、不跑浏览器、不启动模拟器——这些属于 e2e.yml / android.yml / 本地。
 # 基线（main，2026-11-05）：node 181 passed；pytest 145 passed + 19 subtests；biome 0 error。
 # 分支基线可能不同（如 feat/data-completeness 为 node 192 / pytest 153），因此这里只跑不做数字断言。
@@ -89,6 +89,25 @@ jobs:
             echo "- 运行命令：\`python -m pytest server/tests -q\`"
             echo "- 发布物：\`python scripts/verify_assets.py\`（web ↔ assets/www）"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  css-webview-compat:
+    name: css-webview-compat
+    # 旧 WebView（Chrome 83 基线）CSS 语法防回归：静态扫描，不启浏览器/模拟器。
+    # 只输出 [CSS-COMPAT] 清单（MUST-FIX / KNOWN-OK），默认 exit 0 不判红；
+    # 待 MUST-FIX 清零并稳定后，再决定是否加 --strict 收紧。
+    # 事故背景与已接受项登记见 docs/android-audio/ANDROID_AUDIO_VERIFIABILITY.md §3.7。
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Scan legacy WebView CSS syntax
+        run: python scripts/css_webview_compat.py
 
   python-scripts:
     name: python-scripts (${{ matrix.script }})
