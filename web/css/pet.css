@@ -55,7 +55,9 @@ html, body {
   position: absolute;
   left: 5%;
   right: 5%;
-  top: 4px;
+  /* 贴在底部：140×180 时顶部气泡会正好盖住眼睛；底部只占胸肩，
+   * 脸（眼 57-69px）始终露出来。菜单打开时气泡会收起，见 pet.js。 */
+  bottom: 10px;
   z-index: 12;
   padding: 7px 9px;
   border-radius: 10px;

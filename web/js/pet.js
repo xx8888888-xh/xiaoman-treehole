@@ -152,6 +152,11 @@
   }
 
   function showMenu(show) {
+    // 气泡与菜单同一块底部空间：开菜单就收起气泡，避免两层一起盖住脸/下巴
+    if (show) {
+      clearTimeout(tipTimer);
+      tipEl.classList.add("hidden");
+    }
     menuEl.classList.toggle("hidden", !show);
   }
 

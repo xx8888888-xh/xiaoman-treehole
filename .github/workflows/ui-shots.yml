@@ -311,16 +311,20 @@ jobs:
                       viewport: {w: innerWidth, h: innerHeight},
                       tip: {
                           rect: tr,
+                          hidden: tip.classList.contains("hidden"),
                           fontPx,
                           lineHeightPx: +lhPx.toFixed(1),
-                          linesShown: Math.round(tip.clientHeight / lhPx),
+                          linesShown: Math.round((tip.clientHeight - parseFloat(cs.paddingTop || 0)
+                                                   - parseFloat(cs.paddingBottom || 0)) / lhPx),
                           lineClamp: cs.webkitLineClamp || null,
                           textLen: tip.textContent.length,
-                          charsPerLine: Math.round((tip.clientWidth - 14) / fontPx * 10) / 10,
+                          charsPerLine: +((tip.clientWidth - parseFloat(cs.paddingLeft || 0)
+                                           - parseFloat(cs.paddingRight || 0)) / fontPx).toFixed(1),
                           clipped: tip.scrollHeight > tip.clientHeight + 1,
                           coverRatio: +(tip.clientHeight / innerHeight).toFixed(3),
                       },
                       menu: rect(menu),
+                      menuVisible: !menu.classList.contains("hidden"),
                       stage: rect(stage),
                       canvas: rect(cv),
                       head: head ? {x: +head.x.toFixed(1), y: +head.y.toFixed(1),
@@ -339,11 +343,16 @@ jobs:
                   seed(page, PET)
                   settle(page)
                   page.evaluate("(t) => window.__pet && window.__pet.tip(t)", LONG_TIP)
-                  page.evaluate("() => window.__pet && window.__pet.menu(true)")
                   page.wait_for_timeout(300)
                   name = "20-pet-%dx%d" % (w, h)
                   shot(page, name)
                   METRICS[name] = page.evaluate(PET_JS)
+                  # 菜单与气泡互斥：单独截一张，验证按钮在窄窗里不裁切
+                  page.evaluate("() => window.__pet && window.__pet.menu(true)")
+                  page.wait_for_timeout(250)
+                  menu_name = "21-pet-%dx%d-menu" % (w, h)
+                  shot(page, menu_name)
+                  METRICS[menu_name] = page.evaluate(PET_JS)
                   ctx.close()
 
               # ---------- 表情最小集：同机同角度裁舞台 ----------
