@@ -434,7 +434,7 @@ jobs:
 
       - name: Render R5 shots
         run: |
-          python - <<'PY'
+          python -u - <<'PY'
           import json, os, statistics
           from PIL import Image, ImageChops, ImageOps
           from playwright.sync_api import sync_playwright
@@ -572,11 +572,11 @@ jobs:
                   };
               }"""
               FACE = {}
-              for idx, emo in enumerate(["neutral", "flat", "tired"]):
+              for code, emo in [("50", "neutral"), ("51", "flat"), ("52", "tired")]:
                   page.evaluate("() => window.Stage && window.Stage._poseForShot()")
                   page.evaluate("(n) => window.Stage && window.Stage.setEmotion(n)", emo)
                   page.wait_for_timeout(900)
-                  shot(page, "%d0-face-%s" % (5 + idx, emo), clip=box)
+                  shot(page, "%s-face-%s" % (code, emo), clip=box)
                   FACE[emo] = {
                       "state": page.evaluate("() => window.Stage && window.Stage._faceState()"),
                   }
@@ -619,7 +619,7 @@ jobs:
                   "threshold": 10
               }
               # 放大差异图，作为肉眼证据
-              ImageOps.autocontrast(mx).save(os.path.join(OUT, "52-face-diff.png"))
+              ImageOps.autocontrast(mx).save(os.path.join(OUT, "53-face-diff.png"))
 
               # ---------- 4) 首音节延迟：点击 → 首个非零包络帧 ----------
               LAT = """() => new Promise((resolve) => {
