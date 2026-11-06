@@ -1698,13 +1698,93 @@ def memory_snapshot():
                     or "GL mtrack" in s or "EGL mtrack" in s):
                 out["lines"].append(s[:160])
         for s in out["lines"]:
-            if s.startswith("TOTAL"):
+            if s.startswith("TOTAL PSS"):
                 nums = [int(x) for x in re.findall(r"\d+", s)]
                 if nums:
-                    out["totalPssKb"] = nums[-1]
+                    out["totalPssKb"] = nums[0]
+            elif s.startswith("Graphics"):
+                nums = [int(x) for x in re.findall(r"\d+", s)]
+                if nums:
+                    out["graphicsKb"] = nums[0]
+        if "totalPssKb" not in out:
+            for s in out["lines"]:
+                if s.startswith("TOTAL"):
+                    nums = [int(x) for x in re.findall(r"\d+", s)]
+                    if nums:
+                        out["totalPssKb"] = nums[0]
     except Exception as exc:
         out["error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
     return out
+
+
+def drag_check(cdp, round_no, out_dir, tag):
+    """拖动回归：adb swipe 让原生 overlay 抬手落位（会 snapToEdge + rehostPet），
+    随后核对窗口确实移动、画布后备尺寸/取景未变、可见区四边仍非空白。
+
+    FloatWindowService 的 rehostPet 是为软件 GL 模拟器上「移动后整块透明」准备的，
+    这条用例专门验证它。CDP 若随 remount 失联，记录 cdpLost 并保留 adb 截图。"""
+    rec = {"ok": False}
+    try:
+        f0 = pet_frame(dump_windows())
+        rec["before"] = list(f0) if f0 else None
+        if not f0:
+            rec["skipped"] = "dumpsys 未识别到 overlay"
+            return rec
+        l, t, r, b = f0
+        cx, cy = (l + r) // 2, (t + b) // 2
+        dx, dy = -120, 90
+        out = ""
+        rc, out = sh(f"adb shell input swipe {cx} {cy} {cx + dx} {cy + dy} 420", timeout=40)
+        time.sleep(1.0)                       # 等落位 + remount 后的补帧
+        f1 = pet_frame(dump_windows())
+        rec["after"] = list(f1) if f1 else None
+        rec["moved"] = bool(f1) and list(f1) != list(f0)
+        rec["swipe"] = (out or "").strip()[:120]
+
+        ok_g, data = _geom_eval(cdp, timeout=12)
+        if not ok_g:
+            rec["cdpLost"] = str(data)[:140]
+        else:
+            rec["geometry"] = {k: data.get(k) for k in
+                               ("canvasW", "canvasH", "innerW", "innerH", "dpr", "rect")}
+            png = f"drag_r{round_no}_{tag}.png"
+            ok_p, src, detail = capture_geom_png(cdp, png)
+            rec["canvasShot"] = {"ok": ok_p, "source": src, "detail": detail}
+            if ok_p:
+                img = {"w": 0, "h": 0}
+                try:
+                    from PIL import Image
+                    im = Image.open(png)
+                    img = {"w": im.width, "h": im.height}
+                except Exception:
+                    pass
+                region = _shot_region(data, src, img)
+                if region:
+                    rec["blank"] = blank_edges_png(png, region)
+                    rec["ok"] = bool(rec.get("moved")) and bool(rec["blank"].get("ok"))
+                    if os.path.abspath(out_dir) != os.getcwd():
+                        try:
+                            shutil.copyfile(png, os.path.join(out_dir, png))
+                        except Exception:
+                            pass
+        screen = f"drag_r{round_no}_{tag}_screen.png"
+        rec["screenShot"] = {"path": screen, "ok": shot(screen)}
+        if os.path.abspath(out_dir) != os.getcwd():
+            try:
+                shutil.copyfile(screen, os.path.join(out_dir, screen))
+            except Exception:
+                pass
+        if rec.get("moved") and rec.get("blank") and not rec.get("ok"):
+            rec["verdict"] = "拖动后可见区出现空白边"
+        elif rec.get("moved") and rec.get("blank"):
+            rec["verdict"] = "拖动+snap+remount 后画布仍完整"
+        elif not rec.get("moved"):
+            rec["verdict"] = "窗口未移动（input 手势未被 overlay 消费）"
+        else:
+            rec["verdict"] = "无法判定（CDP 失联）"
+    except Exception as e:
+        rec["error"] = f"{type(e).__name__}: {str(e)[:150]}"
+    return rec
 
 
 def run_preset(name, seconds, out_dir, round_no=1, size_matrix=True):
@@ -1792,6 +1872,12 @@ def run_preset(name, seconds, out_dir, round_no=1, size_matrix=True):
                 pass
         if not ok_shot:
             rec["reasons"].append("截图失败（不影响测量，仅证据缺失）")
+        # 拖动回归放在最后：不进入 fill/raster 或几何矩阵窗口；minimal 每轮一次。
+        if name == "minimal":
+            rec["drag"] = drag_check(cdp, round_no, out_dir, name)
+            if not rec["drag"].get("ok"):
+                rec["warnings"].append(
+                    f"拖动检查：{rec['drag'].get('verdict') or rec['drag'].get('error') or rec['drag'].get('skipped')}")
     except Exception as e:
         rec["error"] = f"{type(e).__name__}: {e}"[:300]
         rec["reasons"].append(rec["error"])
