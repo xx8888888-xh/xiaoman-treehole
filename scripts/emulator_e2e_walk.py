@@ -344,7 +344,7 @@ def wait_voice(cdp, n0, timeout=25.0):
     return None, round(time.time() - t0, 2)
 
 
-def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.45):
+def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.30):
     """播放期间高频采样：局部 lipOpen + 引擎 lipSync/mouthMix + 喂帧计数。
 
     截图阈值取**引擎参数** lipSync（嘴真的张开了），不再用 Stage 局部变量；
@@ -397,6 +397,7 @@ def sample_voice(cdp, path="e2e_03_voice.png", seconds=5.0, shot_at=0.45):
             "maxLipOpen": round(max([x["open"] for x in ok] or [0]), 3),
             "maxLipSync": round(max([(x["sync"] or 0) for x in ok] or [0]), 4),
             "nonZeroLipOpen": nz_open, "nonZeroLipSync": nz_sync,
+            "tailSync": [round((x["sync"] or 0), 4) for x in ok[-3:]],
             "nullFaceSamples": null_faces,
             "pageTags": sorted({x["tag"] for x in ok if x.get("tag")}),
             "modes": sorted({str(x["mode"]) for x in ok}), "midSecond": mid,

@@ -138,6 +138,18 @@ test("零动画：表情真的变化只重绘一次，之后再调同值不重�
   } finally { undo(); }
 });
 
+test("零动画：TTS 收尾不再喂 0 时，静默 180ms 自动合嘴", async () => {
+  const p = fakePuppet("smile");
+  const undo = Stage._stillForTest(p, false);
+  try {
+    Stage.lipFrame(0.6);
+    const paints = p.paints;
+    await new Promise((r) => setTimeout(r, 260));
+    assert.equal(p.params.lipSync, 0, "最后一帧包络后必须自动合嘴，不能定格在张嘴");
+    assert.equal(p.paints, paints + 1, "合嘴要定格一帧");
+  } finally { undo(); }
+});
+
 test("零动画：说话时按 ≤15fps 把口型推进引擎，收尾立即合嘴", () => {
   const p = fakePuppet("smile");
   p.params.lipSync = 0.6;                 // 动画期留下的口型

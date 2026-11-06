@@ -26,7 +26,9 @@ const Stage = (() => {
   let lipHold = 0;            // 剩余保持帧（无分析器时的兜底）
   let lipWasOpen = false;     // 零动画：上一帧是否张着嘴（用于收尾立即合嘴）
   let lipTicks = 0;           // 零动画：口型喂入计数（每 4 帧画 1 帧 ≈ 15fps，与墙钟无关）
+  let lipCloseTimer = 0;      // 零动画：最后一帧包络后 180ms 自动合嘴（TTS 收尾不保证喂 0）
   const LIP_EVERY = 4;        // 不按 performance.now 节流：CI/慢机调度抖动会让帧数不可复现
+  const LIP_CLOSE_MS = 180;   // 最后一帧到合嘴的静默窗口
   // 舞台改为"聊天落屏后再挂载"（见 app.js requestStageMount）：挂载前收到的
   // 表情/动作先记下，挂载完成后补放一次，开场白的 Greeting 动作不会丢。
   let pendingEmotion = null;
@@ -821,6 +823,9 @@ const Stage = (() => {
     stopWander();
     stopLoop();
     stopSharedTicker();
+    clearLipClose();
+    lipWasOpen = false;
+    lipTicks = 0;
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = null;
     if (resizeObs) {
@@ -905,19 +910,41 @@ const Stage = (() => {
     if (target <= 0.02) {
       lipHold = 0;
       lipTicks = 0;
+      clearLipClose();
       if (!lipWasOpen) return;               // 本来就没张嘴：不产生空刷新
-      puppet.setParam("lipSync", 0);
-      if (typeof puppet.update === "function") puppet.update(0.12);
-      renderOnce("lip-close");               // 收尾立即合嘴，避免定格在张嘴
-      lipWasOpen = false;
+      closeStillLip();
       return;
     }
+    lipWasOpen = true;                       // 只要有包络就算"在说话"，即使这帧跳过重绘
+    armLipClose();                           // TTS 收尾不一定再喂 0：静默 180ms 自动合嘴
     lipTicks += 1;
     if (lipTicks % LIP_EVERY !== 1) return;  // 60fps 喂入 → 画 1/4 ≈ 15fps；首帧必画
-    lipWasOpen = true;
     puppet.setParam("lipSync", target);
     if (typeof puppet.update === "function") puppet.update(LIP_EVERY / 60);
     renderOnce("lip");
+  }
+
+  function clearLipClose() {
+    if (lipCloseTimer && typeof clearTimeout === "function") clearTimeout(lipCloseTimer);
+    lipCloseTimer = 0;
+  }
+
+  function armLipClose() {
+    clearLipClose();
+    if (typeof setTimeout !== "function") return;
+    lipCloseTimer = setTimeout(closeStillLip, LIP_CLOSE_MS);
+  }
+
+  /** 零动画收尾：把嘴合上并定格一帧（不启动任何循环） */
+  function closeStillLip() {
+    lipCloseTimer = 0;
+    lipTicks = 0;
+    if (!puppet || mode !== "layers" || motionEnabled) { lipWasOpen = false; return; }
+    if (!lipWasOpen) return;
+    puppet.setParam("lipSync", 0);
+    if (typeof puppet.update === "function") puppet.update(0.12);
+    renderOnce("lip-close");                 // 收尾立即合嘴，避免定格在张嘴
+    lipWasOpen = false;
   }
 
   return {
@@ -971,16 +998,20 @@ const Stage = (() => {
     /** 单测入口：零动画冻结帧签名 + 注入假 puppet（返回还原函数） */
     _stillFrameSig: stillFrameSig,
     _stillForTest(nextPuppet, motionOn) {
-      const prev = { puppet, motionEnabled, stillSig, mode, lipWasOpen, lipTicks };
+      const prev = { puppet, motionEnabled, stillSig, mode, lipWasOpen, lipTicks, lipCloseTimer };
+      clearLipClose();
       puppet = nextPuppet;
       motionEnabled = !!motionOn;
       mode = "layers";                        // 注入的假 puppet 视作已挂载的 layer 模式
       lipWasOpen = false;
       lipTicks = 0;
+      lipCloseTimer = 0;
       stillSig = stillFrameSig(nextPuppet);   // 视作"该状态已经画在屏上"
       return () => {
+        clearLipClose();
         puppet = prev.puppet; motionEnabled = prev.motionEnabled; stillSig = prev.stillSig;
         mode = prev.mode; lipWasOpen = prev.lipWasOpen; lipTicks = prev.lipTicks;
+        lipCloseTimer = 0;
       };
     }
   };
