@@ -17,13 +17,13 @@
 | 真机能不能出声，CI 能否证明 | **当前 CI 无法证明可闻性，而且原因有两条、彼此独立**：镜像没有 TTS 引擎（`available()=False` → `speak()` 直接返回 `False`，根本没创建 AudioTrack）；AVD 又带 `-no-audio`。CI 能证明的只是“三条 WebView 都注入了桥且可调用”，不是“有声音” | `[FLOAT-PASS] ... available()=False speak()返回=False(boolean) err=-`；AVD 参数 `-no-window -gpu swiftshader_indirect -no-snapshot -memory 3072 -no-audio` |
 | 浮窗 3 条像素断言仍红，是否是本次改动引入 | **不是。** 合并前的 `origin/main` 基线 #110（`2163963`）同 3 条、同 `diff=0px`、同 frame 坐标；这 3 条断言的代码在 `2163963` 与当前 HEAD 之间**逐字节一致**；AVD 配置也一致。定位到截图路径（`dumpsys` frame 存在 + `[probe] pet-ready` 通过，但 screencap 在该 frame 内的像素差恒 0） | #110 `[FLOAT-SUMMARY] 18/21`；#113 `19/22`；#114 `19/23`；#116 `23/26`；#120 `23/26`；各 run 的 3 条 `[FLOAT-FAIL]` 完全相同 |
 | 本轮是否改产品代码 | **是（已授权）**。`95e9f12` 只改 `web/css/pet.css` / `web/css/style.css` / `web/js/app.js` 的兼容写法；`4c7b557` 只改 CI 取证脚本与 workflow。断言与阈值零改动 | `git show 95e9f12 --stat`；`git diff 9c9d0c2 HEAD -- scripts/emulator_float_check.py` 中三条断言与 `PET_MIN_DIFF=6000` 未变 |
-| 浮窗 3 条像素红的真实根因 | **不是 screencap 抓不到，也不是 Live2D 没画**：浮窗页在 CI 的 WebView 83 上 `#petRoot/#petStage/canvas` 布局为 0x0（`inset:0` 不被解析），canvas 背板有 476,535 个非透明像素但元素无尺寸、从未合成到屏幕 → **屏幕上确实看不到桌宠，三条断言是真失败**。**已按根因修复（`95e9f12`）并在 #125/#126 转绿** | 根因见 run #121–#123 `[FLOAT-PROBE]`（§3.6）；转绿证据见 #125/#126 `[FLOAT-PASS] 桌宠可见 diff=99669px` / `可拖动 diff=101929px` / `收起后复现 diff=102129px` |
+| 浮窗 3 条像素红的真实根因 | **不是 screencap 抓不到，也不是 Live2D 没画**：浮窗页在 CI 的 WebView 83 上 `#petRoot/#petStage/canvas` 布局为 0x0（`inset:0` 不被解析），canvas 背板有 476,535 个非透明像素但元素无尺寸、从未合成到屏幕 → **屏幕上确实看不到桌宠，三条断言是真失败**。**已按根因修复（`95e9f12`）并在 #125/#126 转绿；#127/#128 浮窗 41/41 全绿** | 根因见 run #121–#123 `[FLOAT-PROBE]`（§3.6）；转绿证据见 #125/#126 `[FLOAT-PASS] 桌宠可见 diff=99669px` / `可拖动 diff=101929px` / `收起后复现 diff=102129px`；全绿证据见 #128 `[FLOAT-SUMMARY] 41/41 通过` |
 
-一句话：**#117–#119 的红是“新加的验收脚本自己没跑通”，不是“音频坏了”；#120 修复后 noisy 已 `PASS 3 / FAIL 0 / SKIP 0`、chat `11/11`。浮窗 3 条像素红的根因是 CI 的 WebView 83 不解析 `inset:0` → 浮窗页 0×0 → 屏幕上确实不可见（§3.6），已按根因修产品代码（`95e9f12`），#125/#126 实测 3 条像素断言自然转绿（`diff=99669px` / `101929px` / `102129px`，阈值 `PET_MIN_DIFF=6000` 未动）。#125/#126 的 `emulator-smoke` 仍红在**另一条既有链路**：adb 两枪间隔 493ms > 双击窗口 380ms（`[FLOAT-DIAG]` 已证），与本次修复无关，见 §3.8。可闻性仍未证明。**
+一句话：**#117–#119 的红是“新加的验收脚本自己没跑通”，不是“音频坏了”；#120 修复后 noisy 已 `PASS 3 / FAIL 0 / SKIP 0`、chat `11/11`。浮窗 3 条像素红的根因是 CI 的 WebView 83 不解析 `inset:0` → 浮窗页 0×0 → 屏幕上确实不可见（§3.6），已按根因修产品代码（`95e9f12`），#125/#126 实测 3 条像素断言自然转绿（`diff=99669px` / `101929px` / `102129px`，阈值 `PET_MIN_DIFF=6000` 未动）。同一轮暴露的“双击展开迷你窗”6 条红来自 adb `input tap` 两枪间隔 493ms > 380ms（#126 实证），已改为页内 `window.__tap` 注入（实测 152.1ms），#127/#128 浮窗 **`41/41` 全绿**（§3.8 / §3.10）。可闻性仍未证明。**
 
 ---
 
-## 1. `android-ci` 真实结果（#110、#113–#126）
+## 1. `android-ci` 真实结果（#110、#113–#128）
 
 ### 1.1 run 总表（`gh run list --workflow android-ci.yml`）
 
@@ -40,6 +40,8 @@
 | #120 | 11-06 01:48 | docs/audio-verifiability / `4c7b557` | success | success | **fail** | **11/11 通过** | **23/26** | noisy `PASS 3 / FAIL 0 / SKIP 0`；唯一红是 3 条**既有**像素断言 |
 | #125 | 11-06 12:02 | docs/audio-verifiability / `95e9f12`（产品修复） | success | success | **fail** | **11/11 通过** | **32/38** | 3 条像素断言**全绿**；红 6 条全在「双击展开迷你窗」链（adb 两枪间隔，§3.8） |
 | #126 | 11-06 12:13 | docs/audio-verifiability / `8123c04`（补双击诊断） | success | success | **fail** | **11/11 通过** | **32/38** | 同上；`[FLOAT-DIAG]` 实测两枪间隔 493ms > 380ms |
+| #127 | 11-06 12:26 | docs/audio-verifiability / `a39ef6d`（CDP/页内双击注入） | success | success | **success** | **11/11 通过** | **41/41** | 6 条双击链红全绿；CDP 触摸超时→页内 `__tap`，间隔 152.1ms |
+| #128 | 11-06 12:34 | docs/audio-verifiability / `ba0929e`（`window.__tap` 暴露） | success | success | **success** | **11/11 通过** | **41/41** | 复核一致；本次作为最终验收 run |
 
 补充事实（拉取时点，2026-11-06）：
 
@@ -137,7 +139,7 @@ ERROR: float window check failed
 - 这证明：依赖先装、noisy 三态、chat、float **确实按顺序执行了**；logcat 探针在 `logcat -c` + 重启触发 + `--pid` 拉取后**真的拿到了**（#118 的缺失是采集窗口问题，已在采集侧修好）。
 - 这仍然**不证明**可闻性（`available()=False` 未变，见 §2.1），也不代表浮窗像素红已解决（§3）。
 
-### 1.7 三路取图取证 run（#121–#126）
+### 1.7 三路取图与双击注入取证 run（#121–#128）
 
 | run | commit | 本轮加什么 | float 结果 | 关键结论 |
 |---|---|---|---|---|
@@ -147,10 +149,12 @@ ERROR: float window check failed
 | #124 | `23133e2` | 文档收口（无脚本变化） | `23/26` | 基线复核，仍 3 条像素红 |
 | **#125** | `95e9f12`（产品修复） | `pet.css` 两处 `inset:0` 拆成显式四边；`style.css`/`app.js` 同步 | **`32/38`**，3 条像素断言**全部转绿** | `桌宠可见 diff=99669px`、`可拖动 diff=101929px`、`收起后复现 diff=101904px`；`[FLOAT-PROBE] layer` 仍 `content=0px`（CDP 透明页限制，仅取证，不参与判定） |
 | **#126** | `8123c04`（补双击诊断） | `[FLOAT-DIAG]` 打印 ⑥ 期间 pet 探针（不改断言） | **`32/38`**，3 条像素断言再次全绿 | `收起后复现 diff=102129px`；`[FLOAT-DIAG]` 实证两次 `input tap` 间隔 **493ms > 380ms**，双击链未触发 |
+| **#127** | `a39ef6d`（换双击注入源） | CDP `Input.dispatchTouchEvent` → 超时 → 页内 `window.__tap`（`PointerEvent` 直达产品监听） | **`41/41` 全绿** | `inject_gap=page_gap=152.1ms`；`pet-tap→pet-double→pet-panel` 同一毫秒级窗口内；6 条新红全绿 |
+| **#128** | `ba0929e`（`window.__tap` 暴露） | 同上，最终验收 | **`41/41` 全绿** | `[FLOAT-SUMMARY] 41/41 通过`；`双击触发探针`/`TTS 注入`/`迷你窗展开 1164750px`/`桌宠隐藏 hidden_diff=0px` 均 PASS |
 
-> #121–#124 走的是「桌宠不可见」降级分支（26 条断言）；#125 起桌宠可见，进入双击交互链（38 条断言），因此分母变化。新增 12 条里 6 条红，全部来自 adb 双击时序（§3.8），与 `inset` 修复无关。
+> #121–#124 走的是「桌宠不可见」降级分支（26 条断言）；#125 起桌宠可见，进入双击交互链（38 条断言），因此分母变化。拆出的 6 条红全部来自 adb 双击时序（§3.8），已在 #127/#128 用页内 `window.__tap` 注入修掉并把断言总数走到 41 条（`41/41`），与 `inset` 修复无关。
 
-`build-apk` / `web-tests` 在 #121–#126 均 success。取证图随 `emulator-screenshots` artifact 上传（`emulator_04_float_layer.png`、`emulator_04_float_crop.png`、`emulator_04_float_sidebyside.png`）。#125 起 `emulator_04_float_pet.png` 与 screencap 一致且有内容（744KB）。
+`build-apk` / `web-tests` 在 #121–#128 均 success；#127/#128 起 `emulator-smoke` 也 success。取证图随 `emulator-screenshots` artifact 上传（`emulator_04_float_layer.png`、`emulator_04_float_crop.png`、`emulator_04_float_sidebyside.png`）。#125 起 `emulator_04_float_pet.png` 与 screencap 一致且有内容（744KB）。
 
 ---
 
@@ -404,14 +408,14 @@ curl -s localhost:9225/json/list          # 找到 pet.html
 
 结论：本轮只修「会改变布局尺寸、进而影响像素断言」的 `inset` 与 `dvh`；纯装饰类（flex gap / `:focus-visible` / 两处 `:has`）只登记不改，避免扩大产品改动面。
 
-### 3.8 修复后的云端验收（#125 / #126）与双击链新暴露
+### 3.8 修复后的云端验收（#125–#128）与双击链归因
 
-| 断言 | #121–#124 | #125 | #126 |
-|---|---|---|---|
-| 桌宠可见（frame 内差分≥6000px） | FAIL `diff=0px` | **PASS `diff=99669px`** | **PASS `diff=99669px`** |
-| 桌宠可拖动并贴边 | FAIL | **PASS `diff=101929px`** | **PASS `diff=101929px`** |
-| 收起后桌宠复现 | FAIL | **PASS `diff=101904px`** | **PASS `diff=102129px`** |
-| float 汇总 | `23/26` | `32/38` | `32/38` |
+| 断言 | #121–#124 | #125 | #126 | #128 |
+|---|---|---|---|---|
+| 桌宠可见（frame 内差分≥6000px） | FAIL `diff=0px` | **PASS `diff=99669px`** | **PASS `diff=99669px`** | **PASS `diff=99669px`** |
+| 桌宠可拖动并贴边 | FAIL | **PASS `diff=101929px`** | **PASS `diff=101929px`** | **PASS `diff=101929px`** |
+| 收起后桌宠复现 | FAIL | **PASS `diff=101904px`** | **PASS `diff=102129px`** | **PASS `diff=102129px`** |
+| float 汇总 | `23/26` | `32/38` | `32/38` | **`41/41`** |
 
 `[FLOAT-PROBE]` 在 #125 的对照：`screencap: crop=385x495 changed_vs_base=99669px unique=36993`；`layer: Page.captureScreenshot 385x495 content=0px unique=1 819B`。**判定源仍是 screencap**，CDP 透明页限制只作归因，未替换断言。
 
@@ -421,7 +425,20 @@ curl -s localhost:9225/json/list          # 找到 pet.html
 [FLOAT-DIAG] after-double: ... 12:13:57.187 [probe] pet-tap:head || 12:13:59.067 [probe] pet-tap:head || 12:13:59.560 [probe] pet-tap:head
 ```
 
-两枪都到位，但间隔 **493ms**，超过产品双击窗口 `DOUBLE_MS=380`（`pet_core.js:23`），于是被识别为两次单击（两次 `pet-tap`），`pet-double` 不出现 → 后续 6 条（大窗口 frame、双击探针、迷你窗 TTS 注入、迷你窗桥、面板像素、桌宠隐藏）连带红。这与 `42be337` 已记录的「adb 每次 `input` 重启进程，两枪间隔超阈值」是同一问题。**不属产品缺陷，也不放宽断言**；后续若要让这条链路稳定跑，应在取证侧改用 CDP `Input.dispatchTouchEvent` 注入两枪（保持 `pet-double` 断言强度），而不是绕过双击直接调 `openPanel()`。
+两枪都到位，但间隔 **493ms**，超过产品双击窗口 `DOUBLE_MS=380`（`pet_core.js:23`），于是被识别为两次单击（两次 `pet-tap`），`pet-double` 不出现 → 后续 6 条（大窗口 frame、双击探针、迷你窗 TTS 注入、迷你窗桥、面板像素、桌宠隐藏）连带红。这与 `42be337` 已记录的「adb 每次 `input` 重启进程，两枪间隔超阈值」是同一问题。
+
+**已修（只换注入源，断言与阈值未动）**：#127/#128 改为 CDP `Input.dispatchTouchEvent` 连发两枪；实测该 AVD 的 WebView 83 **不支持** `Input.dispatchTouchEvent`（`timed out in 10.0s`），自动降级为页内 `window.__tap` 探针——在 `document` 捕获阶段构造并派发 `PointerEvent`，与 `pet.js` 的 `onDown/onUp` 同一监听入口。页面侧同时挂捕获记录器，实测：
+
+```text
+[FLOAT-DIAG] cdp-touch 不可用（timed out in 10.0s），降级页内 PointerEvent（同一入口）
+[FLOAT-DIAG] double-inject mode=page-__tap inject_gap=152.1ms page_gap=152.1ms
+             now_before=32563.5 now_after=32750 downs=2 err=None
+[probe] pet-tap:head 12:37:53.126 || [probe] pet-double 12:37:53.303 || [probe] pet-panel 12:37:53.304
+```
+
+`inject_gap`/`page_gap` = **152.1ms**（落在要求的 120–200ms，且远小于 380ms）；`now_after-now_before=186.5ms` 也落在窗口内；`pet-double`/`pet-panel` 由产品自己的 `onUp` 判定产生，证明走的是产品真实事件路径。结果 **`41/41` 全绿**（6 条新红全部转绿，`PET_MIN_DIFF` 与判定式未改）。没有绕过双击去直调 `openPanel()`。
+
+`[FLOAT-PASS]` 原文（#128）：`双击触发探针` / `迷你窗 WebView 注入 AndroidTTS` / `迷你窗展开 diff=1164750px` / `展开后桌宠已隐藏 hidden_diff=0px frame=None` / `收起后桌宠复现 diff=102129px`。
 
 ### 3.9 布局塌陷的耗电影响（真机旧 WebView）
 
@@ -436,6 +453,16 @@ curl -s localhost:9225/json/list          # 找到 pet.html
 定性结论：**默认极简预设下，"不可见"不会带来持续跑渲染循环**（只有常驻服务基线功耗）；**一旦用户选了默认/生动（`motion=true`），塌陷期间每次唤醒都会带来最多 10s 的满帧无效渲染**，耗电与"正常显示桌宠"同量级却完全没有可见收益。修复 `inset` 后，这部分无效功耗与"桌宠不可见"一并消失。
 
 真机核对方法（无需人耳）：`adb shell dumpsys gfxinfo com.xiaoman.treehole framestats` 看帧数与空转；`adb shell dumpsys batterystats --charged com.xiaoman.treehole` 对比 `motion=true` 修复前后 30 分钟的 `Uid u0a...` 能耗增量；`adb shell dumpsys window` 确认 overlay 窗口仍 `isVisible=true`。CI 侧 `window.__pet.state()` 已有 `{motion, loop, idle}`，可直接断言 `loop=false`（`motion=false` 时）。
+
+### 3.10 adb `input` 时序不可信（实测数据，勿再踩）
+
+| run | 注入方式 | 两枪实测间隔 | 结果 |
+|---|---|---|---|
+| #126 | `adb shell "input tap; input tap"` | **493ms**（logcat 12:13:57.…→12:13:59.…） | 两次单击，`pet-double` 不出现 |
+| #127 | CDP `Input.dispatchTouchEvent` | 命令超时 10s（WebView 83 未实现 Input 域） | 降级 |
+| #127/#128 | 页内 `window.__tap`（`PointerEvent` → `document` 捕获） | **152.1ms**（页面侧 `performance.now()` 实测；宿主侧 152.1ms；总跨度 186.5ms） | `41/41` 全绿 |
+
+结论：**任何用 `adb shell input tap` 两次模拟双击的用例都不可靠**——每条命令都会重启 `app_process`，在 CI AVD 上单次启动成本约 0.2–0.5s，天然超出 380ms 双击窗口；且这个间隔随机器负载漂移，无法用 `sleep` 校准。可靠做法是页内派发 `PointerEvent`（或 CDP 触摸，需 WebView 支持），并在页面侧用 `performance.now()` 记录两枪间隔、用 logcat `pet-double` 反证产品路径已执行。禁止为了变绿把断言降级为 `pet-tap` 或直接调 `openPanel()`。
 
 ---
 
@@ -485,9 +512,9 @@ curl -s localhost:9225/json/list          # 找到 pet.html
 **P0（已完成，云端）**
 
 0. **[已完成 · 产品代码 `95e9f12`] 修浮窗页 `inset` 兼容**：`web/css/pet.css` 两处 `inset: 0` → `top/right/bottom/left: 0`；`style.css` 四处与 `app.js` 一处同步拆分，`dvh` 补 `vh` 兜底。验收 #125/#126：3 条像素断言自然转绿（`diff=99669px`/`101929px`/`102129px`），断言代码与 `PET_MIN_DIFF=6000` 未动。全仓扫描见 §3.7，耗电影响见 §3.9。
-0b. **[待办 · 取证侧] 双击链 adb 时序**：#126 实测两枪间隔 493ms > `DOUBLE_MS=380`，导致「双击展开迷你窗」6 条断言红。建议改用 CDP `Input.dispatchTouchEvent` 注入两枪（~150ms 间隔），保留 `pet-double` 断言强度；**禁止**绕过双击直接调 `openPanel()` 把该断言变成空转。
+0b. **[已完成 · 取证侧 `a39ef6d`/`ba0929e`] 双击链注入方式**：#126 实测 adb `input tap` 两枪间隔 493ms > `DOUBLE_MS=380`，导致「双击展开迷你窗」6 条断言红。已改为 CDP `Input.dispatchTouchEvent`（该 AVD 的 WebView 83 不支持，超时）→ 自动降级页内 `window.__tap`（`PointerEvent` 派发到 `document` 捕获阶段，与 `pet.js` `onDown/onUp` 同一入口）；页面侧用 `performance.now()` 记录两枪间隔 **152.1ms**，logcat 出现 `pet-double`/`pet-panel` 反证产品路径执行。#127/#128 `41/41` 全绿，断言与阈值未改；**禁止**绕过双击直接调 `openPanel()`。详见 §3.8/§3.10。
 1. **[云端] `4c7b557`**：noisy 三态 + 依赖前置 + logcat 采集窗口，验收 run #120。
-2. **[云端] 下次复跑用**：`gh workflow run android-ci.yml --ref docs/audio-verifiability`，确认 3 条像素断言仍绿、noisy `PASS`、chat `11/11`；双击链红按 §3.8 的取证侧方案处理。
+2. **[云端] 下次复跑用**：`gh workflow run android-ci.yml --ref docs/audio-verifiability`，确认浮窗 `41/41`（含 3 条像素断言与双击链）、noisy `PASS`、chat `11/11`；双击注入方式见 §3.10，勿改回 adb `input tap`。
 
 **P1（必须真机）**
 
@@ -537,10 +564,12 @@ gh run view 42148539464 --log | grep -E "FLOAT-PROBE|FLOAT-FAIL|FLOAT-SUMMARY"
 gh run view 42149633564 --log | grep -E "FLOAT-PROBE"
 gh run view 42150649869 --log | grep -E "FLOAT-PROBE"
 
-# 7) 修复后验收（#125 产品修复 / #126 补双击诊断，§3.8）
+# 7) 修复后验收（#125 产品修复 / #126 双击诊断 / #127–#128 双击注入，§3.8）
 gh workflow run android-ci.yml --ref docs/audio-verifiability
 gh run view 42213768208 --log | grep -E "FLOAT-PASS|FLOAT-FAIL|FLOAT-SUMMARY"
 gh run view 42215671965 --log | grep -E "FLOAT-DIAG|FLOAT-PASS|FLOAT-FAIL|FLOAT-SUMMARY"
+gh run view 42217722680 --log | grep -E "FLOAT-DIAG|FLOAT-PASS|FLOAT-SUMMARY"   # #127
+gh run view 42218715534 --log | grep -E "FLOAT-DIAG|FLOAT-PASS|FLOAT-SUMMARY"   # #128 最终验收
 
 # 8) 证明三条断言与阈值没动（产品修复 commit 前后）
 git diff 95e9f12^ 95e9f12 --stat        # 只有 web/css + web/js
@@ -562,8 +591,8 @@ python scripts/emulator_float_check.py   # 预期同样 3 条 [FLOAT-FAIL]；另
 ## 6. 约束与声明
 
 - 2026-11-06 修复轮（#125/#126）：`95e9f12` 依用户授权改产品代码，只动 `web/css/pet.css`、`web/css/style.css`、`web/js/app.js` 的 `inset`/`dvh` 兼容写法；**三条像素断言的代码、`PET_MIN_DIFF=6000` 与判定式均未改**（`git diff 9c9d0c2 HEAD -- scripts/emulator_float_check.py` 可核）。`8123c04` 只加 `[FLOAT-DIAG]` 打印，不加断言、不改阈值。
-- #125/#126 实测：3 条像素断言自然转绿；`emulator-smoke` 仍红在「双击展开迷你窗」链（adb 两枪间隔 493ms > 380ms，§3.8），该问题与本次修复无关，已在 §4.3 P0-0b 立项，未用任何绕过手段掩盖。
+- #125/#126 实测：3 条像素断言自然转绿；`emulator-smoke` 当时还红在「双击展开迷你窗」链（adb 两枪间隔 493ms > 380ms，§3.8）。#127/#128 把注入方式换成页内 `window.__tap`（实测 152.1ms）后，**`41/41` 全绿、`emulator-smoke` success**；未用任何绕过手段掩盖。
 - 取证结论：不是 screencap 盲，也不是 Live2D 没画，而是 CI 的 WebView 83 不解析 `inset:0` → 浮窗页 0×0 → 屏幕确实不可见（§3.6）；修复落在产品侧（§3.6.6），因此**没有把断言换成 CDP/canvas 源**。
 - 本轮未移除 `-no-audio`，未新增 AVD 静音豁免。
-- commit 划分：取证脚本 `627b26a` / `adfa963` / `db544ff`；产品修复 `95e9f12`；双击诊断 `8123c04`；文档（本次）。都推在同一分支 `docs/audio-verifiability`；未 force push、未动他人分支。
+- commit 划分：取证脚本 `627b26a` / `adfa963` / `db544ff` / `8123c04` / `a39ef6d` / `ba0929e`；产品修复 `95e9f12`；文档（本次）。都推在同一分支 `docs/audio-verifiability`；未 force push、未动他人分支。
 - 交付物：本文档 + `scripts/android_cdp.py`（新增 `screenshot()`）/ `scripts/emulator_float_check.py`（新增 `[FLOAT-PROBE]` 取证与对照组）。
