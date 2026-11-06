@@ -120,8 +120,8 @@
 
 | 项目 | 结果 |
 |---|---|
-| `node --test --test-concurrency=1 "tests/*.test.js"` | **235 / 235 通过**（基线 229，新增 6 条口型测试） |
-| `python -m pytest server/tests -q` | **187 passed, 3 skipped, 19 subtests passed** |
+| `node --test --test-concurrency=1 "tests/*.test.js"` | **239 / 239 通过**（rebase 后基线 233，新增 6 条口型测试） |
+| `python -m pytest server/tests -q` | **191 passed, 3 skipped, 19 subtests passed** |
 | 云端截图 | `ui-shots.yml` 2 次 success（首轮暴露问题，次轮复测） |
 | 本机浏览器 | 0 次；未启动 Playwright/AVD/Gradle |
 | 截图张数 | **29 张**（原有 14 + 浮窗 6 + 表情 5 + 竖横屏 4） |
