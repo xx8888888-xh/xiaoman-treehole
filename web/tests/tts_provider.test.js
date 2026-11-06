@@ -150,8 +150,9 @@ test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰
   });
   const engine = makeEngine(win, { tts: "browser", ttsRate: "slow" });
   let ended = 0;
+  const endedOk = [];
   try {
-    const res = await engine.speak("晚安", () => {}, () => { ended++; });
+    const res = await engine.speak("晚安", () => {}, (ok) => { ended++; endedOk.push(ok); });
     assert.deepEqual(res, { spoke: true, provider: "browser" });
     assert.equal(spoken.length, 1);
     assert.equal(spoken[0].lang, "zh-CN");
@@ -160,6 +161,7 @@ test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰
     spoken[0].onend();
     spoken[0].onerror();          // 只结算一次
     assert.equal(ended, 1, "onend/onerror 不会重复 onEnd");
+    assert.deepEqual(endedOk, [true], "真出声了：onEnd(true) 才允许打「语音已播」");
   } finally {
     engine.stop();
   }
@@ -210,6 +212,28 @@ test("stop 幂等、空文本不发声但 onEnd 必到", async () => {
   const res = await engine.speak("   ", () => {}, () => { ended++; });
   assert.deepEqual(res, { spoke: false, provider: "none" });
   assert.equal(ended, 1);
+});
+
+test("服务端音频拿到了但设备播不出来：onEnd(false) 且只一次（不得打「语音已播」）", async () => {
+  // 回归（云端 AVD 实测）：server 返回 200，但设备侧 play() reject（无音频设备/
+  // 自动播放被拦）→ 旧实现仍然 onEnd()，气泡被打成「🔊 语音已播」，
+  // 与同屏的「语音暂时没法出声」提示自相矛盾。onEnd 必须带 ok 事实。
+  const calls = [];
+  const win = fakeWin({
+    fetch: async () => ({ ok: true, blob: async () => ({ type: "audio/wav" }) }),
+    URL: { createObjectURL: () => "blob:fake", revokeObjectURL: () => {} },
+    Audio: function FakeAudio() {
+      this.currentTime = 0; this.readyState = 0;
+      this.play = () => Promise.reject(new Error("no audio device"));
+      this.pause = () => {};
+    }
+  });
+  const engine = makeEngine(win, { tts: "server", ttsServer: "http://127.0.0.1:8903" });
+  const res = await engine.speak("今天有点累", () => {}, (ok) => { calls.push(ok); });
+  assert.deepEqual(res, { spoke: true, provider: "server" }, "server 接管了播放（已拿到音频）");
+  await new Promise((r) => setTimeout(r, 30));   // 等两段播放降级链走完
+  assert.deepEqual(calls, [false], "只结算一次，且明确 ok=false");
+  assert.equal(calls.includes(true), false, "没出声绝不能报成功");
 });
 
 test("包络帧下标：越界钳制在 [0, len-1]", () => {

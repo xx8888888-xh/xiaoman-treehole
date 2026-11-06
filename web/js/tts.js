@@ -173,7 +173,8 @@ const TTS = (() => {
       if (fakeStopTimer) { clearTimeout(fakeStopTimer); fakeStopTimer = null; }
     }
 
-    /** 只结算一次：先归零口型再回调 onEnd，避免多路叠加/重复 onEnd */
+    /** 只结算一次：先归零口型再回调 onEnd，避免多路叠加/重复 onEnd。
+     *  onEnd(true) = 真的出声并播完；调用方据此才允许打「语音已播」标记。 */
     function settleOnce(onFrame, onEnd) {
       let done = false;
       return () => {
@@ -181,7 +182,7 @@ const TTS = (() => {
         done = true;
         clearFake();
         try { onFrame && onFrame(0); } catch (e) {}
-        try { onEnd && onEnd(); } catch (e) {}
+        try { onEnd && onEnd(true); } catch (e) {}
       };
     }
 
@@ -257,7 +258,7 @@ const TTS = (() => {
         clearTimeout(startTimer);
         if (W.cancelAnimationFrame) W.cancelAnimationFrame(raf);
         if (currentAudio === audio) currentAudio = null;
-        if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
+        if (failed) { onFail && onFail(); } else { onEnd && onEnd(true); }
       };
 
       audio.onended = () => settle(false);
@@ -322,7 +323,7 @@ const TTS = (() => {
         clearFake();
         if (currentAudio === audio) currentAudio = null;
         onFrame && onFrame(0);
-        if (failed) { onFail && onFail(); } else { onEnd && onEnd(); }
+        if (failed) { onFail && onFail(); } else { onEnd && onEnd(true); }
       };
       audio.onended = () => settle(false);
       audio.onerror = () => settle(true);
@@ -462,14 +463,15 @@ const TTS = (() => {
         }
         const cleanup = () => { try { W.URL.revokeObjectURL(blobUrl); } catch (e) {} };
         // server 路失败（解码失败/跨域被拦）→ 先纯播放，再降级 browser
-        playWithEnvelope(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(); }, () => {
+        playWithEnvelope(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(true); }, () => {
           console.info("server tts 口型链路失败，尝试纯播放");
-          playPlain(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(); }, () => {
+          playPlain(blobUrl, onFrame, () => { cleanup(); onEnd && onEnd(true); }, () => {
             console.info("server tts 纯播放失败，降级本机语音");
             cleanup();
             if (!browserProvider.speak(text, opts)) {
+              // 一路都没发出来：onEnd(false) 明确"没播成"，调用方不得打「语音已播」
               onFrame && onFrame(0);
-              onEnd && onEnd();
+              onEnd && onEnd(false);
             }
           });
         });
@@ -509,6 +511,8 @@ const TTS = (() => {
 
     /**
      * 朗读入口：先 stop 上一段，再按 provider 链路尝试；永远只回调一次 onEnd。
+     * onEnd(ok)：ok=true 表示真的出声并播完（UI 才可标「语音已播」）；
+     * ok=false 表示链路跑完但没出声音（静默降级，UI 只能给安静提示）。
      * 返回 { spoke, provider }：spoke=false 表示本次没有出声（可由 UI 给安静提示）。
      * 文字渲染由调用方先完成，本函数不阻塞、不抛异常。
      */
@@ -518,18 +522,18 @@ const TTS = (() => {
       const frame = typeof onFrame === "function" ? onFrame : () => {};
       const finish = typeof onEnd === "function" ? onEnd : () => {};
       let ended = false;
-      const done = () => {
+      const done = (ok) => {
         if (ended) return;
         ended = true;
-        try { finish(); } catch (e) {}
+        try { finish(ok === false ? false : true); } catch (e) {}
       };
 
       stop();                                  // 先停上一段，防多路叠加
       const gen = speakGen;                    // stop() 之后取代际，异步返回时校验
-      if (muted) { frame(0); done(); return { spoke: false, provider: "muted" }; }
+      if (muted) { frame(0); done(false); return { spoke: false, provider: "muted" }; }
       if (typeof text !== "string" || !text.trim()) {
         frame(0);
-        done();
+        done(false);
         return { spoke: false, provider: "none" };
       }
       // 用户显式关闭语音（设置页 tts=off）：只静默收尾，且**不回调 onEnd**。
@@ -554,7 +558,7 @@ const TTS = (() => {
         console.warn("TTS 链路异常，静默降级:", e && e.message);
       }
       frame(0);
-      done();
+      done(false);
       return { spoke: false, provider: "none" };
     }
 

@@ -1656,9 +1656,11 @@ const App = (() => {
     if (limitedParts.length) {
       const spoken = limitedParts[limitedParts.length - 1].replace(/[\uFF0C。！？~…]+$/g, "");
       try {
-        TTS.speakSafe(spoken, Stage.lipFrame.bind(Stage), () => {
-          // 播放完成后在最后一条气泡标记语音已播（句柄写回记录，滑出窗口再回来也不丢）
-          ChatPager.markVoice(lastRow);
+        TTS.speakSafe(spoken, Stage.lipFrame.bind(Stage), (ok) => {
+          // 只有真的出声并播完才打「🔊 语音已播」（句柄写回记录，滑出窗口再回来也不丢）；
+          // 设备/播放链路失败时 onEnd(false) —— 只给安静提示，状态与文案同源。
+          if (ok === false) showVoiceTip();
+          else ChatPager.markVoice(lastRow);
         }, () => showVoiceTip());
       } catch (e) { console.warn("语音启动异常（文字照常）:", e && e.message); }
     }
