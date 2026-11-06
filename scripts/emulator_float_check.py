@@ -263,7 +263,13 @@ CANVAS_JS = r"""
              rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
   };
   const cs = c ? getComputedStyle(c) : null;
+  const csRoot = root ? getComputedStyle(root) : null;
   const out = {
+    ua: navigator.userAgent,
+    cssSupport: { inset: CSS.supports('inset', '0'), top: CSS.supports('top', '0') },
+    rootCss: csRoot ? { top: csRoot.top, left: csRoot.left, right: csRoot.right,
+                        bottom: csRoot.bottom, w: csRoot.width, h: csRoot.height,
+                        display: csRoot.display, position: csRoot.position } : null,
     viewport: { innerW: innerWidth, innerH: innerHeight,
                 deW: document.documentElement.clientWidth,
                 deH: document.documentElement.clientHeight,
@@ -402,7 +408,7 @@ def pixel_evidence(pframe, base):
                       f"content={cnt2}px unique={unique_colors(cim)} {det}")
         else:
             ev.append(f"layer: 取证失败 {det}")
-        ev.append("canvas: " + json.dumps(cdp.eval(CANVAS_JS, timeout=25), ensure_ascii=False)[:500])
+        ev.append("canvas: " + json.dumps(cdp.eval(CANVAS_JS, timeout=25), ensure_ascii=False)[:1200])
     except Exception as e:
         ev.append(f"cdp: err={str(e)[:120]}")
     finally:
