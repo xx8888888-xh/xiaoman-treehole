@@ -341,20 +341,23 @@ def verify_monotonic(old, new):
             errors.append(f"规则类型变化：{mid} {orule.get('type')} -> {nrule.get('type')}")
             continue
         kind = orule.get("type")
+        ov = _f(orule.get("value")) if kind in ("max", "min") else None
+        nv = _f(nrule.get("value")) if kind in ("max", "min") else None
         if kind == "max":
-            if _f(nrule.get("value")) is None or _f(nrule.get("value")) > _f(orule.get("value")):
+            if nv is None or ov is None or nv > ov:
                 errors.append(f"max 阈值被放宽：{mid} {orule.get('value')} -> {nrule.get('value')}")
         elif kind == "min":
-            if _f(nrule.get("value")) is None or _f(nrule.get("value")) < _f(orule.get("value")):
+            if nv is None or ov is None or nv < ov:
                 errors.append(f"min 阈值被放宽：{mid} {orule.get('value')} -> {nrule.get('value')}")
         elif kind == "range":
             old_lo, old_hi = (orule.get("value") or [None, None])[:2]
             new_lo, new_hi = (nrule.get("value") or [None, None])[:2]
             if _f(new_lo) is None or _f(new_hi) is None \
+                    or _f(old_lo) is None or _f(old_hi) is None \
                     or _f(new_lo) < _f(old_lo) or _f(new_hi) > _f(old_hi):
                 errors.append(f"range 阈值被放宽：{mid} {orule.get('value')} -> {nrule.get('value')}")
         elif kind == "near":
-            if _f(nrule.get("tolerance")) is None \
+            if _f(nrule.get("tolerance")) is None or _f(orule.get("tolerance")) is None \
                     or _f(nrule.get("tolerance")) > _f(orule.get("tolerance")):
                 errors.append(f"near 容差被放宽：{mid} {orule.get('tolerance')} -> {nrule.get('tolerance')}")
         elif kind == "bool":

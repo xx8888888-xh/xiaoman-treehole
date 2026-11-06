@@ -501,6 +501,8 @@ def ensure_pet_probe(timeout=60):
 
 
 def read_pet_snap(cdp, timeout=10):
+    if cdp is None:
+        return None, "no-cdp"
     ok, val = ep.fast_eval(cdp, ep.SNAP_JS, timeout=timeout)
     return (val, None) if ok and isinstance(val, dict) else (None, str(val)[:140])
 
@@ -540,17 +542,17 @@ def run_foreground(minutes, uid):
     sh(f"adb shell am start -n {MAIN} -f 0x20000000", timeout=60)
     if not wait_pid(60):
         raise RuntimeError("App 进程未起来")
-    ep.apply_preset(PORT, ep.PRESET_DEFAULT, "default")
+    ep.apply_preset(PORT, ep.PRESET_DEFAULT, "default")[0].close()
     cdp, info = ensure_pet_probe()
     _FOREGROUND_CDP = cdp
     print(f"[BATT] foreground 浮窗：{json.dumps(info.get('frame'), ensure_ascii=False)} "
           f"petReady={info.get('petReady')}", flush=True)
     time.sleep(10)                              # 启动补帧/纹理解码落定
 
-    ep.fast_eval(cdp, "window.__r4 && window.__r4.reset()", timeout=10)
-    s0, _ = read_pet_snap(cdp)
     seg = Segment("foreground", minutes, uid)
     seg.begin()
+    ep.fast_eval(cdp, "window.__r4 && window.__r4.reset()", timeout=10)
+    s0, _ = read_pet_snap(cdp)
     seg.cdp = cdp
 
     frames = {"start": s0}
@@ -574,7 +576,8 @@ def run_foreground(minutes, uid):
 def run_background(minutes, uid, cdp):
     """从前景（浮窗仍在）切 Home + 灭屏，30 min；结束时唤醒读隐藏期真实帧数。"""
     # 先在前台可见状态下清零并记 C0，随后 Home+灭屏；visibilitychange 会记 atHidden。
-    ep.fast_eval(cdp, "window.__r4 && window.__r4.reset()", timeout=10)
+    if cdp is not None:
+        ep.fast_eval(cdp, "window.__r4 && window.__r4.reset()", timeout=10)
     c0, _ = read_pet_snap(cdp)
     wf = screen_off()
     print(f"[BATT] background 灭屏后 wakefulness={wf}", flush=True)
