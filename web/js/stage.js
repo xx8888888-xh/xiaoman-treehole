@@ -24,6 +24,10 @@ const Stage = (() => {
   let mode = "idle";          // idle | layers | static | silhouette | hidden
   let lipOpen = 0;            // 当前口型目标值
   let lipHold = 0;            // 剩余保持帧（无分析器时的兜底）
+  // 舞台改为"聊天落屏后再挂载"（见 app.js requestStageMount）：挂载前收到的
+  // 表情/动作先记下，挂载完成后补放一次，开场白的 Greeting 动作不会丢。
+  let pendingEmotion = null;
+  let pendingMotion = null;
   // 极简模式/关动画：停 rAF，画面定格；默认值取外观（Appearance.motion=true 表示允许动效）
   let motionEnabled = typeof window !== "undefined" && window.Appearance
     ? Appearance.get().motion
@@ -565,6 +569,12 @@ const Stage = (() => {
     setMode("layers");
     puppet.setEmotion("neutral");
     puppet.setAutoIdle(motionEnabled);
+    // 挂载前收到的表情/动作补放一次：开场白先落屏、舞台后挂载时 Greeting 动作不丢
+    const emo = pendingEmotion, mot = pendingMotion;
+    pendingEmotion = null;
+    pendingMotion = null;
+    if (emo) setEmotion(emo);
+    if (mot && motionEnabled) playMotion(mot);
     bindResize();
     bindPoke();
     settle();
@@ -725,7 +735,7 @@ const Stage = (() => {
 
   function setEmotion(name) {
     markActive();                       // 表情切换是一次真实的状态变化
-    if (!puppet) return;
+    if (!puppet) { pendingEmotion = String(name || "neutral").toLowerCase(); return; }
     const key = String(name || "").toLowerCase();
     const mood = emotionFor(key);
     puppet.setEmotion(mood);
@@ -745,7 +755,8 @@ const Stage = (() => {
   }
 
   function playMotion(group) {
-    if (!puppet || !motionEnabled) return;   // 零动画：动作不启动，帧不变
+    if (!puppet) { pendingMotion = group; return; }   // 挂载前收到：记下，mount 后补放
+    if (!motionEnabled) return;   // 零动画：动作不启动，帧不变
     const id = motionFor(group);
     if (!id) return;
     puppet.playMotion(id);
@@ -770,6 +781,8 @@ const Stage = (() => {
     }
     if (canvas?.parentElement) canvas.parentElement.removeChild(canvas);
     canvas = null;
+    pendingEmotion = null;
+    pendingMotion = null;
     pausedByEnv = false;
     mode = "idle";
     window.__stageMode = "idle";

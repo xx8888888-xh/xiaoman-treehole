@@ -1453,6 +1453,7 @@ const App = (() => {
     await withSendLock(async () => {
       if (!opts.resend) {
         const meHandle = addMsg(text, "me");
+        requestStageMount();   // 用户先开口：首条气泡已落屏，舞台可以开始加载
         pushHistory("user", text, undefined, meHandle && meHandle.rec);
         syncEmptyState();
         bumpRounds();   // P1-1：计一轮"来找我"（危机/提醒/关系问答也算——都真实发生了）
@@ -1650,17 +1651,16 @@ const App = (() => {
       renderMem();
     }
 
-    // 语音（只念最后一条短消息，避免长篇朗读）
+    // 语音（只念最后一条短消息，避免长篇朗读）。文字早已落屏：speakSafe 吞掉
+    // 同步异常/异步失败，语音链路任何问题都不能反过来打断这条消息与后续发送。
     if (limitedParts.length) {
       const spoken = limitedParts[limitedParts.length - 1].replace(/[\uFF0C。！？~…]+$/g, "");
-      // speak 返回 { spoke, provider }：没出声只静默给提示，文字早已在屏幕上
-      const done = TTS.speak(spoken, Stage.lipFrame.bind(Stage), () => {
-        // 播放完成后在最后一条气泡标记语音已播（句柄写回记录，滑出窗口再回来也不丢）
-        ChatPager.markVoice(lastRow);
-      });
-      if (done && typeof done.then === "function") {
-        done.then(res => { if (res && res.spoke === false) showVoiceTip(); }).catch(() => {});
-      }
+      try {
+        TTS.speakSafe(spoken, Stage.lipFrame.bind(Stage), () => {
+          // 播放完成后在最后一条气泡标记语音已播（句柄写回记录，滑出窗口再回来也不丢）
+          ChatPager.markVoice(lastRow);
+        }, () => showVoiceTip());
+      } catch (e) { console.warn("语音启动异常（文字照常）:", e && e.message); }
     }
 
     // 留存钩子
@@ -1793,6 +1793,15 @@ const App = (() => {
   // ---------- 开场 ----------
   const GREET_KEY = "xiaoman_greet_at";       // 上次开场时间
   const GREET_TAIL_KEY = "xiaoman_greet_tail"; // 上次开场的末条文案（用于内容去重）
+  /* 开场白落地耗时构成（PERF_R4 云端 4x 实测 1250ms，测量口径见 scripts/perf_r3.py）：
+   *   ~900ms  GREET_WINDOW_MS 固定缓冲（产品语义：给用户先开口的机会，不是在等任何资源）
+   *   ~310ms  页面 init 结束前不能注册定时器：DCL 211 → bind 198 → 分页挂载 → IndexedDB 恢复历史
+   *   ~0ms    mock/网络：开场白是纯本地文案（G 表 + localStorage），不发 API；测量里 TTS=off
+   *   ~30ms   渲染：addMsg + ChatPager 重建窗口 + 贴底强制布局
+   * 因此本轮把定时器起点从"init 结束"提前到"页面开始"（performance.now 的 timeOrigin），
+   * 并把舞台挂载推迟到开场白落屏之后：落地 ≈ 900ms + 渲染，而不是 init + 900ms。
+   * 用户先开口的语义不变：页面打开后 GREET_WINDOW_MS 内发出的消息仍然优先（userInitiated）。 */
+  const GREET_WINDOW_MS = 900;
   // 开场真正播出：幂等标记只在这里落盘（被延后/跳过都不会误消费，下次仍会开场）
   function playGreet(reply, toldNew, monthNew) {
     try {
@@ -1802,7 +1811,9 @@ const App = (() => {
       localStorage.setItem(GREET_TAIL_KEY, reply.split("||").pop());
     } catch (e) {}
     console.log("[probe] greet played ms=" + Math.round(performance.now()));
+    // 文本先落屏（sendSplit 的同步段先 addMsg），再放行舞台加载：语音/舞台都不挡开场文本
     sendSplit({ reply, emotion: "gentle", motion: "Greeting" });
+    requestStageMount();
   }
   function greet() {
     let lastGreet = 0, tail = "";
@@ -1819,7 +1830,10 @@ const App = (() => {
       const rows = Array.from(document.querySelectorAll("#messages .msg-row:not(.hidden) .bubble"))
         .filter(b => !b.classList.contains("typing"));
       const lastBubble = rows.length ? rows[rows.length - 1].innerText.trim() : "";
-      if (lastBubble && lastBubble.endsWith(tail)) return;
+      if (lastBubble && lastBubble.endsWith(tail)) {
+        requestStageMount();   // 开场被去重跳过：舞台不能跟着一直等
+        return;
+      }
     }
     const mem = loadMem();
     const band = timeBand();
@@ -1870,8 +1884,15 @@ const App = (() => {
         reply += `||对了，你之前跟我说的那几句话我都记着||刚才信号不太好没接上——你随便说句什么，我缓过来就回你`;
       }
     } catch (e) { /* 数据层异常不挡开场 */ }
+    /* 缓冲窗口从页面开始（timeOrigin=0）算，而不是从 init 结束算：
+     * 历史恢复/分页挂载/启动耗时不该被叠加进开场白；页面打开后 900ms 内用户先发的消息
+     * 仍由 userInitiated 优先（语义不变）。慢机上 init 超过 900ms 时 wait=0，但仍排在
+     * 历史恢复之后执行，保证消息顺序。 */
+    const elapsed = (typeof performance !== "undefined" && performance.now)
+      ? performance.now() : GREET_WINDOW_MS;
+    const wait = Math.max(0, GREET_WINDOW_MS - Math.round(elapsed));
     setTimeout(() => {
-      // 900ms 开场窗口内用户先发了消息：不插队，也不丢。
+      // 开场窗口内用户先发了消息：不插队，也不丢。
       // 用户那轮还没收尾（busy/sending）→ 记下来，等回复结束后补播；
       // 已经收尾了 → 现在就补，仍排在用户消息/回复之后。
       if (userInitiated) {
@@ -1885,7 +1906,7 @@ const App = (() => {
         return;
       }
       playGreet(reply, toldNew, monthNew);
-    }, 900);
+    }, wait);
   }
 
   // ---------- 抽屉/弹窗：焦点管理 + Esc 关闭 + 退出动画 ----------
@@ -2259,6 +2280,27 @@ const App = (() => {
     } catch (e) { console.warn("[probe] FLOAT_UI_FAIL", e.message); }
   }
 
+  // ---------- 舞台挂载（非关键资源，等聊天落屏后再说）----------
+  let stageAsked = false;
+  /** 开场白/首条消息真正落屏后才请求挂载 Live2D（运行时约 900KB + 纹理解码）。
+   *  旧实现是在 init 末尾直接 requestIdleCallback(timeout 1200)：4x 降速下这个
+   *  timeout 恰好落在开场白 900ms 窗口末尾，舞台的同步初始化与开场白抢同一帧，
+   *  把开场白落地时间往后推。现在改成"落屏 → 200ms → idle"，两条路径互不干扰。 */
+  function requestStageMount() {
+    if (stageAsked) return;
+    if (window.FloatMode && FloatMode.on) { stageAsked = true; return; }
+    stageAsked = true;
+    const run = () => Stage.mount($("stage")).then(() => {
+      Stage.setMotionEnabled(Appearance.get().motion);
+      console.log("[probe] mount ok ms=" + Math.round(performance.now()));
+    }).catch(e => console.warn("[probe] STAGE_FAIL", e.message));
+    // 先让这一帧的文本提交/绘制；200ms 内舞台仍显示 CSS 骨架占位，观感无损失
+    setTimeout(() => {
+      if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 1200 });
+      else setTimeout(run, 600);
+    }, 200);
+  }
+
   async function init() {
     // 1) 先把输入/发送绑上：这是"首屏可交互"，绝不能被网络、舞台或存储挡住
     try {
@@ -2296,20 +2338,16 @@ const App = (() => {
     try { await restoreHistory(); } catch (e) { console.warn("[probe] HISTORY_FAIL", e.message); }
     syncEmptyState();
 
-    // 4) 舞台并行加载（Live2D 运行时约 900KB，按需拉取，不阻塞输入与开场）
+    // 4) 舞台是非关键资源（Live2D 运行时约 900KB + 纹理解码）：不再在 init 里抢空闲帧。
+    //    触发点见 requestStageMount：开场白/首条消息落屏后 200ms 再进 idle。
     //    悬浮窗迷你模式：跳过 Live2D（双 WebView 实例省内存），布局由 CSS float-mode 接管
     const isFloat = window.FloatMode && FloatMode.on;
     if (isFloat) {
       console.log("[probe] float-mode: stage & widget skipped");
       try { $("stage").style.display = "none"; } catch (e) {}
     } else {
-      // 首屏先让输入/历史/问候就位，舞台等空闲帧再挂载（纹理/运行时不与首帧抢带宽）
-      const mountStage = () => Stage.mount($("stage")).then(() => {
-        Stage.setMotionEnabled(Appearance.get().motion);
-        console.log("[probe] mount ok ms=" + Math.round(performance.now()));
-      }).catch(e => console.warn("[probe] STAGE_FAIL", e.message));
-      if (typeof requestIdleCallback === "function") requestIdleCallback(mountStage, { timeout: 1200 });
-      else setTimeout(mountStage, 600);
+      // 兜底：既没开场（去重跳过/异常）也没发消息时，缓冲窗口后仍把舞台挂上
+      setTimeout(requestStageMount, GREET_WINDOW_MS + 600);
     }
 
     try { greet(); console.log("[probe] greet ok ms=" + Math.round(performance.now())); } catch (e) { console.warn("[probe] GREET_FAIL", e.message); }

@@ -219,3 +219,37 @@ test("包络帧下标：越界钳制在 [0, len-1]", () => {
   assert.equal(idx(0, 50, 0), 0);
   assert.ok(TTS._breathLevel(0) >= 0.01 && TTS._breathLevel(0) <= 0.1, "呼吸极轻微");
 });
+
+// ---------- speakSafe：文字优先，语音失败绝不反过来影响文本/发送 ----------
+test("speakSafe：语音回调/链路抛错时永不 reject，只如实报告没出声", async () => {
+  // 真实崩溃点：口型回调（stage 被卸载/绑定丢失）、或 provider 内部异常。
+  // 文字早已落屏，这类异常必须止步于语音层，不能冒泡到 send()/sendSplit() 的失败分支。
+  const engine = makeEngine(fakeWin(), { tts: "off" });
+  const silent = [];
+  const res = await engine.speakSafe("你好", () => { throw new Error("lip boom"); },
+    () => {}, r => silent.push(r));
+  assert.deepEqual(res, { spoke: false, provider: "error" });
+  assert.equal(silent.length, 1, "静默提示回调一次");
+  assert.equal(silent[0].spoke, false);
+});
+
+test("speakSafe：tts=off 仍只静默收尾，不回调 onEnd（气泡不标「已播」）", async () => {
+  const engine = makeEngine(fakeWin(), { tts: "off" });
+  const seen = [];
+  const res = await engine.speakSafe("这句不该出声", () => {},
+    () => seen.push("end"), r => seen.push(r.provider));
+  assert.deepEqual(res, { spoke: false, provider: "off" });
+  assert.deepEqual(seen, ["off"], "off 只给静默提示，不得回调 onEnd");
+});
+
+test("app.js：先渲染文字，语音统一走 speakSafe（不 await、不阻塞发送）", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const app = fs.readFileSync(path.join(__dirname, "..", "js", "app.js"), "utf8");
+  assert.equal(/TTS\.speak\(/.test(app), false, "app.js 不得直接调用会抛的 TTS.speak");
+  assert.match(app, /TTS\.speakSafe\(/, "统一走 speakSafe（内部吞掉同步/异步失败）");
+  const split = app.slice(app.indexOf("async function sendSplit"),
+    app.indexOf("function finalizeStreamed"));
+  assert.ok(split.indexOf('addMsg(seg, "them")') < split.indexOf("await finalizeReply"),
+    "分条发送必须先把文字落屏，再进 finalizeReply（语音/舞台都在文字之后）");
+});
