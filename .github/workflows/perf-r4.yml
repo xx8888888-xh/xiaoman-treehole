@@ -20,6 +20,10 @@ on:
         description: "样本标签（before / after）"
         required: false
         default: ""
+      repeat:
+        description: "load 每档重复次数（1x/4x/开场白各跑几次，默认 5）"
+        required: false
+        default: "5"
 
 concurrency:
   group: perf-r4-${{ github.ref }}
@@ -73,8 +77,11 @@ jobs:
       - name: Measure
         run: |
           set -euo pipefail
+          REPEAT="${{ inputs.repeat }}"
           python scripts/perf_r4.py \
             --out artifacts/perf/r4.json \
+            --out-r6 artifacts/perf/r6.json \
+            --repeat "${REPEAT:-5}" \
             --only "${{ inputs.only }}" \
             --tag "${{ inputs.tag }}"
 
@@ -83,33 +90,59 @@ jobs:
         run: |
           python - <<'PY'
           import json, os
-          p = "artifacts/perf/r4.json"
+          p6, p4 = "artifacts/perf/r6.json", "artifacts/perf/r4.json"
+          p = p6 if os.path.exists(p6) else p4
           if not os.path.exists(p):
               print("no result file"); raise SystemExit(0)
           d = json.load(open(p, encoding="utf-8"))
-          print("tag:", d.get("tag"), "sha:", d.get("runner", {}).get("GITHUB_SHA"),
-                "at:", d.get("generatedAt"))
+          print("file:", p, "tag:", d.get("tag"), "repeat:", d.get("repeat"),
+                "sha:", d.get("runner", {}).get("GITHUB_SHA"), "at:", d.get("generatedAt"))
           load = d.get("load") or {}
+          dist = d.get("distributions") or load.get("distributions") or {}
+
+          def fmt(s):
+              if not s or not s.get("n"):
+                  return "n=0"
+              return ("median=%s min=%s max=%s mean=%s p95=%s stdev=%s n=%s"
+                      % (s["median"], s["min"], s["max"], s["mean"], s["p95"],
+                         s["stdev"], s["n"]))
+
+          # ① 分布（1x / 4x / 开场白各 repeat 次）
+          for label in ("1x", "4x"):
+              s = ((dist.get("metrics") or {}).get("firstSendMs") or {}).get(label)
+              if s:
+                  print("[r6] firstSend %s %s raw=%s"
+                        % (label, fmt(s), json.dumps(s.get("values"))))
+          gm = (dist.get("greet") or {})
+          for key in ("greetLandedMs", "greetDoneMs"):
+              if gm.get(key):
+                  print("[r6] %s %s" % (key, fmt(gm[key])))
+          # ② 阶段拆分：firstSendMs 的四段 + 观测侧轮询残差，中位数与 4x-1x 差值
+          segs = dist.get("segments") or {}
+          keys = ("inputToSendMs", "sendSyncMs", "domCommitMs", "awaitFirstRenderMs",
+                  "pollResidualMs", "inPageTotalMs")
+          for label in ("1x", "4x"):
+              row = segs.get(label) or {}
+              if row:
+                  print("[r6] segments %s %s" % (label, " ".join(
+                      "%s=%s" % (k, (row.get(k) or {}).get("median")) for k in keys)))
+          for k in keys:
+              a = ((segs.get("1x") or {}).get(k) or {}).get("median")
+              b = ((segs.get("4x") or {}).get(k) or {}).get("median")
+              if a is not None and b is not None:
+                  print("[r6] delta(4x-1x) %s=%+.1fms" % (k, b - a))
+          # ③ 首屏旁证 + 长任务（沿用 r4 字段）
           m1 = load.get("median") or {}
           if m1:
-              print("[summary] firstSend 1x median=%sms (runs=%s) inputReady=%sms LCP=%sms FCP=%sms longMax=%sms over50=%s"
-                    % (m1["firstSendMs"], [r["firstSendMs"] for r in load.get("runs") or []],
-                       m1["inputReadyMs"], m1["lcp"], m1["fcp"], m1["longMax"], m1["longOver50"]))
+              print("[summary] 1x inputReady=%sms LCP=%sms FCP=%sms longMax=%sms over50=%s"
+                    % (m1["inputReadyMs"], m1["lcp"], m1["fcp"], m1["longMax"],
+                       m1["longOver50"]))
           tm = (load.get("throttled") or {}).get("median") or {}
           if tm:
-              print("[summary] firstSend %sx median=%sms (runs=%s) inputReady=%sms LCP=%sms longMax=%sms over50Max=%sms"
-                    % (load["throttled"].get("rate"), tm["firstSendMs"],
-                       [r["firstSendMs"] for r in load["throttled"].get("runs") or []],
-                       tm["inputReadyMs"], tm["lcp"], tm["longMax"], tm["longOver50Max"]))
-          gm = (load.get("greet") or {}).get("median") or {}
-          if gm:
-              print("[summary] greet@%sx landed=%sms done=%sms played=%s skipped=%s records=%s"
-                    % (gm.get("throttle"), gm.get("greetLandedMs"), gm.get("greetDoneMs"),
-                       gm.get("played"), gm.get("skipped"), gm.get("records")))
-              print("[summary] greet runs:",
-                    json.dumps([{"landed": r.get("greetLandedMs"), "done": r.get("greetDoneMs"),
-                                 "played": r.get("played"), "records": r.get("records")}
-                                for r in (load["greet"].get("runs") or [])], ensure_ascii=False))
+              print("[summary] %sx inputReady=%sms LCP=%sms longMax=%sms over50Max=%sms"
+                    % (load["throttled"].get("rate"), tm["inputReadyMs"], tm["lcp"],
+                       tm["longMax"], tm["longOver50Max"]))
+          # ④ 长会话（r6 只带 summary，r4 带全部明细）
           sm = (d.get("memory") or {}).get("summary") or {}
           if sm:
               pg = sm.get("pager") or {}
