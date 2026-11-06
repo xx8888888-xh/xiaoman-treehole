@@ -30,6 +30,7 @@ from android_cdp import Cdp, PKG, sh
 
 PORT = 9224
 MAIN = f"{PKG}/.MainActivity"
+APP_URL = "https://appassets.androidplatform.net/www/index.html"
 TTS_BASE = os.environ.get("E2E_TTS_BASE", "http://10.0.2.2:8903")
 METRICS = {"states": {}, "notes": []}
 
@@ -312,7 +313,7 @@ def main():
 
     cdp = Cdp(port=PORT)
     try:
-        url = cdp.attach("index.html", timeout=120)
+        url = cdp.attach("index.html", timeout=120, fallback_url=APP_URL)
     except Exception as e:
         log(f"附着失败: {e}")
         METRICS["fatal"] = f"attach failed: {e}"
