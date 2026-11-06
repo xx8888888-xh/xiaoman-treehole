@@ -68,6 +68,51 @@ const TTS = (() => {
     return 0.05 + 0.04 * Math.sin(t * 2.4);
   }
 
+  /* ---------- 无音频 provider 的文本节奏口型 ----------
+   * 系统 TTS / Web Speech 在原生层发声，Web 侧拿不到 PCM。旧实现只喂
+   * 0.05~0.09 的呼吸值 → 整句嘴几乎不动，谈不上音节对齐。
+   * 这里按中文阅读节奏估算：单字 190ms（与原兜底定时器同一口径），
+   * 标点后插入停顿。误差来源只有"系统实际语速 ≠ 估算"，
+   * 不涉及音频链路，因此可离线复现、可量化（见 live2d_lipsync.test.js）。 */
+  const CHAR_MS = 190;
+  const PAUSE_MS = {
+    "，": 180, ",": 180, "、": 130, "；": 240, ";": 240, "：": 200, ":": 200,
+    "。": 360, "！": 320, "!": 320, "？": 360, "?": 360, "…": 420,
+    "~": 200, "～": 200,
+  };
+  const SILENT_CHAR_RE = /[「」『』《》"'“”‘’·—\-_]/;
+
+  /** 纯函数：文本 → 音节时间线（rate 与 RATE 同口径，1.0≈正常语速） */
+  function speechPlan(text, rate) {
+    const r = Number(rate) > 0 ? Number(rate) : RATE.normal;
+    const per = CHAR_MS / r;
+    const syllables = [];
+    let t = 0;
+    for (const ch of Array.from(String(text == null ? "" : text))) {
+      const pause = PAUSE_MS[ch];
+      if (pause !== undefined) { t += pause / r; continue; }
+      if (/\s/.test(ch) || SILENT_CHAR_RE.test(ch)) continue;
+      syllables.push({ start: Math.round(t), dur: Math.round(per * 0.82) });
+      t += per;
+    }
+    return { syllables, total: Math.round(t) + 240 };
+  }
+
+  /** 纯函数：时间线 → 0..1 口型包络（起 25% 渐入、末 30% 渐出，字间自然闭合） */
+  function speechLevel(plan, elapsedMs) {
+    const t = Number(elapsedMs) || 0;
+    let level = 0;
+    for (const s of plan.syllables) {
+      if (t < s.start) break;
+      const d = t - s.start;
+      if (d > s.dur) continue;
+      const p = d / s.dur;
+      const shape = p < 0.25 ? p / 0.25 : (p < 0.7 ? 1 : Math.max(0, (1 - p) / 0.3));
+      if (shape > level) level = shape;
+    }
+    return level * 0.9;
+  }
+
   /** 地址规范化：仅接受 http(s)，去掉尾斜杠；非法/空返回 "" */
   function normalizeBase(value) {
     const raw = String(value == null ? "" : value).trim();
@@ -142,6 +187,18 @@ const TTS = (() => {
     function startBreath(onFrame) {
       clearFake();
       fakeTimer = setInterval(() => onFrame && onFrame(breathLevel(now())), 90);
+    }
+
+    /** 无 PCM 时的文本节奏口型；返回估算总时长（ms），供兜底停止定时器复用 */
+    function startText(onFrame, text, rate) {
+      clearFake();
+      const plan = speechPlan(text, rate);
+      const t0 = now();
+      fakeTimer = setInterval(
+        () => onFrame && onFrame(speechLevel(plan, now() - t0)),
+        ENVELOPE_FRAME_MS
+      );
+      return plan.total;
     }
 
     // 原生系统 TTS 完成回调穿透：MainActivity UtteranceProgressListener.onDone/onError
@@ -300,11 +357,11 @@ const TTS = (() => {
           // speakRate 为 0.5 起的新桥方法；老包没有时退回固定语速
           const ok = bridge.speakRate ? bridge.speakRate(text, r) : bridge.speak(text);
           if (!ok) return false;
-          startBreath(onFrame);
+          const planMs = startText(onFrame, text, r);
           const done = settleOnce(onFrame, onEnd);
           androidSettle = done;
-          // 原生完成回调（__ttsEnded）优先；未穿透时用估算兜底（中文约 180~200ms/字）
-          fakeStopTimer = setTimeout(done, Math.max(1800, text.length * 190));
+          // 原生完成回调（__ttsEnded）优先；未穿透时用同一文本时间线兜底
+          fakeStopTimer = setTimeout(done, Math.max(1800, planMs + 400));
           return true;
         } catch (e) {
           console.warn("AndroidTTS 桥失败:", e && e.message);
@@ -336,9 +393,9 @@ const TTS = (() => {
           const finish = settleOnce(onFrame, onEnd);
           u.onend = finish;
           u.onerror = finish;
-          startBreath(onFrame);
-          // 某些 WebView / 未装中文语音包时不会回调 onend：按时长估算兜底
-          fakeStopTimer = setTimeout(finish, Math.max(1800, text.length * 190));
+          const planMs = startText(onFrame, text, u.rate);
+          // 某些 WebView / 未装中文语音包时不会回调 onend：按同一条时间线兜底
+          fakeStopTimer = setTimeout(finish, Math.max(1800, planMs + 400));
           W.speechSynthesis.speak(u);
           return true;
         } catch (e) {
@@ -508,6 +565,10 @@ const TTS = (() => {
     _envelopeIndex: envelopeIndex,
     _frameMs: ENVELOPE_FRAME_MS,
     _breathLevel: breathLevel,
+    /** 单测入口：无音频 provider 的文本时间线与口型包络 */
+    _speechPlan: speechPlan,
+    _speechLevel: speechLevel,
+    _charMs: CHAR_MS,
     /** 单测入口：注入 fake window 造独立引擎（不触碰真实浏览器/音频） */
     _create: createEngine
   });
