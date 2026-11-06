@@ -67,6 +67,9 @@ jobs:
           PY
           ls -l /tmp/e2e-tts.wav
 
+      - name: Gate self-test (reply must arrive, no sampling silence)
+        run: python3 scripts/test_e2e_walk_gate.py
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -94,8 +97,7 @@ jobs:
             sleep 8
             for i in 1 2 3; do adb shell pidof com.xiaoman.treehole && break; adb shell am start -n com.xiaoman.treehole/.MainActivity || true; sleep 10; done
             adb shell pidof com.xiaoman.treehole || { echo "app not running"; adb logcat -d | tail -80; exit 1; }
-            python3 scripts/emulator_e2e_walk.py || echo "[E2E] walkthrough exited nonzero"
-            adb logcat -d | grep -E "AndroidRuntime|FATAL" | grep -i xiaoman | tail -20 || true
+            python3 scripts/emulator_e2e_walk.py; WALK_RC=$?; adb logcat -d | grep -E "AndroidRuntime|FATAL" | grep -i xiaoman | tail -20 || true; exit $WALK_RC
 
       - name: Dump TTS server log
         if: always()

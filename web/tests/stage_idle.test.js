@@ -138,14 +138,34 @@ test("零动画：表情真的变化只重绘一次，之后再调同值不重�
   } finally { undo(); }
 });
 
-test("零动画：lipFrame(0) 不改 params，签名不变 → 不重绘", () => {
+test("零动画：TTS 收尾不再喂 0 时，静默 180ms 自动合嘴", async () => {
   const p = fakePuppet("smile");
-  p.params.lipSync = 0.6;                 // 动画期留下的口型（零动画无 update 不会回 0）
   const undo = Stage._stillForTest(p, false);
   try {
-    Stage.lipFrame(0.53);                 // TTS 收尾/无 provider 的 frame(0)
+    Stage.lipFrame(0.6);
+    const paints = p.paints;
+    await new Promise((r) => setTimeout(r, 260));
+    assert.equal(p.params.lipSync, 0, "最后一帧包络后必须自动合嘴，不能定格在张嘴");
+    assert.equal(p.paints, paints + 1, "合嘴要定格一帧");
+  } finally { undo(); }
+});
+
+test("零动画：说话时按 ≤15fps 把口型推进引擎，收尾立即合嘴", () => {
+  const p = fakePuppet("smile");
+  p.params.lipSync = 0.6;                 // 动画期留下的口型
+  const undo = Stage._stillForTest(p, false);
+  try {
+    Stage.lipFrame(0.53);
+    assert.equal(p.paints, 1, "首帧口型必须画出来（默认极简预设下也要动）");
+    assert.equal(Stage._lipStats().paints, 1, "验收口径：真正画出的说话帧 = 1");
+    assert.ok(p.params.lipSync > 0.3, `口型目标要进引擎参数，实际 ${p.params.lipSync}`);
+    Stage.lipFrame(0.53);                 // 第 2 帧（计数 2）：未到每 4 帧一画 → 不重绘
+    assert.equal(p.paints, 1, "零动画口型按每 4 帧画 1 帧节流（60fps→~15fps）");
+    assert.equal(Stage._lipStats().paints, 1, "被节流跳过的喂入帧不进货真帧计数");
     Stage.lipFrame(0);
-    assert.equal(p.paints, 0, "零动画的 lipFrame 不该产生画布重绘");
+    assert.equal(p.paints, 2, "说话结束立即合嘴重绘一次，不定格在张嘴");
+    assert.equal(Stage._lipStats().paints, 1, "合嘴帧不算\"说话帧\"（只统计张嘴帧）");
+    assert.equal(p.params.lipSync, 0);
   } finally { undo(); }
 });
 

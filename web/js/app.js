@@ -1801,8 +1801,7 @@ const App = (() => {
   }
 
   // ---------- 开场 ----------
-  const GREET_KEY = "xiaoman_greet_at";       // 上次开场时间
-  const GREET_TAIL_KEY = "xiaoman_greet_tail"; // 上次开场的末条文案（用于内容去重）
+  const GREET_DAY_KEY = "xiaoman_greet_day";   // 上次开场所在的本地日历日（YYYY-MM-DD；跨天才再问候）
   /* 开场白落地耗时构成（PERF_R4 云端 4x 实测 1250ms，测量口径见 scripts/perf_r3.py）：
    *   ~900ms  GREET_WINDOW_MS 固定缓冲（产品语义：给用户先开口的机会，不是在等任何资源）
    *   ~310ms  页面 init 结束前不能注册定时器：DCL 211 → bind 198 → 分页挂载 → IndexedDB 恢复历史
@@ -1817,8 +1816,7 @@ const App = (() => {
     try {
       if (toldNew) localStorage.setItem(TOLD_KEY, String(XIAOMAN_VERSION));
       if (monthNew) localStorage.setItem(MONTH_DONE_KEY, monthNew);
-      localStorage.setItem(GREET_KEY, String(Date.now()));
-      localStorage.setItem(GREET_TAIL_KEY, reply.split("||").pop());
+      localStorage.setItem(GREET_DAY_KEY, GreetDay.dayKey(Date.now()));
     } catch (e) {}
     console.log("[probe] greet played ms=" + Math.round(performance.now()));
     // 文本先落屏（sendSplit 的同步段先 addMsg），再放行舞台加载：语音/舞台都不挡开场文本
@@ -1826,24 +1824,16 @@ const App = (() => {
     requestStageMount();
   }
   function greet() {
-    let lastGreet = 0, tail = "";
-    try {
-      lastGreet = Number(localStorage.getItem(GREET_KEY) || 0) || 0;
-      tail = localStorage.getItem(GREET_TAIL_KEY) || "";
-    } catch (e) {}
-    // 去重：如果恢复出来的最后一条就是上次开场的末条（说明用户只是刷新/重进、
-    // 中间没说过话），就不要再插一条开场——否则气泡会一次次累积。
-    // 有待补回复的消息时例外：必须告诉用户"话没丢"。
-    if (!loadPending().length && tail && Date.now() - lastGreet < 6 * 3600 * 1000) {
-      // 隐藏的打字指示/系统提示不算"最后一条"，否则会误判成没说过话而重复开场；
-      // 同时排除打字占位（"正在想…"）：它常驻 #messages 且带 .bubble，会把真正末条挤掉。
-      const rows = Array.from(document.querySelectorAll("#messages .msg-row:not(.hidden) .bubble"))
-        .filter(b => !b.classList.contains("typing"));
-      const lastBubble = rows.length ? rows[rows.length - 1].innerText.trim() : "";
-      if (lastBubble && lastBubble.endsWith(tail)) {
-        requestStageMount();   // 开场被去重跳过：舞台不能跟着一直等
-        return;
-      }
+    let lastDay = "";
+    try { lastDay = localStorage.getItem(GREET_DAY_KEY) || ""; } catch (e) {}
+    let pending = [];
+    try { pending = loadPending() || []; } catch (e) { pending = []; }
+    // 同一天重入（刷新/杀进程再开）：不追加第二次时段问候。
+    // 当天首次（lastDay 为空或不是今天）照常问候；有待补回复时只播"话没丢"。
+    const plan = GreetDay.decide(lastDay, GreetDay.dayKey(Date.now()), pending.length > 0);
+    if (!plan.play) {
+      requestStageMount();   // 开场被去重跳过：舞台不能跟着一直等
+      return;
     }
     const mem = loadMem();
     const band = timeBand();
@@ -1856,12 +1846,12 @@ const App = (() => {
       下午: `${name}下午好。忙里偷闲来找我啦`,
       晚上: `${name}晚上好呀。一天过去了，有想说的吗`
     };
-    let reply = G[band] || G.深夜;
+    let reply = plan.full ? (G[band] || G.深夜) : "";
     // P0-3 升级告知：人格层变更后首次再访主动说（插时段问候与开场引用之间）。
     // 只对有记忆的老用户说——新用户没有"以前"可对比；说完/跳过即登记版本，幂等
     const told = parseInt(localStorage.getItem(TOLD_KEY) || "0", 10) || 0;
     let toldNew = false;
-    if (told < XIAOMAN_VERSION) {
+    if (plan.full && told < XIAOMAN_VERSION) {
       if (Object.values(mem).some(v => v)) reply += `||${UPDATE_TELL}`;
       toldNew = true;   // 标记只在开场真的播出去时才落盘（被跳过就留给下次）
     }
@@ -1871,7 +1861,7 @@ const App = (() => {
     try {
       const pm = prevMonthStr(Date.now());
       const md = localStorage.getItem(MONTH_DONE_KEY) || "";
-      if (md !== pm) {
+      if (plan.full && md !== pm) {
         monthNew = pm;
         const topics = monthTopics(pm);
         if (topics.length >= 2) {
@@ -1881,17 +1871,18 @@ const App = (() => {
     } catch (e) { /* 数据层异常不挡开场 */ }
     // P0-1 再见面开场引用：钉子户里的大事（近事件）优先，其次宠物
     // 不需要严格判定"隔天"——首日铺设完成前（无大事无宠物）自然不会引用
-    const event = mem["大事"];
+    const event = plan.full ? mem["大事"] : null;
     if (event) {
       reply += `||对了，你上次说${event}——怎么样啦？我一直记着呢`;
-    } else if (mem["宠物"]) {
+    } else if (plan.full && mem["宠物"]) {
       reply += `||还有，你家${mem["宠物"]}最近乖不乖？`;
     }
     // P1-3 排队提示：还有欠回复的消息时给明确入口（说一句话即触发补话，零 API
     // 依赖——信号好不好都先亮态度：话没丢，人记得）
     try {
-      if (loadPending().length) {
-        reply += `||对了，你之前跟我说的那几句话我都记着||刚才信号不太好没接上——你随便说句什么，我缓过来就回你`;
+      if (pending.length) {
+        // 同日重入时 reply 为空：只播"话没丢"，不再叠加时段问候
+        reply += (reply ? "||" : "") + `对了，你之前跟我说的那几句话我都记着||刚才信号不太好没接上——你随便说句什么，我缓过来就回你`;
       }
     } catch (e) { /* 数据层异常不挡开场 */ }
     /* 缓冲窗口从页面开始（timeOrigin=0）算，而不是从 init 结束算：

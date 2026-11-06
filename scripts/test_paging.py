@@ -132,8 +132,10 @@ async def seed_history(page, n=300):
             });
           }
           const total = await ChatStore.count(sid);
-          localStorage.setItem('xiaoman_greet_at', String(Date.now()));
-          localStorage.setItem('xiaoman_greet_tail', 'm' + (n - 1));
+          // 已在本日历日开过场：reload 不再追加问候（同日重入去重）
+          const d = new Date(), p = x => String(x).padStart(2, '0');
+          localStorage.setItem('xiaoman_greet_day',
+            d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()));
           return {sid, total};
         }""",
         n,
