@@ -72,7 +72,7 @@ def main():
     check(f"应用进程存活（pid={pid or '无'}）", bool(pid), f"{PKG} pid={pid}" if pid else "进程不在")
 
     sources = dumpsys_sources()
-    check("dumpsys 有输出", bool(sources), "来源=" + ",".join(c.split(" ", 2)[2] for c, _ in sources))
+    check("dumpsys 有输出", bool(sources), "来源=" + ", ".join(c for c, _ in sources))
 
     try:
         with open(DUMP_FILE, "w", encoding="utf-8") as f:
@@ -100,7 +100,7 @@ def main():
                 excerpt = f"{cmd} 里 ACTION 出现处: ...{out[max(0, idx - 200): idx + 200]}..."
                 break
         if not excerpt:
-            names = ", ".join(c.split(" ", 2)[2] for c, _ in sources)
+            names = ", ".join(c for c, _ in sources)
             excerpt = f"{names} 里完全没有 {ACTION}"
 
     check("dumpsys：ReceiverList 里注册了 ACTION_AUDIO_BECOMING_NOISY",
