@@ -120,6 +120,8 @@ def main():
         cdp.attach("index.html", timeout=120)
     except Exception as e:
         print(f"[IME-FAIL] CDP attach: {e}", flush=True)
+        _, logs = sh("adb logcat -d -t 200")
+        print("[IME] logcat tail:\n" + logs[-3000:], flush=True)
         return 1
 
     # attach 只代表 URL commit，assets 还在加载时 DOM 是空的（首轮真机就栽在这）。

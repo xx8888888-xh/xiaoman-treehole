@@ -53,20 +53,24 @@ class Cdp:
         sockets = [s for s in sockets if s in mypids] or sockets
         if not sockets:
             raise RuntimeError("找不到 WebView devtools socket")
-        sh(f"adb forward tcp:{self.port} localabstract:webview_devtools_remote_{sockets[0]}")
+        # 一个进程里可能有多个 WebView（主界面 + 悬浮窗）。旧实现只连 sockets[0]，
+        # 真机上曾连到 URL 为空的悬浮窗 target，120s 误判"页面没起"。
+        # 逐个 socket 轮询，直到出现 URL 匹配的 target。
         end = time.time() + timeout
         last = []
         while time.time() < end:
-            try:
-                lst = requests.get(f"http://127.0.0.1:{self.port}/json/list", timeout=5).json()
-            except Exception:
-                lst = []
-            last = [t.get("url") for t in lst]
-            cand = [t for t in lst if url_filter in (t.get("url") or "")]
-            if cand:
-                target = cand[0]
-                self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024)
-                return target["url"]
+            for sk in list(sockets):
+                sh(f"adb forward tcp:{self.port} localabstract:webview_devtools_remote_{sk}")
+                try:
+                    lst = requests.get(f"http://127.0.0.1:{self.port}/json/list", timeout=5).json()
+                except Exception:
+                    lst = []
+                last = [t.get("url") for t in lst]
+                cand = [t for t in lst if url_filter in (t.get("url") or "")]
+                if cand:
+                    target = cand[0]
+                    self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024)
+                    return target["url"]
             time.sleep(1)
         raise RuntimeError(f"{timeout}s 内没有匹配 {url_filter} 的 WebView target，"
                            f"最近一次 url 列表={last}")

@@ -316,19 +316,16 @@ jobs:
             adb shell settings put system accelerometer_rotation 0
             adb shell settings put system user_rotation 1
             adb shell settings put secure show_ime_with_hard_keyboard 1
-            # 首轮真机失败根因：ime list 偶发空（adb "protocol fault"），
-            # `ime enable ""` 直接报 Argument expected。加等待 + 重试 + AOSP 兜底。
-            IME_ID=""
-            for i in 1 2 3 4 5; do IME_ID=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | head -1); [ -n "$IME_ID" ] && break; sleep 2; done
-            if [ -z "$IME_ID" ]; then IME_ID="com.android.inputmethod.latin/.LatinIME"; fi
-            echo "IME=$IME_ID"
-            adb shell ime enable "$IME_ID" || true
-            adb shell ime set "$IME_ID" || true
-            adb shell settings put secure default_input_method "$IME_ID" || true
-            echo "default_ime=$(adb shell settings get secure default_input_method | tr -d '\r')"
+            # 根因①：reactivecircus 把 script 逐行交给独立 sh 执行，变量不跨行；
+            # 根因②：ime list 偶发空（adb "protocol fault"），`ime enable ""` 报错。
+            # 所以整段压成一行：取值 → 兜底默认 IME → enable/set，变量同 shell 生效。
+            IME_ID=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | head -1); if [ -z "$IME_ID" ]; then IME_ID=$(adb shell settings get secure default_input_method | tr -d '\r'); fi; if [ -z "$IME_ID" ]; then IME_ID="com.android.inputmethod.latin/.LatinIME"; fi; echo "IME=$IME_ID"; adb shell ime enable "$IME_ID" || true; adb shell ime set "$IME_ID" || true; adb shell settings put secure default_input_method "$IME_ID" || true; echo "default_ime=$(adb shell settings get secure default_input_method | tr -d '\r')"
 
+            adb shell wm dismiss-keyguard || true
+            adb shell wm user-rotation lock 1 || true
             adb shell am start -n com.xiaoman.treehole/.MainActivity
             sleep 12
+            echo "rotation=$(adb shell dumpsys window displays | grep -o 'mRotation=ROTATION_[0-9]*' | head -1)"
             adb shell pidof com.xiaoman.treehole || { echo "ERROR: app not running"; adb logcat -d | tail -150; exit 1; }
 
             python3 scripts/emulator_ime_check.py || { echo "ERROR: landscape IME check failed"; adb shell dumpsys input_method | tail -120; adb shell dumpsys window windows | tail -200; exit 1; }
