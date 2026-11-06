@@ -691,6 +691,8 @@ FAIL_PROBE_JS = r"""
     degrade: {visible: shown(q('#degradeBadge')), text: (q('#degradeText') || {}).textContent || ''},
     rows: document.querySelectorAll('#messages .msg-row:not(.hidden)').length,
     meRows: document.querySelectorAll('#messages .msg-row.me:not(.hidden)').length,
+    // ⑥ 之后 DOM 行被 ChatPager 虚拟化封顶（VIEW=14），增删消息只能看 stats().total
+    total: (window.ChatPager && ChatPager.stats) ? ChatPager.stats().total : null,
     busy: typeof window.__isBusy === 'function' ? window.__isBusy() : null,
     mode: (window.API && API.effectiveMode) ? API.effectiveMode() : null
   };
@@ -1378,15 +1380,17 @@ def main():
         # 先打通一次在线直连：把前七步留下的离线徽标清掉，
         # 后面失败态里徽标仍隐藏，才说明"没有掉回离线人格"。
         be.mode = "ok"
-        rows_w0 = int((cdp.eval(FAIL_PROBE_JS) or {}).get("rows") or 0)
+        p_w0 = cdp.eval(FAIL_PROBE_JS) or {}
+        tot_w0 = int(p_w0.get("total") or p_w0.get("rows") or 0)
         sent_w = js_fill_tap(cdp, origin8, "zai xian tong dao ce shi")
-        warm, _pw = wait_rows(cdp, rows_w0 + 2, timeout=40)
+        warm, _pw = wait_total(cdp, tot_w0 + 2, timeout=40)
         pw = cdp.eval(FAIL_PROBE_JS) or {}
         d0 = be.direct_count()
         warm_ok = bool(warm and d0 >= 1 and not (pw.get("degrade") or {}).get("visible")
                        and (pw.get("mode") == "openai"))
         gate("08_warmup", require_true, "08_warmup", warm_ok,
-             f"在线直连预热失败（reply={warm} direct={d0} mode={pw.get('mode')!r} "
+             f"在线直连预热失败（reply={warm} total={tot_w0}→{pw.get('total')} "
+             f"rows={pw.get('rows')} busy={pw.get('busy')} direct={d0} mode={pw.get('mode')!r} "
              f"degrade={pw.get('degrade')!r} send={sent_w}）")
         set_row("08_warmup", warm_ok,
                 f"direct={d0} mode={pw.get('mode')} degrade={(pw.get('degrade') or {}).get('visible')}")
@@ -1443,16 +1447,15 @@ def main():
         # ---- ⑧a-2 adb 真点「再发一次」：必须只多发一次直连请求并成功补回一条回复 ----
         be.mode = "ok"
         d_retry_base = be.direct_count()
-        rows_pre_retry = int(p8.get("rows") or 0)      # 已含失败兜底文案，重发必须在此之上
+        tot_pre_retry = int(p8.get("total") or p8.get("rows") or 0)   # 已含失败兜底文案，重发必须刚好 +1
         rr = (p8.get("retry") or {}).get("rect") or {}
         dpr8 = p8.get("dpr") or 1
         tx = int(origin8[0] + (rr["l"] + rr["r"]) / 2 * dpr8)
         ty = int(origin8[1] + (rr["t"] + rr["b"]) / 2 * dpr8)
-        me8 = int(p8.get("meRows") or 0)
         sh(f"adb shell input tap {tx} {ty}")
         hit8, d_after, wait_r = wait_direct(be, d_retry_base + 1, timeout=25)
         hid8, p8r, wait_h = wait_fail_probe(cdp, timeout=30, want_visible=False)
-        rowOK, _ = wait_rows(cdp, rows_pre_retry + 1, timeout=30)
+        rowOK, _ = wait_total(cdp, tot_pre_retry + 1, timeout=30)
         time.sleep(0.4)
         p8r = cdp.eval(FAIL_PROBE_JS) or p8r
         b8r = shot("e2e_08_retry_ok.png")
@@ -1463,12 +1466,12 @@ def main():
                           % (d_after, d_retry_base + 1))
         if (p8r.get("notice") or {}).get("visible"):
             probs2.append("重发成功后提示条仍未收起")
-        if int(p8r.get("meRows") or 0) != me8:
-            probs2.append("重发把用户消息又插了一遍（meRows %s→%s）"
-                          % (me8, p8r.get("meRows")))
-        if not rowOK or int(p8r.get("rows") or 0) <= rows_pre_retry:
-            probs2.append("重发成功后没有新回复气泡（rows %s→%s）"
-                          % (rows_pre_retry, p8r.get("rows")))
+        if int(p8r.get("total") or p8r.get("rows") or 0) != tot_pre_retry + 1:
+            probs2.append("重发后消息条数 %s→%s 不是刚好 +1（把用户消息又插了一遍？）"
+                          % (tot_pre_retry, p8r.get("total")))
+        if not rowOK:
+            probs2.append("重发成功后没有新回复气泡（total %s→%s）"
+                          % (tot_pre_retry, p8r.get("total")))
         if (p8r.get("degrade") or {}).get("visible"):
             probs2.append("重发成功后掉回离线人格徽标")
         if be.mock_count() != 0:
@@ -1477,15 +1480,14 @@ def main():
             "shot": "e2e_08_retry_ok.png", "bytes": b8r, "tap": [tx, ty],
             "waitedDirect": wait_r, "waitedHide": wait_h,
             "direct": d_after, "notice": p8r.get("notice"),
-            "rows": rows_pre_retry, "rowsAfter": p8r.get("rows"),
-            "meRows": p8r.get("meRows"), "toast": p8r.get("toast"),
+            "total": tot_pre_retry, "totalAfter": p8r.get("total"),
+            "rows": p8r.get("rows"), "toast": p8r.get("toast"),
             "problems": probs2}
         gate("08_fail_retry", require_true, "08_fail_retry", not probs2,
              "；".join(probs2) if probs2 else f"直连 {d_retry_base}→{d_after}")
         set_row("08_fail_retry", True,
                 f"tap=({tx},{ty}) direct {d_retry_base}→{d_after} "
-                f"rows {rows_pre_retry}→{p8r.get('rows')} meRows={p8r.get('meRows')} "
-                f"shot={b8r}B")
+                f"total {tot_pre_retry}→{p8r.get('total')} shot={b8r}B")
 
         # ---- ⑧b 超时/断网分支：同一套提示、同样不掉回离线人格 ----
         be.mode = "hang"
