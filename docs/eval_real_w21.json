@@ -1,0 +1,122 @@
+{
+ "cases": 0,
+ "passed": 0,
+ "rate": 0.0,
+ "by_category": {},
+ "failure_reasons": {},
+ "failures": [],
+ "metrics": {
+  "turns": 0,
+  "protocol_errors": 0,
+  "advice_turns": 0,
+  "advice_rate": 0.0,
+  "summary_empathy_turns": 0,
+  "summary_empathy_rate": 0.0,
+  "opening_tic_hits": {},
+  "opening_tic_rate": 0.0,
+  "session_turns": 0,
+  "repeat_opening": 0,
+  "repeat_opening_rate": 0.0,
+  "recall_checks": 0,
+  "recall_natural": 0,
+  "recall_natural_rate": 0.0
+ },
+ "aborted": {
+  "after_cases": 0,
+  "providers": [
+   {
+    "name": "openrouter-free",
+    "model": "dots-studio/dots-3-note-preview:free",
+    "base": "https://openrouter.ai/api/v1",
+    "calls": 1,
+    "errors": 1,
+    "429": 0,
+    "first_429_at": "2026-11-07 00:07:36",
+    "status": "配额或计费受限，已停用",
+    "reason": "HTTP 429 {\"error\":{\"message\":\"Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day\",\"code\":429,\"metadata\":{\"heade"
+   },
+   {
+    "name": "pollinations",
+    "model": "openai",
+    "base": "https://text.pollinations.ai/openai",
+    "calls": 0,
+    "errors": 0,
+    "429": 0,
+    "first_429_at": "",
+    "status": "待用",
+    "reason": ""
+   }
+  ],
+  "billing_stop": true
+ },
+ "limit_skips": 0,
+ "coverage": {
+  "expected": 7,
+  "completed": 0,
+  "resumed": 0,
+  "new": 0,
+  "retried": 0,
+  "rate": 0.0
+ },
+ "case_stats": [],
+ "passed_ids": [],
+ "failed_ids": [],
+ "billing_stop": true,
+ "partial": true,
+ "rotation": {
+  "rotations": 0,
+  "billing_stop": true,
+  "providers": [
+   {
+    "name": "openrouter-free",
+    "model": "dots-studio/dots-3-note-preview:free",
+    "base": "https://openrouter.ai/api/v1",
+    "calls": 1,
+    "errors": 1,
+    "429": 0,
+    "first_429_at": "2026-11-07 00:07:36",
+    "status": "配额或计费受限，已停用",
+    "reason": "HTTP 429 {\"error\":{\"message\":\"Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day\",\"code\":429,\"metadata\":{\"heade"
+   },
+   {
+    "name": "pollinations",
+    "model": "openai",
+    "base": "https://text.pollinations.ai/openai",
+    "calls": 0,
+    "errors": 0,
+    "429": 0,
+    "first_429_at": "",
+    "status": "待用",
+    "reason": ""
+   }
+  ]
+ },
+ "backend_calls": 1,
+ "backend_errors": 1,
+ "backend_throttled": 0,
+ "model": "openrouter-free、pollinations",
+ "backend": "rotate",
+ "seconds": 1.4,
+ "notes": "所有免费后端都不可用，评测在完成 0 条后中止；中断不是质量分，真实分仍为空；覆盖率：本次新跑 0 条，完成 0/7（0.0%），剩余 7 条；只跑缺失清单 7 条，其余用例未重跑",
+ "only_missing": {
+  "archive": "docs/eval_pending_w20.json",
+  "ids": [
+   "followup-04",
+   "followup-05",
+   "followup-06",
+   "memory-01",
+   "memory-02",
+   "memory-03",
+   "memory-04"
+  ],
+  "reasons": {
+   "followup-04": "interrupted",
+   "followup-05": "missing",
+   "followup-06": "missing",
+   "memory-01": "missing",
+   "memory-02": "missing",
+   "memory-03": "missing",
+   "memory-04": "missing"
+  }
+ }
+}

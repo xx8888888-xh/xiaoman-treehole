@@ -454,7 +454,8 @@ class ApiBackend:
                  now: str = "周五 22:10", max_tokens: int = 1500,
                  retries: int = 3, dry_run: bool = False,
                  provider_name: str = "", raise_on_quota: bool = False,
-                 max_requests: int = DEFAULT_MAX_REQUESTS):
+                 max_requests: int = DEFAULT_MAX_REQUESTS,
+                 stop_on_quota: bool = False):
         import prompt_core
         import memory_slots
         self.prompt_core = prompt_core
@@ -474,6 +475,7 @@ class ApiBackend:
         self.dry_run = dry_run
         self.provider_name = provider_name or model or "api"
         self.raise_on_quota = raise_on_quota
+        self.stop_on_quota = stop_on_quota
         self.max_requests = max_requests or 0
         self.calls = 0
         self.errors = 0
@@ -545,6 +547,10 @@ class ApiBackend:
                     break
                 if e.code in (429, 503, 502):
                     self.throttled += 1
+                    if self.stop_on_quota and e.code == 429:
+                        # 按指示：碰到 429 立刻停手，不重试、不换家硬刷
+                        last_err = "HTTP 429（配额/限流，按要求立即停手）"
+                        break
                     time.sleep(min(30, 4 * (attempt + 1)))
                     continue
                 break
@@ -591,7 +597,8 @@ class RotatingBackend:
     def __init__(self, providers: list, delay: float = 1.0, timeout: float = 60.0,
                  temperature: float = 0.85, now: str = "周五 22:10",
                  max_tokens: int = 1500, retries: int = 3,
-                 max_requests: int = DEFAULT_MAX_REQUESTS, factory=None):
+                 max_requests: int = DEFAULT_MAX_REQUESTS, factory=None,
+                 stop_on_quota: bool = False):
         if not providers:
             raise ValueError("轮换后端至少需要一家可用 provider")
         paid = [p["name"] for p in providers if not is_free_model(p.get("model", ""))]
@@ -605,6 +612,8 @@ class RotatingBackend:
                      "retries": retries}
         self.max_requests = max_requests or 0
         self.factory = factory or self._make_api
+        self.stop_on_quota = stop_on_quota
+        self.billing_stop = False
         self.idx = 0
         self.rotations = 0
         self.consecutive_fail = 0
@@ -631,7 +640,8 @@ class RotatingBackend:
                           retries=(provider.get("retries")
                                    or self.opts["retries"]),
                           provider_name=provider["name"], raise_on_quota=True,
-                          max_requests=self.max_requests)
+                          max_requests=self.max_requests,
+                          stop_on_quota=self.stop_on_quota)
 
     def _activate(self, idx, reset=True):
         self.idx = idx
@@ -702,6 +712,10 @@ class RotatingBackend:
                 if not st["first_429_at"]:
                     st["first_429_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 self._refresh()
+                if self.stop_on_quota:
+                    # 按要求：配额/429 立即停手，不换家硬刷、不重试烧额度
+                    self.billing_stop = True
+                    raise AllProvidersExhausted(self.stats)
                 if not self._switch():
                     raise AllProvidersExhausted(self.stats)
                 continue
@@ -729,7 +743,8 @@ class RotatingBackend:
 
     def report(self):
         self._refresh()
-        return {"rotations": self.rotations, "providers": self.stats}
+        return {"rotations": self.rotations, "billing_stop": self.billing_stop,
+                "providers": self.stats}
 
 
 def parse_model_json(raw: str) -> dict:
@@ -885,7 +900,10 @@ def evaluate(cases_file: Path, backend, limit: int = 0, categories=None,
         try:
             res, adv = run_case(case, backend, universal)
         except AllProvidersExhausted as exc:
-            aborted = {"after_cases": len(results), "providers": exc.stats}
+            aborted = {"after_cases": len(results), "providers": exc.stats,
+                       "billing_stop": bool(getattr(backend, "billing_stop", False) or
+                                            any("配额" in (p.get("status") or "")
+                                                for p in exc.stats))}
             print("%s 中止：%s；已完成 %d/%d 条（后端失败不计入质量分）"
                   % (LOG, exc, len(results), total_cases), flush=True)
             break
@@ -973,6 +991,9 @@ def case_stats(res) -> dict:
         "recall_checks": recall_checks,
         "recall_natural": recall_natural,
         "failures": enrich_failures(res),
+        # 原文留档：以后任何“翻绿/回带”都能被逐轮复核，不靠记忆槽推断
+        "replies": [{"turn": i + 1, "user": t.user, "reply": t.reply}
+                    for i, t in enumerate(turns)],
     }
 
 
@@ -1217,6 +1238,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-requests", type=int, default=DEFAULT_MAX_REQUESTS,
                     help="单次运行里每个后端的最大请求数（默认 %d，到上限切下一家）"
                     % DEFAULT_MAX_REQUESTS)
+    ap.add_argument("--stop-on-quota", action="store_true",
+                    help="遇 429/余额/配额立刻硬停手：不重试、不换家，归档标 billing_stop")
     ap.add_argument("--resume", action="store_true",
                     help="断点续跑：读取 --json 里的逐条统计，跳过已通过的用例，"
                          "把新结果合并进同一份报告")
@@ -1289,7 +1312,8 @@ def main(argv=None) -> int:
         backend = RotatingBackend(providers, delay=args.delay, timeout=args.timeout,
                                   now=args.now, max_tokens=args.max_tokens,
                                   retries=args.retries,
-                                  max_requests=args.max_requests)
+                                  max_requests=args.max_requests,
+                                  stop_on_quota=args.stop_on_quota)
     elif args.backend in ("mock", "local"):
         backend = MockBackend(Path(args.cases))
         if args.backend == "local":
@@ -1308,7 +1332,8 @@ def main(argv=None) -> int:
         backend = ApiBackend(args.base, args.model, key, delay=args.delay,
                              timeout=args.timeout, now=args.now,
                              max_tokens=args.max_tokens, retries=args.retries,
-                             max_requests=args.max_requests)
+                             max_requests=args.max_requests,
+                             raise_on_quota=True, stop_on_quota=args.stop_on_quota)
 
     # 断点续跑：只认带逐条统计（case_stats）的旧结果，逐条合并、覆盖率如实算
     prior_stats = []
@@ -1351,6 +1376,10 @@ def main(argv=None) -> int:
         summary["case_stats"] = stats
         summary["passed_ids"] = [s["id"] for s in stats if s["passed"]]
         summary["failed_ids"] = [s["id"] for s in stats if not s["passed"]]
+        if aborted:
+            # 配额/429 硬停手时如实标记，便于第二天 --only-missing 补跑
+            summary["billing_stop"] = bool(aborted.get("billing_stop"))
+            summary["partial"] = True
         if isinstance(backend, RotatingBackend):
             summary["rotation"] = backend.report()
             summary["backend_calls"] = sum(p["calls"] for p in summary["rotation"]["providers"])
