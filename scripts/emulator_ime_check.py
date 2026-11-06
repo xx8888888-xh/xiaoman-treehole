@@ -23,9 +23,9 @@ WebView 是否被 IME 覆盖、消息列表是否因缩容把末条裁掉，只�
 退出码：0=全通过；1=有失败项（逐项 [IME-PASS]/[IME-FAIL]）
 """
 import json
+import os
 import re
 import struct
-import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -44,16 +44,16 @@ def check(name, ok, info=""):
 
 
 def shot(path):
-    try:
-        data = subprocess.run(["adb", "exec-out", "screencap", "-p"],
-                              capture_output=True, timeout=90).stdout
-    except Exception:
+    # exec-out screencap 在部分 AVD/GPU 组合下会返回空或被截断（首轮真机就没落盘）。
+    # 改为设备内落盘 + adb pull，SurfaceFlinger 合成结果一致且稳定。
+    remote = f"/sdcard/{os.path.basename(path)}"
+    sh(f"adb shell screencap -p {remote}")
+    sh(f"adb pull {remote} {path}")
+    if not os.path.exists(path):
         return None
-    if data and len(data) > 1024 and data[:1] == b"\x89":
-        with open(path, "wb") as f:
-            f.write(data)
-        return data
-    return None
+    with open(path, "rb") as f:
+        data = f.read()
+    return data if len(data) > 1024 else None
 
 
 def png_size(data):
@@ -114,7 +114,29 @@ def ime_frame():
     return None
 
 
+def ensure_landscape():
+    """真机横屏：settings 在部分 AVD 上不生效，再用 emulator console rotate 兜底。"""
+    size = None
+    for _ in range(3):
+        data = shot("r5_orientation_probe.png")
+        size = png_size(data) if data else None
+        if size and size[0] > size[1]:
+            return True, size
+        sh("adb shell settings put system accelerometer_rotation 0")
+        sh("adb shell settings put system user_rotation 1")
+        sh("adb shell wm user-rotation lock 1")
+        sh("adb emu rotate")
+        time.sleep(4)
+    return bool(size and size[0] > size[1]), size
+
+
 def main():
+    ok, size = ensure_landscape()
+    if not ok:
+        print(f"[IME-FAIL] 设备未进入横屏，screenshot={size}", flush=True)
+        return 1
+    print(f"[IME] landscape screenshot {size[0]}x{size[1]}", flush=True)
+
     cdp = Cdp(PORT)
     try:
         cdp.attach("index.html", timeout=120)
@@ -143,6 +165,12 @@ def main():
         time.sleep(1)
     if not diag or not diag.get("hasInput"):
         print(f"[IME-FAIL] WebView DOM 未就绪: {diag}", flush=True)
+        try:
+            probe = cdp.eval("""() => "ready=" + document.readyState +
+                " url=" + location.href + " body=" + (document.body ? document.body.tagName : "none")""")
+            print(f"[IME] probe={probe}", flush=True)
+        except Exception as e:
+            print(f"[IME] probe error: {e}", flush=True)
         return 1
     print(f"[IME] DOM ready: {diag.get('href')} input=ok", flush=True)
 

@@ -68,7 +68,12 @@ class Cdp:
                 last = [t.get("url") for t in lst]
                 cand = [t for t in lst if url_filter in (t.get("url") or "")]
                 if cand:
+                    # 同一 URL 前缀会有两个 target：主窗口 index.html 与悬浮面板
+                    # index.html?float=1。后者常常是尚未导航的空文档，优先没有 query 的。
+                    cand.sort(key=lambda t: 0 if (t.get("url") or "").split("?")[0]
+                              .endswith(url_filter) else 1)
                     target = cand[0]
+                    print("[cdp] attach", target.get("type"), target.get("url"), flush=True)
                     self.ws = connect(target["webSocketDebuggerUrl"], max_size=8 * 1024 * 1024)
                     return target["url"]
             time.sleep(1)
