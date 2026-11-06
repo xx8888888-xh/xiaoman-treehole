@@ -191,6 +191,14 @@ jobs:
             echo "Installing APK: $APK_PATH"
             adb install -r "$APK_PATH"
 
+            # ---- Python 探针依赖必须先于任何探针安装（历史故障 #119）----
+            # chat 脚本需要 websockets + requests，float 脚本需要 pillow；
+            # 旧顺序把 emulator_noisy_check.py 排在 pip install 之前，
+            # android_cdp 连带 import websockets，ModuleNotFoundError 直接把 job 拉红。
+            # 注意：noisy 脚本本身已改为只依赖标准库，这里再兜底所有探针的依赖。
+            pip3 install --quiet --user requests websockets pillow 2>/dev/null || pip3 install --quiet requests websockets pillow || true
+            python3 -c "import websockets, requests, PIL; print('probe deps ok, PIL', PIL.__version__)" || { echo "ERROR: python probe deps unavailable"; exit 1; }
+
             # Start app
             adb shell am start -n com.xiaoman.treehole/.MainActivity
             sleep 8
@@ -218,8 +226,6 @@ jobs:
             # 流水线照样"绿"，等于什么都没验。现在坐标从 WebView DOM 真实盒子动态取，
             # 并且硬断言：textInput 非空 / sendBtn 不再 disabled / #messages 出现新气泡 /
             # logcat 有 [probe] msg me + msg them。任一条不成立直接 exit 1。
-            pip3 install --quiet --user requests websockets 2>/dev/null || pip3 install --quiet requests websockets || true
-            python3 -c "import websockets, requests; print('cdp deps ok')" || { echo "ERROR: requests/websockets unavailable"; exit 1; }
             python3 scripts/emulator_chat_check.py || { echo "ERROR: main chat check failed"; exit 1; }
 
             # Poke Live2D
@@ -232,8 +238,6 @@ jobs:
             # ---- 悬浮窗完整交互验收（P2-4b v3：授权→球→拖动→展开→聊天→收起→关闭，产出 emulator_04~09） ----
             # v3 三通道证据：dumpsys window（窗口级）+ PIL 像素基线差分（像素级）+ logcat probe（链路级）。
             # uiautomator dump 对 TYPE_APPLICATION_OVERLAY 有盲区（run 38853971176 实锤：球已渲染但 dump 无节点）。
-            pip3 install --quiet --user pillow 2>/dev/null || pip3 install --quiet pillow || true
-            python3 -c "import PIL; print('PIL', PIL.__version__)" || { echo "ERROR: pillow unavailable"; exit 1; }
             python3 scripts/emulator_float_check.py || { echo "ERROR: float window check failed"; exit 1; }
 
       - name: Upload screenshots
