@@ -218,6 +218,28 @@ def wait_total(cdp, target, timeout=30):
     return False, last
 
 
+TTS_HOOK_JS = r"""
+(() => {
+  if (window.__ttsHooked) return 'already';
+  const o = TTS.speakSafe;
+  window.__ttsLog = [];
+  window.TTS.speakSafe = function (t, f, end, silent) {
+    const e = {txt: String(t || '').slice(0, 10), at: Math.round(performance.now())};
+    __ttsLog.push(e);
+    return o.call(TTS, t, f, (ok) => {
+      e.ok = ok === true; e.endAt = Math.round(performance.now());
+      if (typeof end === 'function') end(ok);
+    }, (r) => {
+      e.silent = true; e.spoke = r && r.spoke; e.prov = r && r.provider;
+      if (typeof silent === 'function') silent(r);
+    });
+  };
+  window.__ttsHooked = 1;
+  return 'hooked';
+})()
+"""
+
+
 def sample_lip(cdp, seconds=3.0, path="e2e_03_voice.png", shot_at=0.45):
     """高频采样 Stage 真实口型状态；峰值时截图（全程没到阈值就在末尾补一张）。"""
     t0 = time.time()
@@ -346,6 +368,10 @@ def main():
     except Exception as e:
         chain = f"err {e}"[:100]
     log(f"TTS 链: {chain}")
+    try:
+        hook = cdp.eval(TTS_HOOK_JS)
+    except Exception as e:
+        hook = f"err {e}"[:80]
     rows1 = (s2.get("rows") or 0)
     if origin:
         tap(cdp, "input", origin)
@@ -358,10 +384,15 @@ def main():
     else:
         cdp.eval(SEND_JS.replace("__TXT__", json.dumps("谢谢你陪我")))
     ok3, p3 = wait_rows(cdp, rows1 + 2, timeout=40)
-    voice = sample_lip(cdp, seconds=3.2)
+    voice = sample_lip(cdp, seconds=6.0)
+    try:
+        events = cdp.eval("window.__ttsLog || []")
+    except Exception:
+        events = None
     s3 = cdp.eval(STATE_JS) or {}
     METRICS["states"]["03_voice"] = {"shot": "e2e_03_voice.png" if voice["shotBytes"] else None,
-                                      "replyArrived": ok3, "chain": chain,
+                                      "replyArrived": ok3, "chain": chain, "hook": hook,
+                                      "ttsEvents": events,
                                       "lip": voice, "probe": s3}
 
     # ---------------- ④ 浮窗模式 ----------------
