@@ -1,9 +1,10 @@
 # Live2D 表情与浮窗可读性 · 第四轮
 
-> 基线：`main` / `fa976f7`；分支 `feat/ui-r4`；worktree `treehole-w23`。
+> 基线：`main` / `149cf36`（起于 `fa976f7`，rebase 一次）；分支 `feat/ui-r4`；worktree `treehole-w23`。
 > 本轮只做四件事：**口型节奏对齐、表情补最小集、浮窗三尺寸可读性、竖/横屏可达性**。
 > 截图全部来自云端 Playwright artifact（`ui-shots.yml`），本机未启动 headless 浏览器。
-> 最终 run：**42227460540**（artifact `ui-shots-a76689d`）；首轮 run `42226319052` 用来暴露问题。
+> 最终 run：**42237825228**（artifact `ui-shots-ab922c2`，rebase 到最新 main 后复跑）；
+> 首轮 run `42226319052` 用来暴露"气泡盖眼"，次轮 `42227460540` 复测修复。
 
 ## 一、分层契约（未改动）
 
@@ -86,7 +87,7 @@
 | 240×160 | 气泡高 69px，盖眼 |
 | 140×180 + 大字号 | 16px 时 44 字约 7 行 ≈ 151px，几乎占满整窗 |
 
-### 4.2 修复与复测（run 42227460540）
+### 4.2 修复与复测（run 42227460540 / 终轮 42237825228 数据一致）
 
 改动：气泡改 `bottom:10px`（只压胸肩，不压眼），窄窗字号 13→11px（大字号 12px），气泡 4 行封顶，**气泡与长按菜单互斥**（开菜单即收气泡）；页内兜底文案截到 44 字，完整长文仍由原生气泡承担。
 
@@ -122,7 +123,7 @@
 |---|---|
 | `node --test --test-concurrency=1 "tests/*.test.js"` | **239 / 239 通过**（rebase 后基线 233，新增 6 条口型测试） |
 | `python -m pytest server/tests -q` | **191 passed, 3 skipped, 19 subtests passed** |
-| 云端截图 | `ui-shots.yml` 2 次 success（首轮暴露问题，次轮复测） |
+| 云端截图 | `ui-shots.yml` 3 次 success（首轮暴露问题，次轮修，终轮 rebase 后复跑） |
 | 本机浏览器 | 0 次；未启动 Playwright/AVD/Gradle |
 | 截图张数 | **29 张**（原有 14 + 浮窗 6 + 表情 5 + 竖横屏 4） |
 
