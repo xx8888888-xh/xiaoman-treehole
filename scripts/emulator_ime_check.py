@@ -321,6 +321,24 @@ def ensure_landscape():
     return bool(size and size[0] > size[1]), size
 
 
+def input_bar_in_viewport(restored, margin=8):
+    """收起键盘后输入栏必须整条留在视口内（底部还留 margin px 余量）。"""
+    if not restored:
+        return False
+    bottom, vh = restored.get("inputBarBottom"), restored.get("viewportH")
+    if bottom is None or vh is None:
+        return False
+    return bottom <= vh - margin
+
+
+def hook_bar_single_line_ok(restored, floor=32):
+    """钩子条折单行后的实际高度 ≥ floor（19px=被 flex 压扁竖切，44px=正常单行）。"""
+    if not restored:
+        return False
+    h = restored.get("hookBarH")
+    return h is not None and h >= floor
+
+
 def main():
     ok, size = ensure_landscape()
     if not ok:
@@ -568,11 +586,13 @@ def main():
         const t = document.querySelector(".topbar");
         const c = document.querySelector("#chatScroll");
         const b = document.querySelector(".inputbar");
+        const h = document.getElementById("hookBar");
         return {
             topbarDisplay: t ? getComputedStyle(t).display : null,
             topbarH: t ? +t.getBoundingClientRect().height.toFixed(1) : null,
             chatH: c ? +c.getBoundingClientRect().height.toFixed(1) : null,
             inputBarBottom: b ? +b.getBoundingClientRect().bottom.toFixed(1) : null,
+            hookBarH: h ? +h.getBoundingClientRect().height.toFixed(1) : null,
             viewportH: innerHeight,
             focused: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : null
         };
@@ -594,6 +614,19 @@ def main():
           f"viewportH={restored and restored.get('viewportH')} "
           f"topbarH={restored and restored.get('topbarH')} "
           f"inputBarBottom={restored and restored.get('inputBarBottom')}")
+
+    # ---- 护栏：88px 兜底会把列撑出 ~20.7px，输入栏跟着下移；但绝不能真的出屏 ----
+    # 真机实测 inputBarBottom=351 / viewportH=363（留 12px），阈值留 8px 余量。
+    check("输入栏未被挤出视口（inputBarBottom ≤ viewportH − 8）",
+          input_bar_in_viewport(restored),
+          f"inputBarBottom={restored and restored.get('inputBarBottom')} "
+          f"viewportH={restored and restored.get('viewportH')} limit=viewportH-8")
+    # ec0c8af 那版只设 max-height、没 flex-shrink:0，钩子条被 flex 压成 19px、句子竖切；
+    # 正常单行高度 = --tap = 44px，下限取 32px（留出 padding 取整的余量）。
+    check("钩子条折行后单行高度 ≥32px（防止被压成竖切）",
+          hook_bar_single_line_ok(restored),
+          f"hookBarH={restored and restored.get('hookBarH')} "
+          f"chatH={restored and restored.get('chatH')}")
 
     cdp.close()
     print("[IME] summary " + json.dumps({
