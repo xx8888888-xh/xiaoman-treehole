@@ -667,6 +667,7 @@ const App = (() => {
   }
   window.__onVoiceUnavailable = showVoiceTip;
   window.__voiceTip = voiceTip;   // E2E：可见性 / 存活期 / 失败日志探针
+  window.__truncLog = () => TruncLog.readLog();   // E2E：段数截断记录探针
 
   // ---------- 渲染 ----------
   // 长会话分页交给 ChatPager（chat_pager.js）：DOM 只保留当前页 + 缓冲，
@@ -1367,6 +1368,7 @@ const App = (() => {
   function createStreamRenderer() {
     const MAX = 5;
     const slots = [];
+    const truncSeq = TruncLog.nextSeq();   // 一条回复一个序号：流式增长只留最后/最大那条记录
     let suppressed = false;
 
     function stickBottom() {
@@ -1382,10 +1384,22 @@ const App = (() => {
       }
       stickBottom();
     }
+    /** 段数上限 + 截断观测：超出槽位的非空段写一条 sessionStorage 记录（upsert 同 seq） */
+    function renderParts(full) {
+      const all = String(full == null ? "" : full).split("||");
+      const over = all.slice(MAX).filter(s => s.trim());
+      if (over.length) {
+        TruncLog.record({
+          kind: "stream", seq: truncSeq,
+          total: all.length, cap: MAX, droppedN: over.length, dropped: over,
+        });
+      }
+      return all.slice(0, MAX);
+    }
     function apply(full) {
       if (suppressed) return;
       hideTyping();
-      const raw = String(full == null ? "" : full).split("||").slice(0, MAX);
+      const raw = renderParts(full);
       for (let i = 0; i < raw.length; i++) {
         const seg = raw[i].trim();
         if (slots[i]) updateRow(slots[i], seg);
@@ -1394,7 +1408,7 @@ const App = (() => {
     }
     function replace(full) {
       if (suppressed) return;
-      const raw = String(full == null ? "" : full).split("||").slice(0, MAX);
+      const raw = renderParts(full);
       for (let i = 0; i < raw.length; i++) {
         const seg = raw[i].trim();
         if (slots[i]) updateRow(slots[i], seg);
@@ -1706,7 +1720,8 @@ const App = (() => {
       const parts = String(data.reply || "…").split("||").map(s => s.trim()).filter(Boolean);
       // 段数上限：防止模型输出过多段导致刷屏（开场白由调用方显式放宽，见 playGreet）
       const cap = Number.isFinite(maxParts) && maxParts > 0 ? maxParts : 5;
-      const limitedParts = parts.slice(0, cap);
+      // 截断不再静默：超出 cap 的非空段写一条 sessionStorage 记录（段数/上限/被丢段开头）
+      const limitedParts = TruncLog.limitParts(parts, cap, "sendSplit");
 
       let lastRow = null;
       for (let i = 0; i < limitedParts.length; i++) {
@@ -1739,7 +1754,8 @@ const App = (() => {
 
       let parts = renderer.parts();
       if (!parts.length) {
-        parts = String(data.reply || "…").split("||").map(s => s.trim()).filter(Boolean).slice(0, 5);
+        parts = TruncLog.limitParts(
+          String(data.reply || "…").split("||").map(s => s.trim()).filter(Boolean), 5, "finalize");
         for (const seg of parts) addMsg(seg, "them");
       }
       // w9：流式结束后按渲染槽位的记录句柄回填 id，翻页/滑出窗口后仍能定位

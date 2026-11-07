@@ -39,7 +39,8 @@
       "Heartbeat",
       "Widget",
       "FloatMode",
-      "AndroidTTS"
+      "AndroidTTS",
+      "TruncLog"
     ]
   }
 }
