@@ -14,9 +14,12 @@ emulator_e2e_walk.py · 全链路回归走查（云端 AVD，单 run 一条链�
   ⑥ 20 轮后滚到底      e2e_06_rounds20.png
   ⑦ 语音失败提示       （出现 → 存活期自动收起 → 重绘不复活）
   ⑧ 发送失败态（真机） e2e_08_fail_500.png / e2e_08_retry_ok.png
+     布局契约前后各一次：e2e_08_landscape_before.png（提示条出现前·横屏）
+                        e2e_08_fail_500_landscape.png（提示条出现后·横屏）
   ⑧b 断网/超时分支     e2e_08b_fail_timeout.png
      （脚本内起可控 OpenAI 兼容后端，注入 500 / 挂起；量提示条 rect + 命中测试，
-       adb 真点「再发一次」并由服务端请求计数证明"确实只多发一次"）
+       adb 真点「再发一次」并由服务端请求计数证明"确实只多发一次"；
+       提示条出现前后都验输入栏不出视口，横竖屏同一条 AVD 会话内跑完）
 
 实测值全部来自运行时：CDP DOM rect、uiautomator WebView bounds、dumpsys window、
 Stage._lipState()、screencap PNG 尺寸。
@@ -881,6 +884,21 @@ def fail_layout_problems(p):
     return probs
 
 
+def inputbar_problems(p):
+    """输入栏必须留在视口内（提示条出现前后、横竖屏都要过）。"""
+    probs = []
+    ib = p.get("inputbar") or {}
+    ih = p.get("ih") or 0
+    if not ib:
+        probs.append("取不到输入栏位置")
+        return probs
+    if (ib.get("t") or -1) < 0:
+        probs.append("输入栏被顶出视口上方（t=%s）" % ib.get("t"))
+    if (ib.get("b") or 1e9) > ih + 0.5:
+        probs.append("输入栏被顶出视口下方（b=%s ih=%s）" % (ib.get("b"), ih))
+    return probs
+
+
 def fail_copy_problems(p, kind):
     """失败文案不能出现 HTTP 状态码/英文错误；同一种失败必须同一套提示。"""
     probs = []
@@ -1411,6 +1429,32 @@ def main():
         set_row("08_warmup", warm_ok,
                 f"direct={d0} mode={pw.get('mode')} degrade={(pw.get('degrade') or {}).get('visible')}")
 
+        # ---- 布局契约（提示条出现前）：竖屏 + 横屏各一次，输入栏不能出视口 ----
+        pre_l = {"portrait": inputbar_problems(pw), "landscape": []}
+        sh("adb shell settings put system user_rotation 1")
+        time.sleep(3)
+        p_pre_l = cdp.eval(FAIL_PROBE_JS) or {}
+        b_pre_l = shot("e2e_08_landscape_before.png")
+        pre_l["landscape"] = inputbar_problems(p_pre_l)
+        if (p_pre_l.get("notice") or {}).get("visible"):
+            pre_l["landscape"].append("提示条出现前就已可见，无法证明是这次失败把它弹出来的")
+        pre_l["probe"] = {"iw": p_pre_l.get("iw"), "ih": p_pre_l.get("ih"),
+                          "inputbar": p_pre_l.get("inputbar"), "shot": b_pre_l}
+        sh("adb shell settings put system user_rotation 0")
+        time.sleep(3)
+        vb8p = webview_bounds(ui_dump())
+        if vb8p:
+            origin8 = (vb8p["l"], vb8p["t"])      # 转回竖屏后 WebView 偏移会变，点坐标要重算
+        pre_l_ok = not pre_l["portrait"] and not pre_l["landscape"]
+        METRICS["states"]["08_layout_before"] = pre_l
+        gate("08_layout_before", require_true, "08_layout_before", pre_l_ok,
+             "；".join(pre_l["portrait"] + pre_l["landscape"]) or
+             "竖屏/横屏输入栏均在视口内")
+        set_row("08_layout_before", True,
+                f"portrait ih={pw.get('ih')} inputbar.b={(pw.get('inputbar') or {}).get('b')} "
+                f"landscape {p_pre_l.get('iw')}x{p_pre_l.get('ih')} "
+                f"inputbar.b={(p_pre_l.get('inputbar') or {}).get('b')} shot={b_pre_l}B")
+
         # ---- ⑧a 后端 500：提示条必须出现在可视区、按钮可点、文案无状态码/英文 ----
         be.mode = "http500"
         d_before = be.direct_count()
@@ -1461,11 +1505,40 @@ def main():
                 f"hit={p8.get('notice', {}).get('hitAtCenter')}/"
                 f"{p8.get('retry', {}).get('hitAtCenter')} shot={b8}B")
 
+        # ---- 布局契约（提示条出现后）：横屏再量一遍，提示条不能被 inputbar/voiceTip 挤掉 ----
+        sh("adb shell settings put system user_rotation 1")
+        time.sleep(3)
+        pl8 = cdp.eval(FAIL_PROBE_JS) or {}
+        bl8 = shot("e2e_08_fail_500_landscape.png")
+        probs_l = fail_layout_problems(pl8) + fail_copy_problems(pl8, "http") + inputbar_problems(pl8)
+        METRICS["states"]["08_fail_500_landscape"] = {
+            "shot": "e2e_08_fail_500_landscape.png", "bytes": bl8,
+            "iw": pl8.get("iw"), "ih": pl8.get("ih"),
+            "notice": pl8.get("notice"), "retry": pl8.get("retry"),
+            "inputbar": pl8.get("inputbar"), "voiceTip": pl8.get("voiceTip"),
+            "pending": pl8.get("pending"), "problems": probs_l}
+        gate("08_landscape_500", require_true, "08_landscape_500", not probs_l,
+             "；".join(probs_l) if probs_l else
+             f"横屏 {pl8.get('iw')}x{pl8.get('ih')} 提示条/按钮/输入栏都在位")
+        set_row("08_landscape_500", True,
+                f"iw×ih={pl8.get('iw')}×{pl8.get('ih')} "
+                f"notice.b={(pl8.get('notice') or {}).get('rect', {}).get('b')} "
+                f"inputbar.t={(pl8.get('inputbar') or {}).get('t')} shot={bl8}B")
+
+        # 回竖屏：WebView 偏移会变，重取探针给「再发一次」算点击坐标
+        sh("adb shell settings put system user_rotation 0")
+        time.sleep(3)
+        vb8p2 = webview_bounds(ui_dump())
+        if vb8p2:
+            origin8 = (vb8p2["l"], vb8p2["t"])
+        p8_portrait = cdp.eval(FAIL_PROBE_JS) or p8
+
         # ---- ⑧a-2 adb 真点「再发一次」：必须只多发一次直连请求并成功补回一条回复 ----
         be.mode = "ok"
         d_retry_base = be.direct_count()
-        tot_pre_retry = int(p8.get("total") or p8.get("rows") or 0)   # 已含失败兜底文案，重发必须刚好 +1
-        rr = (p8.get("retry") or {}).get("rect") or {}
+        tot_pre_retry = int(p8_portrait.get("total") or p8_portrait.get("rows") or 0)   # 已含失败兜底文案，重发必须刚好 +1
+        rr = (p8_portrait.get("retry") or {}).get("rect") or {}
+        probs2_pre = [] if (p8_portrait.get("notice") or {}).get("visible") else ["回竖屏后提示条不见了"]
         dpr8 = p8.get("dpr") or 1
         tx = int(origin8[0] + (rr["l"] + rr["r"]) / 2 * dpr8)
         ty = int(origin8[1] + (rr["t"] + rr["b"]) / 2 * dpr8)
@@ -1477,7 +1550,7 @@ def main():
         p8r = cdp.eval(FAIL_PROBE_JS) or p8r
         b8r = shot("e2e_08_retry_ok.png")
 
-        probs2 = []
+        probs2 = probs2_pre[:]
         if not hit8 or d_after != d_retry_base + 1:
             probs2.append("点「再发一次」后直连请求 %d != %d（没真重发或多发）"
                           % (d_after, d_retry_base + 1))
