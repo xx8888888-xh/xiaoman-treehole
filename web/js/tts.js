@@ -149,6 +149,38 @@ const TTS = (() => {
     let muted = W.XIAOMAN_TTS_MUTED === "1" || W.XIAOMAN_TTS_MUTED === true;
     let lastSpeakAt = 0;       // speak() 入口时刻（≈用户点击播放），供延迟探针取基准
     let lastTiming = null;     // 上一次服务端播放的分段耗时（CI/探针只读取，不参与播放逻辑）
+    let lastFailure = null;    // 最近一次 speak 的失败诊断：{textLen,textHash,error,attempts[]}
+    let speakStartAt = 0;      // 本次 speak 入口时刻，用于失败 elapsedMs
+
+    /** 文本指纹（FNV-1a）：只用于识别"同一句反复失败"，不可逆推正文（隐私红线 P1-5） */
+    function textHash(text) {
+      let h = 0x811c9dc5;
+      const s = String(text || "");
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = (h * 0x01000193) >>> 0;
+      }
+      return ("00000000" + h.toString(16)).slice(-8);
+    }
+
+    /** 记录一次失败尝试；lastFailure.error 保留**首个**败因（最接近根因的一次） */
+    function noteFailure(provider, error, extra) {
+      if (!lastFailure) lastFailure = { textLen: 0, textHash: "", attempts: [] };
+      const a = Object.assign({
+        provider: provider || "none",
+        error: error || "unknown",
+        elapsedMs: Math.max(0, Math.round(now() - speakStartAt)),
+      }, extra || {});
+      lastFailure.attempts.push(a);
+      if (lastFailure.attempts.length > 4) lastFailure.attempts.shift();
+      if (!lastFailure.error) {
+        lastFailure.error = a.error;
+        lastFailure.provider = a.provider;
+        lastFailure.elapsedMs = a.elapsedMs;
+        if (a.httpStatus) lastFailure.httpStatus = a.httpStatus;
+        if (a.timedOut) lastFailure.timedOut = true;
+      }
+    }
 
     /**
      * 读取前端配置（API.loadCfg 由 api.js 提供；缺失时用空配置走默认链路）。
@@ -252,22 +284,23 @@ const TTS = (() => {
         envError: "", envFrames: 0, frames: 0,
       };
       lastTiming = timing;
-      const settle = (failed) => {
+      const settle = (failed, error, extra) => {
         if (settled) return;
         settled = true;
         clearTimeout(startTimer);
         if (W.cancelAnimationFrame) W.cancelAnimationFrame(raf);
         if (currentAudio === audio) currentAudio = null;
-        if (failed) { onFail && onFail(); } else { onEnd && onEnd(true); }
+        if (failed) { noteFailure("server", error || "play_failed", extra); onFail && onFail(); }
+        else { onEnd && onEnd(true); }
       };
 
       audio.onended = () => settle(false);
-      audio.onerror = () => settle(true);   // 真败因（404/解码失败）走降级
+      audio.onerror = () => settle(true, "audio_error");   // 真败因（404/解码失败）走降级
 
       // 弱网兜底：请求发出但迟迟没有真正开播 → 判定失败并降级（文字已经在屏幕上了）
       startTimer = setTimeout(() => {
         if (settled) return;
-        if (!audio.currentTime && audio.readyState < 3) settle(true);
+        if (!audio.currentTime && audio.readyState < 3) settle(true, "start_timeout", { timedOut: true });
       }, AUDIO_START_TIMEOUT);
 
       // 解码与开播并行：旧实现等 audio.play() resolve 后才 fetch+decode，
@@ -306,7 +339,7 @@ const TTS = (() => {
         timing.playAt = now();
         audio.onplaying = () => clearTimeout(startTimer);
         tick();
-      }).catch(() => settle(true));
+      }).catch(() => settle(true, "play_rejected"));
     }
 
     /** 纯播放（不接 WebAudio 图）：口型包络失败时仍保证"有声音"，只是口型只轻微呼吸 */
@@ -316,23 +349,24 @@ const TTS = (() => {
       currentAudio = audio;
       let settled = false;
       let startTimer = 0;
-      const settle = (failed) => {
+      const settle = (failed, error, extra) => {
         if (settled) return;
         settled = true;
         clearTimeout(startTimer);
         clearFake();
         if (currentAudio === audio) currentAudio = null;
         onFrame && onFrame(0);
-        if (failed) { onFail && onFail(); } else { onEnd && onEnd(true); }
+        if (failed) { noteFailure("server", error || "play_plain_failed", extra); onFail && onFail(); }
+        else { onEnd && onEnd(true); }
       };
       audio.onended = () => settle(false);
-      audio.onerror = () => settle(true);
+      audio.onerror = () => settle(true, "audio_error");
       audio.onplaying = () => clearTimeout(startTimer);
       startTimer = setTimeout(() => {
-        if (!audio.currentTime && audio.readyState < 3) settle(true);
+        if (!audio.currentTime && audio.readyState < 3) settle(true, "start_timeout", { timedOut: true });
       }, AUDIO_START_TIMEOUT);
       startBreath(onFrame);
-      audio.play().catch(() => settle(true));
+      audio.play().catch(() => settle(true, "play_rejected"));
     }
 
     /** 服务端语音请求：POST JSON body → blob URL（原文不进 URL） */
@@ -352,7 +386,9 @@ const TTS = (() => {
             const j = await res.json();
             detail = j && j.error ? ` ${j.error}` : "";
           } catch (e) { /* 非 JSON 错误体不深究 */ }
-          throw new Error(`tts http ${res.status}${detail}`);
+          const err = new Error(`tts http ${res.status}${detail}`);
+          err.status = res.status;
+          throw err;
         }
         const blob = await res.blob();
         return W.URL.createObjectURL(blob);
@@ -420,7 +456,7 @@ const TTS = (() => {
           u.pitch = 1.15;
           const finish = settleOnce(onFrame, onEnd);
           u.onend = finish;
-          u.onerror = finish;
+          u.onerror = () => { noteFailure("browser", "browser_error"); finish(); };
           const planMs = startText(onFrame, text, u.rate);
           // 某些 WebView / 未装中文语音包时不会回调 onend：按同一条时间线兜底
           fakeStopTimer = setTimeout(finish, Math.max(1800, planMs + 400));
@@ -454,6 +490,10 @@ const TTS = (() => {
         try {
           blobUrl = await fetchServerAudio(base, text, safeVoice(cfg), (cfg && cfg.ttsRate) || "normal");
         } catch (e) {
+          const st = e && e.status;
+          const aborted = !!(e && e.name === "AbortError");
+          noteFailure("server", st ? `http_${st}` : (aborted ? "start_timeout" : "network_error"),
+            { httpStatus: st, timedOut: aborted });
           console.info("server tts 不可用，降级本机语音:", e && e.message ? e.message : e);
           return false;
         }
@@ -518,6 +558,13 @@ const TTS = (() => {
      */
     async function speak(text, onFrame, onEnd) {
       lastSpeakAt = now();   // 延迟探针基准：入口即"点击播放"
+      speakStartAt = lastSpeakAt;
+      const rawText = typeof text === "string" ? text : "";
+      lastFailure = {
+        textLen: Array.from(rawText).length,
+        textHash: textHash(rawText),
+        attempts: [],
+      };
       const cfg = loadCfg();
       const frame = typeof onFrame === "function" ? onFrame : () => {};
       const finish = typeof onEnd === "function" ? onEnd : () => {};
@@ -530,8 +577,9 @@ const TTS = (() => {
 
       stop();                                  // 先停上一段，防多路叠加
       const gen = speakGen;                    // stop() 之后取代际，异步返回时校验
-      if (muted) { frame(0); done(false); return { spoke: false, provider: "muted" }; }
-      if (typeof text !== "string" || !text.trim()) {
+      if (muted) { noteFailure(null, "muted"); frame(0); done(false); return { spoke: false, provider: "muted" }; }
+      if (!rawText.trim()) {
+        noteFailure(null, "empty_text");
         frame(0);
         done(false);
         return { spoke: false, provider: "none" };
@@ -540,12 +588,15 @@ const TTS = (() => {
       // 原因：onEnd 在 app.js 里承担「气泡标记 🔊 语音已播」，off 时回调会把一句
       // 根本没出声的话标成"已播"。状态与文案必须是同一事实：off = 无声 = 无标记。
       if (cfg.tts === "off") {
+        noteFailure(null, "off");
         frame(0);
         return { spoke: false, provider: "off" };
       }
 
       try {
-        for (const id of providerChain(cfg)) {
+        const chain = providerChain(cfg);
+        if (chain[0] === "none") noteFailure(null, "no_provider");
+        for (const id of chain) {
           if (gen !== speakGen) return { spoke: false, provider: "stale" };
           const p = providers[id];
           if (!p) continue;   // "none"：没有可发声后端
@@ -553,10 +604,15 @@ const TTS = (() => {
             p.speak(text, { cfg, onFrame: frame, onEnd: done, gen })
           );
           if (handled) return { spoke: true, provider: id };
+          if (id !== "server") {
+            noteFailure(id, id === "native" ? "bridge_rejected" : "browser_unavailable");
+          }
         }
       } catch (e) {
+        noteFailure(null, "speak_error");
         console.warn("TTS 链路异常，静默降级:", e && e.message);
       }
+      if (!lastFailure.error) noteFailure(null, "no_provider");
       frame(0);
       done(false);
       return { spoke: false, provider: "none" };
@@ -575,6 +631,7 @@ const TTS = (() => {
       try {
         p = speak(text, onFrame, onEnd);
       } catch (e) {
+        noteFailure(null, "speak_error");
         console.warn("TTS 启动异常（文字照常）:", e && e.message);
         try { if (typeof onFrame === "function") onFrame(0); } catch (_e) {}
         silent({ spoke: false, provider: "error" });
@@ -584,6 +641,7 @@ const TTS = (() => {
         if (res && res.spoke === false) silent(res);
         return res;
       }, e => {
+        noteFailure(null, "speak_error");
         console.warn("TTS 异常（文字照常）:", e && e.message);
         try { if (typeof onFrame === "function") onFrame(0); } catch (_e) {}
         silent({ spoke: false, provider: "error" });
@@ -613,6 +671,8 @@ const TTS = (() => {
       isMuted: () => muted,
       /** 探针：上一次服务端播放的分段耗时（毫秒，性能时间轴；不参与播放逻辑） */
       _lastTiming: () => lastTiming,
+      /** 探针：最近一次 speak 的失败诊断（真正失败才有值；供失败日志与单测） */
+      _lastFailure: () => (lastFailure && lastFailure.error ? lastFailure : null),
       /** 探针：当前 <audio> 的真实状态（诊断"包络没出帧"到底是没解码还是没开播） */
       _probeAudio: () => (currentAudio ? {
         t: +(currentAudio.currentTime || 0).toFixed(3),
