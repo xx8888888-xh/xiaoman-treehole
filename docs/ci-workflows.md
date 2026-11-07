@@ -11,7 +11,7 @@
 | `android.yml` | `workflow_dispatch`、tag `v*`、被 gates/nightly 调用 | JDK 21 + Android SDK 34/build-tools 34 → `assembleDebug`（默认，不签名；可选 release 未签名）→ 上传 APK + 体积写入 job summary | 1.5–2.5 min（实测 89s） | 否 |
 | `android-release.yml` | `workflow_dispatch`、tag `v*`（tag 触发才从 tag commit 读文件） | 四个 Secrets 解出 keystore → `assembleRelease` → `apksigner verify` + `aapt2 dump badging` 断言（包名/versionCode 6/versionName 0.6.0/v2 签名）→ 签名 APK artifact | 1.6 min（实测） | 否 |
 | `gates.yml` | 仅 `workflow_dispatch` | 并行复用 ci / e2e / android 三条（一键全套，手动用；**不再挂 cron**，定时统一由 `nightly.yml` 负责，避免重复计费） | 与最慢的 e2e 接近 | 视子流程 |
-| `nightly.yml` | `schedule`（只在默认分支生效）+ 手动 | 每日 18:00 UTC（北京时间次日 02:00，周一–周六）跑 `ci.yml` 快闸门；每周日同一时刻跑全套慢闸门（ci + e2e 核心四套 + 9 套 ui 矩阵 + android APK） | 每日 ~0.8 min；每周日 ~22 min | 视子流程 |
+| `nightly.yml` | `schedule`（只在默认分支生效）+ 手动 | 每日 18:00 UTC（北京时间次日 02:00，周一–周六）跑 `ci.yml` 快闸门；每周日同一时刻跑全套慢闸门（ci + e2e 核心四套 + 10 套 ui 矩阵 + android APK） | 每日 ~0.8 min；每周日 ~23 min | 视子流程 |
 | `android-ci.yml`（legacy） | 仅 `workflow_dispatch` | 旧的内置模拟器 smoke（AVD + 悬浮窗证据） | 8–12 min | 是（KVM） |
 | `ui-shots.yml` | 仅 `workflow_dispatch`（原 `push: feat/ui-r3` 已收窄） | UI 第三轮云端渲染截图（双主题/桌面/大字号共 8 张），离线 `http.server 8911`，不回放 TTS | 2–3 min | 是（Chromium） |
 | `perf.yml` | 仅 `workflow_dispatch`（原 `push: feat/perf-r3` 已收窄） | 性能采样（load / stream / micro / memory 四段），本地 web 8911 + mock 8912，`AI_MODE=mock`；只出数字不设门槛 | 6–10 min | 是（Chromium） |
@@ -140,15 +140,15 @@ gh run watch <run-id>
 |---|---|---|---|
 | `ci.yml`（4 job 合计） | 0.8 min | 每日 26 次（周一–周六的 nightly）+ 约 10 次 trunk push | ≈ 29 min |
 | `e2e.yml` 核心四套（`browser-e2e`） | 6.1 min | 每周 4–5 次（周日全套 + trunk push） | ≈ 27 min |
-| `e2e.yml` ui 矩阵（8 套，单 job 0.9–3.3 min） | 合计 12.6 min（另 `prepare-ui-scripts` ≈ 0） | 每周 1 次（仅周日全套） | ≈ 54 min |
+| `e2e.yml` ui 矩阵（9 套，单 job 0.9–3.3 min；`test_layout_matrix` 云端 71s） | 合计 13.8 min（另 `prepare-ui-scripts` ≈ 0） | 每周 1 次（仅周日全套） | ≈ 60 min |
 | `android.yml`（debug APK） | 0.8 min | 每周 1 次 | ≈ 3.5 min |
 | `android-release.yml`（签名包） | 1.6 min | 打 tag 时（按每月 4 次估） | ≈ 6.5 min |
 | `quick.yml`（push 轻量：compileall + 2 个纯 stdlib 单测） | ≈ 0.5 min | 与 push 次数同（按 30 次估） | ≈ 15 min |
 | `android-ci.yml`（AVD） | 8–12 min | 仅手动，按 0–2 次估 | 0–24 min |
 | `gates.yml`（手动全套） | ≈ 22 min | 按 1 次估 | ≈ 22 min |
-| **合计** | | | **≈ 157–181 min/月（约 8–9% 预算）** |
+| **合计** | | | **≈ 163–187 min/月（约 8–10% 预算）** |
 
-重算说明（2026-11-06）：一次全量 e2e 的 10 个 job 实测合计 **18.7 min**（核心四套 6.1 + ui 矩阵 12.6）。
+重算说明（2026-11-07）：一次全量 e2e 的 11 个 job 实测合计 **19.9 min**（核心四套 6.1 + ui 矩阵 13.8）。
 Playwright 统一到复合动作后，每个 GUI job 共享 `${{ runner.os }}-playwright-<version>` 缓存，
 安装段从 1.5–2 min 降到 20–30s（命中时），10 个 job 合计每次全量省约 **4–8 min**；
 版本号只在 `action.yml` 的 `default` 一处（当前 1.63.0），不会再出现 1.47/1.63 混装。
