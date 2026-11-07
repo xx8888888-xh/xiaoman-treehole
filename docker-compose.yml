@@ -83,7 +83,7 @@ services:
     # TTS 与 web/mock 共用同一运行时（0 新增依赖）；provider 由环境变量决定
     command: ["python", "server/tts_server.py"]
     ports:
-      # 默认只绑回环；手机要直连时用 TTS_PUBLISH=0.0.0.0 docker compose up -d tts
+      # 只发布到宿主机回环；真机走 `adb reverse tcp:8903 tcp:8903`，不要为了手机直连改成 0.0.0.0
       - "${TTS_PUBLISH:-127.0.0.1}:8903:8903"
     environment:
       <<: *common-env

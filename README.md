@@ -45,12 +45,17 @@ docker compose up -d --build      # 必须在仓库根目录执行：web 与 ass
 ### 语音开箱即用（三选一）
 
 1. **只配对话后端就够了**：App 里 `apiBase` 填内网地址（如 `http://192.168.1.5:8902`），语音地址会自动推导成同机 `:8903`，不用再填第二项。
-2. **一条命令起语音服务**（手机与电脑同一局域网）：
+2. **一条命令起语音服务**（只监听 `127.0.0.1`，不暴露给局域网）：
    ```bash
-   bash scripts/start_tts.sh      # 打印「手机该填的地址」，Ctrl-C 结束
+   bash scripts/start_tts.sh      # 打印该填的地址，Ctrl-C 结束
    ```
-   把打印出的 `http://<局域网IP>:8903` 填进 App「设置 → 语音服务地址」。
-3. **Docker**：`TTS_PUBLISH=0.0.0.0 XIAOMAN_TTS_PROVIDER=edge docker compose up -d tts`。
+   - Android 模拟器：填 `http://10.0.2.2:8903`（QEMU 会把 `10.0.2.2` 转到宿主机回环）；
+   - 真机 USB：先 `adb reverse tcp:8903 tcp:8903`，App 里填 `http://127.0.0.1:8903`。
+3. **Docker**：`XIAOMAN_TTS_PROVIDER=edge docker compose up -d tts`（默认发布到 `127.0.0.1:8903`）。
+
+**绑定地址约定**：所有本机入口默认 `XIAOMAN_BIND_HOST=127.0.0.1`，不监听 `0.0.0.0`；
+只有容器内部才由 compose 注入 `0.0.0.0`，再由 `ports` 映射回宿主机回环。
+确需暴露到局域网时必须显式设 `XIAOMAN_BIND_HOST=0.0.0.0`，风险自负。
 
 三样都不可达时，App 自动落回柔化后的系统 TTS（pitch 1.06 / rate 0.96），文字照常输出。
 
