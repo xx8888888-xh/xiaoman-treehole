@@ -200,3 +200,122 @@
 - 30 个样音：`docs/voice-candidates/samples/*.mp3` + `manifest.json`（逐句指标）
 - 对照带：`docs/voice-candidates/samples/_compare_A2_B4_C_D_E1.mp3`
 - 端到端：`docs/voice-candidates/live/e2e.json`、`live_1..3_*.mp3`、`server.log`
+
+---
+
+## 11. 静音禁令（2026-11-07 20:2x，优先级高于一切验证动作）
+
+**触发原因**：用户在 20:1x 两次听到非预期声音。已确认其中一次是
+2026-11-07 20:19:47 用 `ffplay` 播放 `samples/G_audible_check_1.mp3`（5.26s，退出码 0）。
+
+**禁令（后续任何会话必须遵守）**：
+
+1. **本机不许发出任何声音**。禁止 `ffplay` / `mpv` / VLC / Windows Media Player /
+   `Start-Process` 打开音频；禁止 SAPI / `System.Speech` / PowerShell
+   `SpeechSynthesizer` 朗读；禁止在带音频输出的模拟器里播放语音。
+2. **起模拟器一律带 `-no-audio`**，且启动前确认 AVD `config.ini` 里
+   `hw.audioInput=no`、`hw.audioOutput=no`。
+   本仓库现场：`D:\android-avd\host-boot.ps1` 已含 `-no-audio`；
+   `D:\android-avd\treehole_api34.avd\config.ini` 已是 `hw.audioInput=no` / `hw.audioOutput=no`。
+3. **可听性验证改为纯离线**：文件级指标（时长 / 整体 RMS / 峰值 / 非静音占比）+
+   离线 ASR 回听（vosk small-cn）+ CER。不再做人耳抽查，也不再询问用户"要不要听"。
+   门限：时长 2–6s、RMS ≥ 0.02（≈ -34 dBFS）、峰值 ≥ 0.05（≈ -26 dBFS），
+   脚本见实验室 `voicelab/gen_audible.py`，报告 `samples/audible_check.json`。
+
+---
+
+## 12. 服务绑定地址约定（2026-11-07 20:30）
+
+**问题**：取证发现 `tts_server.py` 曾被以 `XIAOMAN_BIND_HOST=0.0.0.0` 起在 `:8903`，
+同一局域网的其它机器可直接连上这个没有鉴权的合成接口。
+
+**约定**：
+
+- 本机所有启动入口默认 `XIAOMAN_BIND_HOST=127.0.0.1`（`server/xm_config.py` 默认值），
+  **不监听 `0.0.0.0`**；`scripts/start_tts.sh` 不再自动绑全网卡。
+- 只有容器内部才由 `docker-compose.yml` 注入 `0.0.0.0`，再由 `ports` 映射回宿主机
+  `127.0.0.1:8903`；发布地址默认 `${TTS_PUBLISH:-127.0.0.1}`。
+- 真机接入不再靠局域网直连，改走 USB 反向端口：`adb reverse tcp:8903 tcp:8903`，
+  App 里填 `http://127.0.0.1:8903`。模拟器仍用 `http://10.0.2.2:8903`
+  （QEMU 用户态网络把 `10.0.2.2` 转到宿主机回环，绑 `127.0.0.1` 也能连）。
+- 确需暴露局域网时必须显式设置 `XIAOMAN_BIND_HOST=0.0.0.0`，属主动选择。
+
+**实测（20:30，本机）**：
+
+| 目标 | 结果 |
+|---|---|
+| `curl http://127.0.0.1:8903/health` | `200`，exit 0 |
+| `curl http://192.168.0.100:8903/health`（本机以太网 IP） | `000`，exit 7（connection refused） |
+| `curl http://172.19.80.1:8903/health`（WSL 虚拟网卡） | `000`，exit 7 |
+| `Get-NetTCPConnection -LocalPort 8903 -State Listen` | 仅 `127.0.0.1:8903` |
+
+---
+
+## 13. 开箱即用（出厂不再 `ttsServer=""` 空着）
+
+**四层，按优先级**：
+
+1. **注入**：`window.XIAOMAN_TTS_SERVER`（CI / 内嵌页面用）。
+2. **显式设置**：设置页「语音服务地址」（`cfg.ttsServer`）。
+3. **同机推导**（本轮新增，解决"用户没填第二项"）：对话后端 `apiBase` 是**内网地址**时，
+   语音地址自动推导为 `http://<同 IP>:8903`。只对
+   `10.*` / `192.168.*` / `172.16–31.*` / `*.local` 生效；公网 API 域名、
+   `127.0.0.1`/`localhost`（在手机上指向手机自己）**一律不猜**，避免造出一个永远连不上、
+   每句白等 10s 的 provider。
+4. **兜底**：以上都不可达 → 柔化后的系统 TTS（pitch 1.06 / rate 0.96），文字照常。
+
+**设置页提示与判定同源**：`app.js` 的 TTS 状态改用 `TTS.resolveServer(win, cfg)`，
+不再只看 `cfg.ttsServer`——否则"只填了内网后端"的用户会被提示成"安卓系统语音"，
+与实际发声相反（本轮实机发现并修复）。
+
+**为什么做不到真正的零配置**：不背 60MB+ 离线模型的前提下，语音必然要一个在线服务；
+能做的是"用户只填一次他已经必须填的对话后端，语音自动跟上"，以及一条命令起服务。
+
+---
+
+## 14. 真机（AVD）确认记录
+
+环境：`treehole_api34`（API 34 x86_64），`-no-audio` + `hw.audioInput=no` / `hw.audioOutput=no`。
+宿主机 `provider=edge`，服务只绑 `127.0.0.1:8903`；模拟器用 `http://10.0.2.2:8903`
+（QEMU 把 `10.0.2.2` 转到宿主机回环）。
+
+| 项 | 结果 |
+|---|---|
+| 安装 | `adb install -r` 成功（1.1M，`v060-debug`），`ASSET_CHECK PASS` 74 文件 / 1,395,310 字节 |
+| 设置页提示 | 后端填 `http://10.0.2.2:8902`、语音地址留空 → 显示「实际发声：服务端语音」 |
+| 服务端日志 | `OPTIONS /tts 204`、`TTS generating: provider=edge voice=zh-CN-XiaoyiNeural`、`POST /tts 200` |
+| 产出音频 | `.cache/tts-avd/*.mp3`（23,616 / 20,016 字节，真实 edge 音频），已存证 `docs/voice-candidates/live/avd_edge_playback.mp3` |
+| 降级 | 杀掉服务后：logcat `server tts 不可用，降级本机语音`，界面提示「语音暂时没法出声，文字照常」，回复文字正常 |
+| 听感局限 | 模拟器无音频输出，**不以"编译通过"代替"听着可以"**；音色听感以服务端真实 mp3 + ASR CER 为准 |
+
+**未决问题（本轮实机新发现）**：12:13 那次发消息，服务端收到了请求并 `200` 返回，
+但 WebView 侧 `fetch` 报 `Failed to fetch`，界面落到兜底提示；同一 URL 在 19:52 是成功的。
+日志里同时有 mixed-content 警告（页面跑在 `https://appassets.androidplatform.net`，请求的是
+`http://10.0.2.2:8903`）。已核对服务端 `Access-Control-Allow-Origin: *` 存在、preflight `204` 正常，
+因此怀疑是混合内容 / 私有网络访问（PNA）在**响应侧**拦截。下一步：真机复现 + 抓 WebView 详细错误，
+必要时把 TTS 请求改走原生桥（`AndroidNet`）或本地 https 代理，彻底绕开混合内容。
+
+---
+
+## 15. 兜底音色（F 组）与对照带
+
+兜底不是"只写参数"：用 ffmpeg 从原调基线做等价信号处理，
+`pitch 1.06` + `rate 0.96`（`asetrate×1.06, aresample, atempo=0.96/1.06`），
+因为 SAPI 的 SSML prosody 实测被 Huihui 忽略（时长与原始完全一致）。
+
+| 文件 | 时长 | F0 中位 [p10–p90] | 字速 cps | 静音率 | CER |
+|---|---|---|---|---|---|
+| `A_sys_huihui_pitch100_1_greet`（基线） | 6.387s | 223.8 [155.3–280.7] | 2.82 | 0.503 | 0.056 |
+| `F_sys_fallback_096_106_1_greet` | 6.627s | 231.9 [163.3–296.3] | 2.72 | 0.485 | 0.056 |
+| `F_..._2_comfort` | 8.017s | 205.1 [145.2–285.7] | 3.12 | 0.400 | 0.080 |
+| `F_..._3_rest` | 9.298s | 219.2 [142.9–296.3] | 2.90 | 0.397 | 0.037 |
+
+结论：F0 约 +4%（相对基线），字速约 0.96×，CER 与基线同级——"语速略慢、音高略高"落到了可听层面，
+不是纸面参数。对照带已更新为 `samples/_compare_A2_B4_C_D_E1_F.mp3`（6 组、120s、整片解码 0 错）。
+
+**本轮时间账**：≈1h50m；合成 3 次（G 组严格门）+ 1 次（F 组 ffmpeg 派生，不算合成）；
+耗时主项 = AVD 反复掉线重连（adb daemon 每次调用重启 + 模拟器随父 shell 退出）与
+12:13 失败链路的日志取证。
+
+
+
