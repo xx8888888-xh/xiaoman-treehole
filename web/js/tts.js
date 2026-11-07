@@ -673,6 +673,8 @@ const TTS = (() => {
       _lastTiming: () => lastTiming,
       /** 探针：最近一次 speak 的失败诊断（真正失败才有值；供失败日志与单测） */
       _lastFailure: () => (lastFailure && lastFailure.error ? lastFailure : null),
+      /** 探针：开播超时阈值（音色线若调整 7s→10s，单测按此值 tick，不硬编码） */
+      _audioStartTimeout: () => AUDIO_START_TIMEOUT,
       /** 探针：当前 <audio> 的真实状态（诊断"包络没出帧"到底是没解码还是没开播） */
       _probeAudio: () => (currentAudio ? {
         t: +(currentAudio.currentTime || 0).toFixed(3),
