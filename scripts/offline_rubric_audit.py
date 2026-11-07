@@ -707,7 +707,67 @@ def rubric_v2_audit():
     }
 
 
+def msg_length_audit():
+    """单条长度判据：按客户端 || 口径，单条 >40 判红；拆条后每条 ≤30 通过。
+
+    红样本取自真实复测里最长的一条（detail-food-03，49 字一整条）；
+    绿样本是同一内容按 || 拆成两条。另证明换行不算分条、40/41 边界、
+    沉默短句不受影响。
+    """
+    universal = json.loads(CASES.read_text(encoding="utf-8"))["universal"]
+    checks = []
+
+    def add(name, got, want, note=""):
+        checks.append({"name": name, "got": got, "want": want,
+                       "pass": got == want, "note": note})
+
+    def verdict(category, reply, **extra):
+        case = {"id": "sim-msg", "category": category}
+        case.update(extra)
+        r = ev.CaseResult(case)
+        r.turns.append(ev.Turn("u", {"reply": reply}, 0))
+        cfg = ev._case_cfg(case, universal)
+        ev.check_turn(r, r.turns[-1], [], cfg, universal)
+        return r.passed, [f["reason"] for f in r.failures]
+
+    long_real = ("哈哈我懂，螺蛳粉这味道是挺劝退的，我上次煮完团子"
+                 "吓得躲沙发底下去了。室友皱眉太正常了，你还能吃完也是个狠人。")
+    split_ok = ("哈哈我懂，螺蛳粉这味道是挺劝退的||"
+                "我上次煮完团子吓得躲沙发底下去了，室友皱眉太正常了")
+    red_pass, red_reason = verdict("日常倾诉", long_real)
+    add("真实最长条(49字整条) -> 红", red_pass, False,
+        "；".join(red_reason)[:60])
+    add("同一内容拆成两条 -> 绿", verdict("日常倾诉", split_ok)[0], True)
+
+    nl = ("今天投了二十份简历都没回音，换谁都得焦虑一会儿，晚上肯定也睡不好\n"
+          "我之前更惨，投了三十多家才捞到一个面试，还是外包岗")
+    pipe = nl.replace("\n", "||")
+    add("换行不算分条(53字一整条) -> 红", verdict("具体细节", nl)[0], False)
+    add("换成||同样内容 -> 绿", verdict("具体细节", pipe)[0], True)
+
+    add("边界 40 字 -> 绿", verdict("日常倾诉", "这" * ev.MSG_HARD_CHARS)[0], True)
+    add("边界 41 字 -> 红", verdict("日常倾诉", "这" * (ev.MSG_HARD_CHARS + 1))[0], False)
+    add("沉默短句不受影响", verdict("沉默", "嗯，睡吧。", silence=True)[0], True)
+    add("msg_lengths 按||切分", ev.msg_lengths("甲||乙"), [1, 1])
+    add("默认单条上限=40",
+        ev._case_cfg({}, universal)["max_msg_chars"], 40)
+    add("用例可显式覆盖",
+        ev._case_cfg({"max_msg_chars": 30}, universal)["max_msg_chars"], 30)
+    add("提示词写了断条规则",
+        "超 30 字断两条" in pc.SERVER_SYSTEM_PROMPT, True)
+    return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
+
+
 def main():
+    if "--msg-length" in sys.argv:
+        a = msg_length_audit()
+        print("== 单条长度判据（>40 红 / 拆条绿） ==")
+        for c in a["checks"]:
+            print("  [%s] %s -> got=%r want=%r%s"
+                  % ("PASS" if c["pass"] else "RED", c["name"],
+                     c["got"], c["want"], (" | " + c["note"]) if c["note"] else ""))
+        return 0 if a["all_pass"] else 1
+
     if "--advice-scope" in sys.argv:
         a = advice_scope_audit()
         print("== 建议口径锁死 ==")

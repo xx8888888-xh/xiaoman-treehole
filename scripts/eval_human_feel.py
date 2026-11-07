@@ -132,6 +132,18 @@ def reply_parts(reply: str) -> list:
     return [p.strip() for p in (reply or "").split("||") if p.strip()]
 
 
+# 单条长度判据：提示词要求每条 ≤30 字；线上真实回复普遍 30-40，
+# 硬上限先定 40（超过即判红），>30 只作为统计指标，避免把正常长句一刀切。
+MSG_SPEC_CHARS = 30
+MSG_HARD_CHARS = 40
+
+
+def msg_lengths(reply: str) -> list:
+    """按客户端口径（|| 分条）算每条可见字数；没有分条时按整条算。"""
+    parts = reply_parts(reply)
+    return [visible_len(p) for p in parts] if parts else [visible_len(reply)]
+
+
 def assistant_text(payload: dict) -> str:
     parts = [payload.get("reply") or ""]
     hook = payload.get("hook")
@@ -199,6 +211,8 @@ def _case_cfg(case: dict, universal: dict) -> dict:
     return {
         "max_chars": case.get("max_chars", universal["max_chars"]),
         "max_msgs": case.get("max_msgs", universal["max_msgs"]),
+        "max_msg_chars": case.get("max_msg_chars",
+                                  universal.get("max_msg_chars", MSG_HARD_CHARS)),
         "max_advice_turns": _advice_limit(case, universal),
         "max_questions": case.get("max_questions_per_reply",
                                   universal["max_questions_per_reply"]),
@@ -217,6 +231,10 @@ def check_turn(result: CaseResult, turn: Turn, prev: list, cfg: dict,
 
     if visible_len(reply) > cfg["max_chars"]:
         result.fail(idx, "超长 %d>%d：%s" % (visible_len(reply), cfg["max_chars"], reply))
+    over_msg = [n for n in msg_lengths(reply) if n > cfg["max_msg_chars"]]
+    if over_msg:
+        result.fail(idx, "单条过长 %d>%d（该断成两条再发）：%s"
+                    % (max(over_msg), cfg["max_msg_chars"], reply))
     if len(turn.parts) > cfg["max_msgs"]:
         result.fail(idx, "条数 %d>%d" % (len(turn.parts), cfg["max_msgs"]))
     m = BOILERPLATE_RE.search(reply)
@@ -1020,6 +1038,8 @@ def case_stats(res) -> dict:
                 recall_checks += 1
                 if any(k in t.text for k in RECALL_MARKERS):
                     recall_natural += 1
+    msg = [n for t in turns for n in msg_lengths(t.reply)]
+    split_turns = sum(1 for t in turns if len(t.parts) > 1)
     return {
         "id": res.case["id"],
         "category": res.case["category"],
@@ -1034,6 +1054,11 @@ def case_stats(res) -> dict:
         "repeat": repeat,
         "recall_checks": recall_checks,
         "recall_natural": recall_natural,
+        "msg_count": len(msg),
+        "msg_over30": sum(1 for n in msg if n > MSG_SPEC_CHARS),
+        "msg_over40": sum(1 for n in msg if n > MSG_HARD_CHARS),
+        "msg_max": max(msg) if msg else 0,
+        "split_turns": split_turns,
         "failures": enrich_failures(res),
         # 原文留档：以后任何“翻绿/回带”都能被逐轮复核，不靠记忆槽推断
         "replies": [{"turn": i + 1, "user": t.user, "reply": t.reply}
@@ -1054,6 +1079,11 @@ def metrics_from_stats(stats: list) -> dict:
     repeat = sum(s["repeat"] for s in stats)
     checks = sum(s["recall_checks"] for s in stats)
     natural = sum(s["recall_natural"] for s in stats)
+    msg_count = sum(s.get("msg_count", 0) for s in stats)
+    msg_over30 = sum(s.get("msg_over30", 0) for s in stats)
+    msg_over40 = sum(s.get("msg_over40", 0) for s in stats)
+    msg_max = max([s.get("msg_max", 0) for s in stats] or [0])
+    split_turns = sum(s.get("split_turns", 0) for s in stats)
     return {
         "turns": total_turns,
         "protocol_errors": sum(s["protocol_errors"] for s in stats),
@@ -1069,6 +1099,13 @@ def metrics_from_stats(stats: list) -> dict:
         "recall_checks": checks,
         "recall_natural": natural,
         "recall_natural_rate": round(natural / (checks or 1), 4),
+        "msg_count": msg_count,
+        "msg_over30": msg_over30,
+        "msg_over30_rate": round(msg_over30 / (msg_count or 1), 4),
+        "msg_over40": msg_over40,
+        "msg_max": msg_max,
+        "split_turns": split_turns,
+        "split_rate": round(split_turns / total, 4),
     }
 
 
@@ -1138,6 +1175,10 @@ def compute_metrics(results: list, advice_turns: int) -> dict:
                     if any(k in t.text for k in RECALL_MARKERS):
                         recall_natural += 1
 
+    # 单条长度 / 分条率：按客户端 || 口径统计
+    lens = [n for t in turns for n in msg_lengths(t.reply)]
+    split_turns = sum(1 for t in turns if len(t.parts) > 1)
+
     return {
         "turns": len(turns),
         "protocol_errors": sum(1 for t in turns if t.payload.get("_parse_error")),
@@ -1153,6 +1194,14 @@ def compute_metrics(results: list, advice_turns: int) -> dict:
         "recall_checks": recall_checks,
         "recall_natural": recall_natural,
         "recall_natural_rate": round(recall_natural / (recall_checks or 1), 4),
+        "msg_count": len(lens),
+        "msg_over30": sum(1 for n in lens if n > MSG_SPEC_CHARS),
+        "msg_over30_rate": round(sum(1 for n in lens if n > MSG_SPEC_CHARS)
+                                  / (len(lens) or 1), 4),
+        "msg_over40": sum(1 for n in lens if n > MSG_HARD_CHARS),
+        "msg_max": max(lens) if lens else 0,
+        "split_turns": split_turns,
+        "split_rate": round(split_turns / total, 4),
     }
 
 

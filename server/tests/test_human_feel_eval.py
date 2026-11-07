@@ -124,6 +124,31 @@ class HumanFeelEvalTest(unittest.TestCase):
         self.assertEqual(failure["turn"], 2)
         self.assertEqual(failure["prev_replies"], ["排队排了四十分钟"])
 
+    def test_single_message_over_hard_limit_fails(self):
+        case = {"id": "msg-long", "category": "日常倾诉"}
+        universal = self.data["universal"]
+        cfg = ev._case_cfg(case, universal)
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("u", {"reply": "这" * 41}, 0))
+        ev.check_turn(res, res.turns[-1], [], cfg, universal)
+        self.assertFalse(res.passed)
+        self.assertIn("单条过长", res.failures[0]["reason"])
+        self.assertEqual(ev.visible_len(res.turns[0].reply), 41)
+
+    def test_split_message_passes_and_counts(self):
+        case = {"id": "msg-split", "category": "日常倾诉"}
+        universal = self.data["universal"]
+        cfg = ev._case_cfg(case, universal)
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("u", {"reply": "甲" * 20 + "||" + "乙" * 20}, 0))
+        ev.check_turn(res, res.turns[-1], [], cfg, universal)
+        self.assertTrue(res.passed)
+        stats = ev.case_stats(res)
+        self.assertEqual(stats["msg_count"], 2)
+        self.assertEqual(stats["msg_over30"], 0)
+        self.assertEqual(stats["msg_max"], 20)
+        self.assertEqual(stats["split_turns"], 1)
+
     def test_pass_rate_and_regression(self):
         by_cat = {}
         failures = []
