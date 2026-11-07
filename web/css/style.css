@@ -1172,6 +1172,10 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
    * 叠加 88 的聊天区兜底高会把输入栏顶到 b=444.5（超出视口 81.5px）。
    * 只在有提示条时解除 88 的兜底；无提示条的日常横屏仍是两条气泡高，设计不变。 */
   #chatArea.has-notice #chatScroll { min-height: 0; }
+  /* 短横屏 + 提示条时，排队条与提示条的「再发一次」语义重复（都在说这条没送出去、
+   * 都提供重试），让位给提示条：实测 782×363 省 52px，inputbar b=368.5→316.3，
+   * 既不越硬线 ih-8，也不比提示条出现前（319.3）更低。提示条收起后排队条自动回来。 */
+  #chatArea.has-notice #pendingBar { display: none; }
 }
 
 /* ---------- 记忆抽屉空态 ---------- */

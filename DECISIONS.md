@@ -27,6 +27,56 @@ CI 门禁（`ci.yml` / `e2e.yml` / `android-e2e.yml` 的 job 与判定）未改�
 
 ---
 
+# DECISIONS · 2026-11-07 第二轮（横屏布局 / 存储满 / greet / 时间炸弹）
+
+用户明确指令（四项）：修横屏输入栏被顶出视口（硬线 `inputBarBottom ≤ viewportH − 8`，横竖屏同一把尺）、
+存储满内存兜底批准但必须一次提示「先在内存里，重启会丢」、⑧ greet 时红时绿查根因、全仓硬编码日期改相对并加守卫。
+
+## 1. 横屏布局（用户批准修法）
+
+- 提示条出现时压缩聊天区：`showNotice/hideNotice` 维护 `#chatArea.has-notice`；
+  `@media (orientation:landscape) and (max-height:420px)` 下 `#chatArea.has-notice #chatScroll { min-height:0 }`。
+  **"横屏 chatH 保 88" 只在无提示条时成立**，提示条占用高度时才让出——没有删 88 规则。
+- `.inputbar` 增加 `margin-bottom: var(--space-3)`（12px）：云端竖屏实测 inputbar 底边 = 视口底边（751.3/751），
+  任何浮层误差都会越过硬线；抬高 12px 后 `b=739.3 ≤ 743`。
+- 走查断言收紧（不是放宽）：`inputbar_problems` 从 `b > ih+0.5` 改成 `b > ih-8`（横竖屏都跑）；
+  横屏提示条出现后额外断言输入栏不后移（>2px 判红），上移超过 40px 也判红（"位置不动或小幅上移"）。
+- 保留「再发一次」按钮 82.2×34 命中检查（`fail_layout_problems` 的 `hitAtCenter` 在横屏同一网关内照跑）。
+
+## 2. 存储满内存兜底提示（用户批准产品行为）
+
+- `app.js` 新增 `window.__cfgMemFallback`：落盘失败时第一次弹 toast + 提示条
+  「本机存储满了：设置我先记在内存里，重启会丢。」；后续调用只计数、不再弹（`__cfgMemFallbackCount() === 1`）。
+- `__storageFull` 在配置已转内存后，后续存储提示追加「设置我先记在内存里，重启会丢。」，
+  保证最后一条可见提示仍含"重启会丢"（不是静默假成功）。
+- `feature_loop · 存储满` 新增断言：计数正好 1、文案含"内存"/"重启会丢"、`重启会丢` 只出现一次、再发一次后计数仍为 1。
+
+## 3. 时间炸弹守卫（用户明确要求加门禁）
+
+- 新增 `scripts/check_time_bombs.py`：扫描 `scripts/test_*.py`、`scripts/emulator_*.py`、
+  `ui_tour.py / ux_walkthrough.py / shot.py` 里的 `YYYY-MM-DD` 字面量（注释行跳过），命中即 exit 1。
+- 例外（写入脚本 docstring）：`test_memory_recall.py` 与 `web/tests/**`——纯单元测试，时间全部显式注入
+  （`new Date('...')`），不读真实时钟，不是时间炸弹。
+- `ci.yml` python job 增加一步 `python scripts/check_time_bombs.py`（用户明确要求"测试里写死绝对日期即红"）。
+- `test_roundtrip.py` 的 `at_local` 已改为"明天 08:00"（`datetime.now() + timedelta(days=1)`）。
+
+## 5. 抓网页命令约束（用户 2026-11-07 追加，立即生效）
+
+- 所有 PowerShell 抓网页一律 `Invoke-WebRequest -UseBasicParsing`，或直接用 `curl.exe`；
+  禁止不带 `-UseBasicParsing`（PowerShell 5.1 会弹「分析页面时可能会运行网页中的脚本代码」确认框，卡会话）。
+- 自查本轮：仅两次 `Invoke-WebRequest`（`http://127.0.0.1:8901/index.html` 与 `http://127.0.0.1:8902/health` 健康检查），
+  均带 `-UseBasicParsing`；`scripts/**` 与探针目录内无 `Invoke-WebRequest` 调用，无需改脚本。
+- 后续探针/巡检脚本统一 `curl.exe` 或 `-UseBasicParsing`，写入脚本头注释。
+
+## 6. ⑧ 再访 greet 复诊
+
+- 仅加诊断、不改断言：`test_onboarding.py` 在 ⑧ 失败时打印 reload 之后的 `[probe] greet*` /
+  `history restored` / `GREET_FAIL` 控制台行，以及 `xiaoman_greet_day`、today、`xiaoman_memory`、pending 数快照。
+- 待定论：greet 只读 `xiaoman_memory`（profile），不读 `MemoryStore` pins；⑧ 断言要的"阿秋/考试"依赖 profile。
+  结论与依据见本轮报告。
+
+---
+
 # DECISIONS · 2026-11-07 语音可断言线
 
 本轮授权清单（用户明确：测试脚本、断言实现、文档由 AI 自行决定，写入本文件）。
