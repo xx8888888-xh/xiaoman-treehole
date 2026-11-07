@@ -7,7 +7,7 @@
 | workflow | 触发 | 内容 | 典型耗时 | 是否用 Docker / 浏览器 |
 |---|---|---|---|---|
 | `ci.yml` | push（main / feat/** / fix/** / zhiqiu/**）、PR→main、手动、被 gates 调用 | Node 22：`npm ci` + `npm test`（基线 181）+ Biome（0 error）；Python 3.12：`compileall` + `build_assets.sh` + `verify_assets.py` + `pytest`（145 passed + 19 subtests）；`python-scripts` 矩阵：`test_mock_api`（12/12）+ `test_memory_recall`（152/152，进程内起 mock，不进 Docker） | 0.5–1 min（四 job 并行，单个 ≤25s） | 否 |
-| `e2e.yml` | push→main、手动、被 gates/nightly 调用 | job `browser-e2e`：`docker compose` 起 web 8901 / mock 8902 / tts 8903（`XIAOMAN_TTS_PROVIDER=none` 静音），串行跑核心四套（`test_e2e` 60 / `test_feature_loop` 43 / `test_live2d_original` 24 / `test_raf_budget` 8）；job `ui-suites`（matrix）：8 套已迁脚本逐脚本独立 job（`test_paging` 除外，见 §7） | 核心 5.6–6.3 min；ui 矩阵单 job 1–3.4 min | 是 |
+| `e2e.yml` | push→main、手动、被 gates/nightly 调用 | job `browser-e2e`：`docker compose` 起 web 8901 / mock 8902 / tts 8903（`XIAOMAN_TTS_PROVIDER=none` 静音），串行跑核心四套（`test_e2e` 60 / `test_feature_loop` 43 / `test_live2d_original` 24 / `test_raf_budget` 8）；job `ui-suites`（matrix）：9 套已迁脚本（含 `test_layout_matrix` 布局矩阵）逐脚本独立 job（`test_paging` 除外，见 §7） | 核心 5.6–6.3 min；ui 矩阵单 job 1–3.4 min | 是 |
 | `android.yml` | `workflow_dispatch`、tag `v*`、被 gates/nightly 调用 | JDK 21 + Android SDK 34/build-tools 34 → `assembleDebug`（默认，不签名；可选 release 未签名）→ 上传 APK + 体积写入 job summary | 1.5–2.5 min（实测 89s） | 否 |
 | `android-release.yml` | `workflow_dispatch`、tag `v*`（tag 触发才从 tag commit 读文件） | 四个 Secrets 解出 keystore → `assembleRelease` → `apksigner verify` + `aapt2 dump badging` 断言（包名/versionCode 6/versionName 0.6.0/v2 签名）→ 签名 APK artifact | 1.6 min（实测） | 否 |
 | `gates.yml` | 仅 `workflow_dispatch` | 并行复用 ci / e2e / android 三条（一键全套，手动用；**不再挂 cron**，定时统一由 `nightly.yml` 负责，避免重复计费） | 与最慢的 e2e 接近 | 视子流程 |
@@ -120,7 +120,7 @@ gh run watch <run-id>
 - `ci.yml` 内 4 个 job（node / python / python-scripts×2）天然并行，墙钟 = 最慢的 node ≈ 25s。
 - `gates.yml` / `nightly.yml` 的 ci / e2e / android 也并行，墙钟 ≈ 最慢的 e2e，不用串行累加。
 - 单个 e2e job 内部是**串行四套**（共用同一套容器；并行会互抢 8901–8903 端口与 CPU）。若以后要并行，需给每套独立端口与独立 compose 项目名。
-- `ui-suites` 是 9 个独立 job 的矩阵（`fail-fast: false`），彼此并行；每个 job 自带一套 compose，端口相同但不互相看见（job 隔离）。
+- `ui-suites` 是 10 个独立 job 的矩阵（`fail-fast: false`），彼此并行；每个 job 自带一套 compose，端口相同但不互相看见（job 隔离）。
 
 **触发策略（防止烧分钟）**
 
@@ -168,7 +168,7 @@ Playwright 统一到复合动作后，每个 GUI job 共享 `${{ runner.os }}-pl
 | 闸门 | 相关脚本 | 为什么还在本地 |
 |---|---|---|
 | AVD / MuMu 模拟器 | `emulator_adapt_sweep.py`、`emulator_float_check.py`、`emulator_power_probe.py`、`android-ci.yml`(legacy) | 需要 KVM/MuMu、adb、厂商 ROM、悬浮窗与系统权限；云端无真机 |
-| Playwright 浏览器（第二批 9 套，**已迁移 8 套**） | `test_appearance.py`、`test_lifeline_ui.py`、`test_onboarding.py`、`test_phase3_e2e.py`、`test_stream_e2e.py`、`ui_tour.py`、`ux_walkthrough.py`、`shot.py` | 已进 `e2e.yml` 的 `ui-suites` 矩阵，逐脚本独立 job + artifact（`ui-<script>-<sha>`，7 天）。云端 run：appearance 42019565634 / lifeline 42021974339 / onboarding 42021167878 / shot 42022702031 / stream 42023342877 / phase3 42026420958 / ui_tour 42027542248 / ux_walkthrough 42028417478 |
+| Playwright 浏览器（第二批 10 套，**已迁移 9 套**） | `test_appearance.py`、`test_lifeline_ui.py`、`test_onboarding.py`、`test_phase3_e2e.py`、`test_stream_e2e.py`、`ui_tour.py`、`ux_walkthrough.py`、`shot.py`、`test_layout_matrix.py` | 已进 `e2e.yml` 的 `ui-suites` 矩阵，逐脚本独立 job + artifact（`ui-<script>-<sha>`，7 天）。云端 run：appearance 42019565634 / lifeline 42021974339 / onboarding 42021167878 / shot 42022702031 / stream 42023342877 / phase3 42026420958 / ui_tour 42027542248 / ux_walkthrough 42028417478 / layout_matrix 见 `DECISIONS.md` §12 |
 | `test_paging.py`（**迁不动，未进矩阵**） | `test_paging.py` | 两项 WebGL 显存断言在当前环境恒红且非 CI 引入：①`stage` 已换成 Canvas 2D 分层立绘（`LayeredPuppet`），不存在 `texImage2D`，探针永远 0；②`2048 档 > 1024 档 × 2.5` 与档位面积比（s070/s050 decoded = 9791028/5001068 ≈ 1.96×）不自洽。本地基线同样 12/14（`docs/UI_R2.md` 已记录）。其它 12 项（分页、窗口恒定、60fps）云端可过，但**不放宽断言、不 skip**，所以不塞进闸门制造永久红 |
 | 真实模型 / 真实 TTS | `test_freemodels.py`、`verify_tts.py`、`measure_ttft.py` | 需要真实 API key/额度、音频设备与延迟测量；云端全程静音 |
 | release 签名 | `build_apk.sh` | 云端由 `android-release.yml` 出签名包；本地只用于验证 keystore/口令 |

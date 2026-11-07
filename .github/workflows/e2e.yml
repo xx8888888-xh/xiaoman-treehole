@@ -19,7 +19,7 @@ on:
         required: false
         default: "true"
       ui_scripts:
-        description: "额外脚本：all 或逗号分隔（all = 已绿的 8 套；test_paging 需显式点名，见 docs/ci-workflows.md §7）"
+        description: "额外脚本：all 或逗号分隔（all = 已绿的 9 套，含 layout_matrix 布局矩阵；test_paging 需显式点名，见 docs/ci-workflows.md §7）"
         required: false
         default: "all"
       raf_seconds:
@@ -196,7 +196,8 @@ jobs:
         if: always()
         run: docker compose down -v --remove-orphans || true
 
-  # 额外 9 套 Playwright 脚本：每个脚本一个矩阵项 → 独立 job 红/绿、独立 artifact（截图 + 结果 JSON）。
+  # 额外 10 套 Playwright 脚本（test_paging 需显式点名 + 9 套默认）：每个脚本一个矩阵项 →
+  # 独立 job 红/绿、独立 artifact（截图 + 结果 JSON）。
   # 共用同一套 compose 服务；矩阵项之间是不同 runner，不抢 8901-8903 端口。
   prepare:
     name: prepare-ui-scripts
@@ -212,10 +213,12 @@ jobs:
           set -euo pipefail
           sel="${{ inputs.ui_scripts }}"
           if [ "$sel" = "all" ]; then
-            # all = 云端已验证跑绿的 8 套。test_paging 的两项 WebGL 显存断言为既有环境红项
+            # all = 云端已验证跑绿的 9 套。test_paging 的两项 WebGL 显存断言为既有环境红项
             # （stage 已换 Canvas 2D，texImage2D 探针恒 0；2048/1024 阈值与档位面积比不自洽），
             # 不放宽断言、不 skip，因此不进默认矩阵；需要时显式 ui_scripts=test_paging。
-            json='["test_appearance","test_lifeline_ui","test_onboarding","test_phase3_e2e","test_stream_e2e","ui_tour","ux_walkthrough","shot"]'
+            # test_layout_matrix：42 条布局断言（键盘高度/字体放大/转屏瞬时），本地实测 ~2 分钟；
+            # 它抓到过 h=284 溢出 130px 这类其余用例全漏的真问题，故纳入默认矩阵。
+            json='["test_appearance","test_lifeline_ui","test_onboarding","test_phase3_e2e","test_stream_e2e","ui_tour","ux_walkthrough","shot","test_layout_matrix"]'
           else
             json=$(python3 -c 'import json,sys; print(json.dumps([s.strip() for s in sys.argv[1].split(",") if s.strip()]))' "$sel")
           fi
@@ -316,6 +319,7 @@ jobs:
             test_stream_e2e) run test_stream_e2e python scripts/test_stream_e2e.py ;;
             ui_tour) run ui_tour python scripts/ui_tour.py ;;
             ux_walkthrough) run ux_walkthrough python scripts/ux_walkthrough.py ;;
+            test_layout_matrix) run test_layout_matrix env XIAOMAN_LAYOUT_SHOTS="$OUT/layout" python scripts/test_layout_matrix.py ;;
             shot)
               for s in base chat poke crisis; do
                 run "shot-$s" python scripts/shot.py "$s"

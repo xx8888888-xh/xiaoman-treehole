@@ -184,3 +184,50 @@ localStorage、刷新后仍在。本地 50/50 PASS。
   防止 limitOff 为空后在免限窗口（21:00-06:00）按 30% 误杀满负荷模拟器。
 - 窗口判定实测：22:00 -> LIMIT=off、14:00 -> LIMIT=on、 6:00 -> LIMIT=on；两个 ps1 语法解析 OK。
 - 本机临时诊断 .ps1（tools 下 4 个：fetch_shots/gh_api/r5_dispatch/sample_suite）已改名为 .ps1.disabled。
+
+## 10. 软键盘压高度会让 CSS `orientation` 翻成 landscape（最容易再踩）
+
+**现象**：同一台竖屏手机，键盘弹起后视口 414×364，`@media (orientation: portrait)` 的规则**一条都不命中**。
+
+**原因**：`orientation` 媒体特性看的是 **viewport 宽高比**，不是设备物理方向。键盘把 `innerHeight`
+压到小于 `innerWidth` 时，浏览器就把这个视口判成 landscape。于是所有按 `portrait` 写的键盘期修复
+（压缩舞台、收顶栏等）集体失效，输入栏照旧被顶出视口。
+
+**实测（本机 headless Chromium，失败提示条 + 语音提示 + 排队条最坏叠层）**：
+- 414×364：`orientation: portrait` 命中 0 条 → `inputbar.b=406.2`，硬线 356，**超 50.2px**；
+- 改成 `(max-width: 560px) and (max-height: 480px)` 后同条件 `inputbar.b=352`（硬线内）；
+- 414×284：修前 `406.2`（超 130.2），修后 `272`（硬线 276）。
+
+**以后怎么写**：键盘期布局判定**不要用 `orientation`**，用宽/高阈值组合
+（`max-width` + `max-height`）或 JS 读 `innerWidth/innerHeight` 比值；确需方向语义时也得同时
+覆盖"竖屏设备 + 键盘把高度压短"这一档。`scripts/test_layout_matrix.py` 的竖屏 860/584/484/380/364/340/284
+七档就是这条的回归网。
+
+## 11. WebView 83 不支持 `:has()`，混在选择器列表里会让整条规则作废
+
+**现象**：布局修复在桌面 Chromium 全绿，但 App 内 WebView 83 上等于没写，输入栏照样溢出。
+
+**原因**：老 WebView 不认识 `:has()`。当它出现在**选择器列表**里时，按 CSS 规范整条规则
+（包括列表里那条本来合法的 `#stage`）都会被判无效并丢弃——不是"只丢带 `:has` 的那半条"。
+
+```css
+/* 错：WebView 83 上两条一起失效 */
+#stage, #app:has(#emptyState.hidden) #stage { ... }
+/* 对：拆成独立规则，带 :has 的整条被丢，普通那条照常生效 */
+#stage { ... }
+#app:has(#emptyState.hidden) #stage { ... }
+```
+
+**实测**：`04efed4` 拆分前，App 内同条件回到溢出态；拆分后 782×363 基线 `inputbar.b=319.3`
+（AVD 终验），本地矩阵 42/42。**守卫**：`web/tests/appearance.test.js` 断言 CSS 里不出现
+`#stage,\s*#app:has` 这类混写，并要求无条件规则与 `:has` 规则各存在；`node --test` 20/20。
+
+## 12. `test_layout_matrix` 纳入云端默认矩阵（用户批准）
+
+- `.github/workflows/e2e.yml`：`ui_scripts=all` 追加 `test_layout_matrix`（默认 9 套），
+  `ui-suites` 的 `case` 增加对应分派，截图目录走 `XIAOMAN_LAYOUT_SHOTS="$OUT/layout"`。
+- **场景数不变**：仍是 42 条断言（竖屏 7 档 ×2、横屏 6 档、字体 2 档、转屏 12 帧采样、基线与收尾），
+  没有为跑快去删场景。
+- **时长**：本地单次 **14.6s**（含启动/造失败态/42 条断言，`ELAPSED_SEC=14.6 EXIT=0`），
+  远低于 3 分钟，因此**不拆片**；云端单 job 实测见提交后的 run 记录。
+
