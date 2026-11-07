@@ -317,5 +317,24 @@
 耗时主项 = AVD 反复掉线重连（adb daemon 每次调用重启 + 模拟器随父 shell 退出）与
 12:13 失败链路的日志取证。
 
+---
+
+## 16. 本机脚本约定（2026-11-07 20:45）
+
+**触发原因**：用裸 `Invoke-WebRequest` 探 `http://127.0.0.1:8903/health` 时，
+PowerShell 在用户桌面弹出「可能会运行网页中的脚本代码…是否继续执行」确认框。
+
+**约定**：
+
+1. PowerShell 里访问 HTTP **一律用 `curl.exe`**；确实要用 cmdlet 时必须写
+   `Invoke-WebRequest -UseBasicParsing`。Trae 的 shell 是 `-NoProfile`，
+   想靠 profile 改默认值对这个会话无效，只能靠命令写法。
+2. 不要在 `scripts/` 里新增裸 `Invoke-WebRequest` / `Invoke-RestMethod`；
+   现有仓库脚本已全量搜过，无命中（`scripts/gate.ps1` 也未使用）。
+3. 服务监听只允许 `127.0.0.1`，不允许 `0.0.0.0`（见第 12 节）。
+4. 不要留"每隔几秒探活一次"的循环；它会反复触发上述确认框并导致进程被终止。
+   需要等待时用一次性 `sleep` + 有限次数轮询，并在同一次调用内完成。
+
+
 
 
