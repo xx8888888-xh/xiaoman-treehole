@@ -149,6 +149,44 @@ class HumanFeelEvalTest(unittest.TestCase):
         self.assertEqual(stats["msg_max"], 20)
         self.assertEqual(stats["split_turns"], 1)
 
+    def test_name_confusion_with_own_pet_fails(self):
+        """把 ta 的宠物名换成小满自己的“团子”：一次都不能有。"""
+        case = {"id": "name-own", "category": "追问", "expect_any": ["年糕"],
+                "forbid_any": ["团子"], "max_advice_turns": 0}
+        universal = self.data["universal"]
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("你说年糕是不是欠揍",
+                                 {"reply": "团子那眼神确实欠揍"}, 0))
+        ev.check_turn(res, res.turns[-1], [], ev._case_cfg(case, universal), universal)
+        self.assertFalse(res.passed)
+        self.assertIn("团子", res.failures[0]["reason"])
+
+    def test_alias_cat_does_not_count_as_named_pet(self):
+        """只说“猫”不代表叫对了名字“年糕”（旧 alias 太宽的收紧）。"""
+        case = {"id": "name-alias", "category": "追问",
+                "expect_any": ["年糕"], "max_advice_turns": 0}
+        universal = self.data["universal"]
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("你说年糕是不是欠揍",
+                                 {"reply": "你家猫今天精神咋样"}, 0))
+        ev.check_turn(res, res.turns[-1], [], ev._case_cfg(case, universal), universal)
+        ev.check_case_expect(res, universal)
+        self.assertFalse(res.passed)
+        self.assertIn("未体现期望内容", res.failures[0]["reason"])
+
+    def test_meta_memory_leak_fails_without_false_positive(self):
+        """“我记岔了”属内部状态外露，判红；用户的“你记错了”不误杀。"""
+        case = {"id": "meta", "category": "日常倾诉"}
+        universal = self.data["universal"]
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("我猫叫年糕",
+                                 {"reply": "哎呀我记岔了，年糕今天没吃饭吧？"}, 0))
+        ev.check_turn(res, res.turns[-1], [], ev._case_cfg(case, universal), universal)
+        self.assertFalse(res.passed)
+        self.assertIn("内部状态外露", res.failures[0]["reason"])
+        self.assertIsNone(ev.META_MEMORY_RE.search("你记错了？我没说过"))
+        self.assertIsNone(ev.META_MEMORY_RE.search("我没记错的话，是年糕吧"))
+
     def test_pass_rate_and_regression(self):
         by_cat = {}
         failures = []

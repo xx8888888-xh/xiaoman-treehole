@@ -136,6 +136,33 @@ def _pet_generic(v: str) -> bool:
     return core in ("猫", "狗", "兔", "兔子")
 
 
+# 小满自己的猫名（见 prompt_core.PERSONA_RULES）。ta 的宠物有具体名字时，
+# 回复里出现它就是把两个宠物混成一个——名字错一次都不能有，输出侧确定性兜底。
+OWN_PET_NAMES = ("团子",)
+
+
+def guard_own_pet_name(reply: str, pet_names=None) -> str:
+    """ta 的宠物有具体名字时，把回复里小满自己的猫名改成泛称“猫”。
+
+    只改名、不删内容：避免兜底把整句/整条气泡吃掉。
+    若 ta 的宠物本身就叫“团子”，则不动（那是 ta 的名字）。
+    """
+    names = [str(n).strip() for n in (pet_names or []) if str(n or "").strip()]
+    names = [n for n in names if not _pet_generic(n)]
+    if not reply or not names:
+        return reply
+    out = reply
+    for own in OWN_PET_NAMES:
+        if own in names or own not in out:
+            continue
+        out = re.sub(r"叫\s*%s" % own, "", out)
+        out = out.replace("我家%s" % own, "我家猫")
+        out = out.replace(own, "猫")
+    out = re.sub(r"猫{2,}", "猫", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out.strip()
+
+
 def infer_emotion(key: str, value: str) -> int:
     """情绪权重 1-5：钉子户最高；负面经历高于正面；中性默认 2。"""
     if key in ("昵称", "生日"):
@@ -406,6 +433,11 @@ class SlotStore:
                     return dict(s)
         return None
 
+    def pet_names(self, sid: str) -> list:
+        """ta 宠物的具体名字（“橘猫”“年糕”算，泛称“猫/狗”不算）。"""
+        return [s["value"] for s in self.all(sid)
+                if s["key"] == "宠物" and not _pet_generic(s["value"])]
+
     # ---- 写 ----
     def upsert(self, sid: str, key: str, value: str, kind: str | None = None,
                source: str = "rule", emotion: int | None = None,
@@ -420,6 +452,13 @@ class SlotStore:
             existing = next((s for s in slots if s["key"] == key), None)
             # 泛指不覆盖具体（宠物）：旧值具体时忽略“猫/狗”
             if existing and key == "宠物" and _pet_generic(value) and not _pet_generic(existing["value"]):
+                return dict(existing)
+            # 模型回写不许改写 ta 已明说的宠物名（防“年糕”被写成小满自己的“团子”）；
+            # 用户自己纠正（source=rule）仍然以新说法为准。
+            if (existing and key == "宠物" and source == "model"
+                    and existing.get("source") == "rule"
+                    and not _pet_generic(value) and not _pet_generic(existing["value"])
+                    and value != existing["value"]):
                 return dict(existing)
             now = _now()
             if existing:

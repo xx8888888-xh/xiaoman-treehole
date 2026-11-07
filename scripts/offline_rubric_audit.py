@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "server"))
 import eval_human_feel as ev  # noqa: E402  只复用判定常量/函数，不触发网络
+import memory_slots as ms  # noqa: E402  只做内存槽/名字兜底，不联网
 import prompt_core as pc  # noqa: E402  只读常量，不联网
 
 ARCHIVE = ROOT / "docs" / "eval_real_w20.json"
@@ -758,7 +759,134 @@ def msg_length_audit():
     return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
 
 
+def name_fidelity_audit():
+    """记忆回带自然度：名字保真（不许换成自己的“团子”）+ 禁止内部状态外露。
+
+    红样本全部取自真实复测原文（r6_results.json / target_results.json）；
+    绿样本证明收紧后不会误杀“叫对名字”“直接改口”。
+    """
+    universal = json.loads(CASES.read_text(encoding="utf-8"))["universal"]
+    checks = []
+
+    def add(name, got, want, note=""):
+        checks.append({"name": name, "got": got, "want": want,
+                       "pass": got == want, "note": note})
+
+    def judge(category, replies, users=None, **extra):
+        case = {"id": "sim-name", "category": category}
+        case.update(extra)
+        r = ev.CaseResult(case)
+        prev = []
+        replies = [replies] if isinstance(replies, str) else list(replies)
+        users = users or ["第%d轮" % (i + 1) for i in range(len(replies))]
+        for i, rep in enumerate(replies):
+            u = users[i] if i < len(users) else users[-1]
+            r.turns.append(ev.Turn(u, {"reply": rep}, i))
+            ev.check_turn(r, r.turns[-1], prev, ev._case_cfg(case, universal),
+                          universal)
+            prev.append(r.turns[-1])
+        ev.check_case_expect(r, universal)
+        return r.passed, [f["reason"] for f in r.failures]
+
+    followup = {"expect_any": ["年糕"], "forbid_any": ["团子"],
+                "max_advice_turns": 0}
+    pet01 = {"expect_any": ["橘猫"], "forbid_any": ["团子"],
+             "expect_alias": {"橘猫": ["橘猫", "你家猫"]}, "max_advice_turns": 0}
+
+    # 真实 followup-01 末轮：旧 alias（年糕≈猫）放过，新判据因“团子”判红
+    red, why = judge("追问",
+                     "团子那眼神确实欠揍，但看在它长得可爱的份上，算了。||"
+                     "你桌上那炸鸡味儿太大了，它闻着就忍不住。",
+                     ["你说年糕是不是欠揍"], **followup)
+    add("真实 followup-01 末轮（团子）-> 红", red, False, "；".join(why)[:70])
+
+    # 旧 alias 只看“猫”也算接住：收紧为必须字面叫出“年糕”
+    red, why = judge("追问", "你家猫今天精神咋样？",
+                     ["你说年糕是不是欠揍"],
+                     expect_any=["年糕"], max_advice_turns=0)
+    add("只叫“猫”不叫“年糕”-> 红", red, False, "；".join(why)[:60])
+
+    # 真实 detail-pet-01 轮1：开头写“团子”（把 ta 的猫说成自己的）
+    red, why = judge("具体细节",
+                     "团子有时候也这样，饿两顿自己就吃了。你家猫今天精神咋样？",
+                     ["我家橘猫今天不吃饭"], **pet01)
+    add("真实 detail-pet-01（团子）-> 红", red, False, "；".join(why)[:60])
+
+    # 真实 detail-pet-02 轮1：ta 的狗被说成“团子上次吐”
+    red, why = judge("具体细节",
+                     "哎呀，吐得严重吗？现在好点没？团子上次吐我吓一跳，结果是吃撑了。",
+                     ["我家狗昨天吐了"],
+                     expect_any=["狗", "没精神"], forbid_any=["团子"],
+                     max_advice_turns=0)
+    add("真实 detail-pet-02（团子）-> 红", red, False, "；".join(why)[:60])
+
+    # 收紧后不能误杀：叫对名字就该绿
+    add("叫对“年糕”-> 绿",
+        judge("追问", "年糕那眼神确实欠揍，干坏事还装无辜。",
+              ["你说年糕是不是欠揍"], **followup)[0], True)
+
+    # 内部状态外露：任何一轮解释“记岔/记错”都判红
+    red, why = judge("日常倾诉", "哎呀我记岔了，年糕今天没吃饭吧？")
+    add("单轮“我记岔了”-> 红", red, False, "；".join(why)[:60])
+    red, why = judge("日常倾诉",
+                     ["是我记错了，年糕没吃饭吧？", "我刚才记混了，年糕今天还行。"],
+                     ["我家猫叫年糕", "它今天吃了吗"])
+    add("连着两轮解释 -> 两轮都红", len(why) >= 2, True,
+        "失败 %d 处：%s" % (len(why), "；".join(why)[:70]))
+
+    # 只认第一人称自述，不误伤用户/转述
+    add("“你记错了？”不误杀",
+        judge("日常倾诉", "你记错了？我可没说过。")[0], True)
+    add("“我没记错的话”不误杀",
+        judge("日常倾诉", "我没记错的话，是年糕吧。")[0], True)
+    add("直接改口“行，年糕”-> 绿", judge("追问", "行，年糕。", ["别叫它团子"], **followup)[0], True)
+
+    # 提示词真源必须写上这两条，且预算没破
+    add("提示词写了名字保真", "ta 的名字（人/宠物）原样用" in pc.MEMORY_SLOT_RULES, True)
+    add("提示词写了不许解释记岔", "不解释“我记岔了”" in pc.MEMORY_SLOT_RULES, True)
+    add("提示词写了宠物在场不提自己的猫",
+        "ta 的宠物在场时，不提自己的猫" in pc.MEMORY_RULES, True)
+
+    # 输出侧确定性兜底：真实原文里的“团子”必须被消掉（只改名、不删内容）
+    real1 = ("年糕啊，听起来就很好rua||"
+             "我养了只橘猫叫团子，天天跟我抢沙发")
+    fixed1 = ms.guard_own_pet_name(real1, ["年糕"])
+    add("兜底消掉真实回复里的团子", "团子" in fixed1, False, fixed1)
+    real2 = "年糕？比团子好听多了。||我家团子是只橘猫。"
+    add("兜底消掉第二条真实回复里的团子",
+        "团子" in ms.guard_own_pet_name(real2, ["年糕"]), False)
+    add("ta 的宠物就叫团子时不动",
+        ms.guard_own_pet_name("团子今天不吃饭", ["团子"]), "团子今天不吃饭")
+    add("没有宠物名时不动",
+        ms.guard_own_pet_name("我家团子最爱睡沙发", []), "我家团子最爱睡沙发")
+
+    # 存储侧：模型回写不能改掉 ta 明说的宠物名；ta 自己纠正可以改
+    s = ms.SlotStore()
+    s.ingest("guard-sid", "我家猫叫年糕")
+    s.apply_updates("guard-sid", {"宠物": "团子"}, source="model")
+    add("模型回写不能把年糕改成团子", s.pet_names("guard-sid"), ["年糕"])
+    s.ingest("guard-sid", "我家猫叫汤圆")
+    add("ta 自己纠正可以改名", s.pet_names("guard-sid"), ["汤圆"])
+
+    # 提示词预算
+    add("全量提示词 ≤1850", len(pc.SERVER_SYSTEM_PROMPT) <= 1850, True,
+        "实际 %d" % len(pc.SERVER_SYSTEM_PROMPT))
+    add("两段合计 ≤400",
+        len(pc.HUMAN_FEEL_RULES) + len(pc.MEMORY_SLOT_RULES) <= 400, True,
+        "实际 %d" % (len(pc.HUMAN_FEEL_RULES) + len(pc.MEMORY_SLOT_RULES)))
+    return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
+
+
 def main():
+    if "--name-fidelity" in sys.argv:
+        a = name_fidelity_audit()
+        print("== 记忆回带自然度（名字保真 / 不许解释记岔） ==")
+        for c in a["checks"]:
+            print("  [%s] %s -> got=%r want=%r%s"
+                  % ("PASS" if c["pass"] else "RED", c["name"],
+                     c["got"], c["want"], (" | " + c["note"]) if c["note"] else ""))
+        return 0 if a["all_pass"] else 1
+
     if "--msg-length" in sys.argv:
         a = msg_length_audit()
         print("== 单条长度判据（>40 红 / 拆条绿） ==")

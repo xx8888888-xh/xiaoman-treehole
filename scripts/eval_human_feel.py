@@ -64,6 +64,10 @@ INSTRUCTION_RE = re.compile(
     "记得|别忘|别忘了|要注意|注意保暖|注意暖和|别着凉|多穿|穿厚|"
     "早点睡|早点休息|早睡|别熬夜|多喝|赶紧去看|得去医院")
 CRISIS_RE = re.compile("12356|心理援助|需要真人的帮助|心理咨询")
+# 记忆失误的“内部状态外露”：把“我记岔了/记错了”讲给用户听，最出戏。
+# 只认第一人称自述，避免把用户的“你记错了”误判成模型外露。
+META_MEMORY_RE = re.compile(
+    r"(?:我|是我|刚才|刚刚)(?!没)(?:可能|好像)?记(?:岔|错|混|串)|我记性")
 QUESTION_RE = re.compile("[?？]")
 PUSH_RE = re.compile("说说|然后呢|接着|聊聊|展开|怎么了|发生什么|在吗|还有呢|继续|快说")
 CODE_RE = re.compile("```|def |import |SELECT|GROUP BY|HAVING|function|class ")
@@ -253,6 +257,11 @@ def check_turn(result: CaseResult, turn: Turn, prev: list, cfg: dict,
     for bad in case.get("forbid_any", []):
         if bad in reply:
             result.fail(idx, "出现禁用词“%s”：%s" % (bad, reply))
+    # 名字/记忆出错时直接改口，不许把内部状态讲给用户听（“我记岔了”）
+    m = META_MEMORY_RE.search(reply)
+    if m:
+        result.fail(idx, "把记忆失误说给用户听“%s”（内部状态外露）：%s"
+                    % (m.group(0), reply))
     if case["category"] == "跑题" and CODE_RE.search(reply):
         result.fail(idx, "跑题场景输出了代码/步骤")
     # 说明：模型偶尔不按 JSON 输出。线上 web/js/api.js 有纯文本兜底、不会拒答，
@@ -628,6 +637,13 @@ class ApiBackend:
                         "_backend_error": "模型把 max_tokens 用在 reasoning，content 为空"}
             return {"reply": "", "hook": None, "_backend_error": last_err or "空响应"}
         payload = parse_model_json(raw)
+        # 与产品输出兜底一致：ta 的宠物有具体名字时，回复里不许出现小满自己的猫名
+        if isinstance(payload.get("reply"), str):
+            names = self.slots.pet_names(self.sid) if self.slots else []
+            names += [v for k, v in self.memory_slots.extract_slots(user).items()
+                      if k == "宠物" and not self.memory_slots._pet_generic(v)]
+            payload["reply"] = self.memory_slots.guard_own_pet_name(
+                payload["reply"], names)
         if not payload.get("_parse_error"):
             self.slots.ingest(self.sid, user)
             updates = payload.get("memory_updates")

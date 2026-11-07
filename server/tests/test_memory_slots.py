@@ -149,6 +149,35 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(other.get(self.sid, "昵称")["value"], "阿秋")
 
 
+class NameGuardTest(unittest.TestCase):
+    """W22：ta 的宠物名零容忍——输出侧兜底 + 存储侧防模型回写。"""
+
+    def test_guard_removes_own_pet_name(self):
+        self.assertEqual(
+            ms.guard_own_pet_name("年糕啊，听起来就很好rua||"
+                                  "我养了只橘猫叫团子，天天跟我抢沙发", ["年糕"]),
+            "年糕啊，听起来就很好rua||我养了只橘猫，天天跟我抢沙发")
+        self.assertNotIn("团子", ms.guard_own_pet_name("我家团子前阵子也这样", ["年糕"]))
+
+    def test_guard_keeps_ta_pet_named_tuanzi(self):
+        self.assertEqual(ms.guard_own_pet_name("团子今天不吃饭", ["团子"]),
+                         "团子今天不吃饭")
+
+    def test_guard_noop_without_user_pet_name(self):
+        text = "我家团子最爱睡沙发"
+        self.assertEqual(ms.guard_own_pet_name(text, []), text)
+        self.assertEqual(ms.guard_own_pet_name(text, ["猫"]), text)
+
+    def test_model_cannot_rename_user_pet(self):
+        store = ms.SlotStore()
+        store.ingest("s", "我家猫叫年糕")
+        store.apply_updates("s", {"宠物": "团子"}, source="model")
+        self.assertEqual(store.pet_names("s"), ["年糕"])
+        # ta 自己纠正仍然以新说法为准
+        store.ingest("s", "我家猫叫汤圆")
+        self.assertEqual(store.pet_names("s"), ["汤圆"])
+
+
 class PersistenceTest(unittest.TestCase):
     def test_roundtrip_and_corrupt_tolerance(self):
         with tempfile.TemporaryDirectory() as d:

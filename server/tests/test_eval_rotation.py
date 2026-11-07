@@ -351,7 +351,8 @@ class ResumeTest(unittest.TestCase):
             self.assertEqual(len(first["case_stats"]), 4)
             self.assertEqual(len(first["passed_ids"]), 4)
             # 首次整批运行也要如实写覆盖率，不能只给场景数
-            self.assertEqual(first["coverage"]["expected"], 112)
+            expected = len(ev.load_cases(ev.CASES_FILE)["cases"])
+            self.assertEqual(first["coverage"]["expected"], expected)
             self.assertEqual(first["coverage"]["completed"], 4)
             self.assertEqual(first["coverage"]["resumed"], 0)
             self.assertEqual(first["coverage"]["new"], 4)
@@ -363,7 +364,7 @@ class ResumeTest(unittest.TestCase):
             second = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(rc2, 0)
             self.assertEqual(second["coverage"]["completed"], 4)
-            self.assertEqual(second["coverage"]["expected"], 112)
+            self.assertEqual(second["coverage"]["expected"], expected)
             self.assertEqual(second["coverage"]["resumed"], 4)
             self.assertEqual(second["coverage"]["new"], 0)
             self.assertEqual(second["cases"], 4, "续跑不能把总数改大")

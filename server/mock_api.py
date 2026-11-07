@@ -1510,7 +1510,27 @@ def update_message(session_id, message, new_content):
     return {"ok": True, "updated": changed, "memories": memories, "slots": slots}
 
 
-def guard_result(result, user_text):
+def _guard_pet_name(result, session_id):
+    """ta 的宠物有具体名字时，回复里不许出现小满自己的猫名（名字混淆零容忍）。"""
+    if not session_id or not _SLOTS:
+        return result
+    reply = result.get("reply")
+    if not isinstance(reply, str) or not reply:
+        return result
+    fixed = memory_slots.guard_own_pet_name(reply, _SLOTS.pet_names(session_id))
+    if fixed != reply:
+        result = dict(result)
+        result["reply"] = fixed
+    return result
+
+
+def _guard_pet_text(text, session_id):
+    if not session_id or not _SLOTS or not isinstance(text, str):
+        return text
+    return memory_slots.guard_own_pet_name(text, _SLOTS.pet_names(session_id))
+
+
+def guard_result(result, user_text, session_id=None):
     """对任何路径的回复做输出兜底（mock 模式也可能复读上游/模板里的危险肯定语）。
     content=null/空回复同样过闸：危机语境换成安全话术，其余给兜底句。"""
     if not isinstance(result, dict):
@@ -1526,12 +1546,12 @@ def guard_result(result, user_text):
         if level in ("high", "medium"):
             result["crisis"] = True
             result["risk_level"] = "high" if level == "high" else "medium"
-        return result
+        return _guard_pet_name(result, session_id)
     fixed = risk_guard.filter_persona(reply, user_text)
     if fixed != reply:
         result = dict(result)
         result["reply"] = fixed
-    return result
+    return _guard_pet_name(result, session_id)
 
 
 # ---------------- 核心回复逻辑 ----------------
@@ -1830,7 +1850,7 @@ class Handler(BaseHTTPRequestHandler):
     def _mock_completion(self, messages, session_id):
         started = time.time()
         result = guard_result(make_reply(messages, session_id),
-                              risk_guard.last_user_text(messages))
+                              risk_guard.last_user_text(messages), session_id)
         content = json.dumps(result, ensure_ascii=False)
         persist_session(session_id, messages)
         # W7：mock 不再假装 200~600ms 网络延迟，只留 50ms 让前端先上"正在输入"
@@ -1964,11 +1984,13 @@ class Handler(BaseHTTPRequestHandler):
                 parsed = None
             if isinstance(parsed, dict) and isinstance(parsed.get("reply"), str):
                 fixed = risk_guard.filter_persona(parsed["reply"], user_text)
+                fixed = _guard_pet_text(fixed, session_id)
                 if fixed != parsed["reply"]:
                     parsed["reply"] = fixed
                     content = json.dumps(parsed, ensure_ascii=False)
             elif parsed is None:
                 fixed = risk_guard.filter_persona(content, user_text)
+                fixed = _guard_pet_text(fixed, session_id)
                 if fixed != content:
                     content = json.dumps({"reply": fixed, "emotion": "neutral",
                                           "motion": None, "memory_updates": {}, "hook": None},
@@ -2021,7 +2043,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream_mock(self, messages, session_id, started):
         result = guard_result(make_reply(messages, session_id),
-                              risk_guard.last_user_text(messages))
+                              risk_guard.last_user_text(messages), session_id)
         persist_session(session_id, messages)
         reply = result.get("reply") or ""
         # 先 meta 再首字：mock 无上游，首字延迟约等于 1~2ms
@@ -2287,11 +2309,13 @@ class Handler(BaseHTTPRequestHandler):
                 parsed = None
             if isinstance(parsed, dict) and isinstance(parsed.get("reply"), str):
                 fixed = risk_guard.filter_persona(parsed["reply"], user_text)
+                fixed = _guard_pet_text(fixed, session_id)
                 if fixed != parsed["reply"]:
                     parsed["reply"] = fixed
                     content = json.dumps(parsed, ensure_ascii=False)
             elif parsed is None:
                 fixed = risk_guard.filter_persona(content, user_text)
+                fixed = _guard_pet_text(fixed, session_id)
                 if fixed != content:
                     content = json.dumps({"reply": fixed, "emotion": "neutral",
                                           "motion": None, "memory_updates": {}, "hook": None},
@@ -2380,7 +2404,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"offline": True, "mode": "offline"})
             if mode == "mock":
                 result = guard_result(make_reply(messages, session_id),
-                                      risk_guard.last_user_text(messages))
+                                      risk_guard.last_user_text(messages), session_id)
                 persist_session(session_id, messages)
                 return self._json({"content": json.dumps(result, ensure_ascii=False), "mode": "mock"})
             return self._proxy_completion(data, session_id)
