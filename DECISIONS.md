@@ -136,3 +136,51 @@ CI 门禁（`ci.yml` / `e2e.yml` / `android-e2e.yml` 的 job 与判定）未改�
 ## 5. e2e 产物
 
 `scripts/emulator_e2e_walk.py` 的 `07_voice_tip` 探针在原有 `logs/last` 之外，追加最近 5 条完整条目与 `stats`，让"失败在哪"进入 artifact，而不是只剩总数。
+
+---
+
+# DECISIONS · 2026-11-07 第三轮（键盘/字体/转屏 / 存储反例 / 夹具收口）
+
+## 7. 布局矩阵（新增 scripts/test_layout_matrix.py，本地窗口内实测 42/42）
+
+浏览器实测（414/782 宽，失败提示条 + 语音提示 + 排队条最坏叠层；硬线 inputbar.b <= ih-8）：
+
+| 场景 | 修前 | 修后 | 硬线 |
+| --- | --- | -- | --- |
+| 窄屏 h=380 | — | b=368 | 372 |
+| 窄屏 h=364 | b=406.2（超 50.2） | b=352 | 356 |
+| 窄屏 h=340 | — | b=328 | 332 |
+| 窄屏 h=284 | b=406.2（超 130.2） | b=272 | 276 |
+| 横屏 782×280 | b=277.3（超 5.3） | b=236 | 272 |
+| 横屏 782×300 | — | b=256 | 292 |
+| 横屏 782×260/240 | — | b=248/228；状态条按既有设计让位 | 252/232 |
+| 字体 large(1.125)/系统 1.3× | — | b=319，retry 可点 | 355 |
+| 竖→横 12 帧瞬时 | — | 最差 over=-4（全程不出视口） | 0 |
+
+- 根因 1：#stage 是 lex:0 0 auto（min-height 158），键盘把高度压短时不让位，溢出全部转嫁输入栏。
+- 根因 2：软键盘把高度压到小于宽度后，CSS orientation 会翻成 landscape（414×364 判 landscape），
+  按 orientation: portrait 写的规则不会命中。
+- 修法（web/css/style.css，只加两条媒体查询）：
+  max-width:560px and max-height:480px → #app #stage 压到 clamp(72px,20vh,158px) 且允许收缩；
+  max-height:340px 同一范围 → #stage 整体让位。
+  横屏 max-height:300px → 隐藏 .topbar（32px，唯一可让的非操作元素）。
+- 既有横屏修复未回退：782×363 基线 inputbar.b=319（云端 AVD 实测 319.3）。
+- 测试脚本处理：失败时的 toast（2200ms）会压在提示条「重试」上，测量前等 toast 收掉；
+  ≤260px 横屏按既有设计不要求提示条/重试存在，只锁"状态条让位 + 输入栏在视口内"。
+
+## 8. 存储满反例
+
+	est_feature_loop.py 新增正常写盘上下文：零兜底计数、无"存储满/重启会丢"提示、配置确实写进
+localStorage、刷新后仍在。本地 50/50 PASS。
+存储满块补：若启动时没有自动写配置（已有配置/换端口），就显式调用一次 API.saveCfg 触发落盘失败，
+避免测试依赖"启动自动保存"这一实现细节。
+
+## 9. 夹具收口（不留可执行的危险脚本）
+
+- 仓库内 .ps1 只有 4 个：scripts/local/{avd_local,emulator_watchdog,emu_timewindow}.ps1、scripts/gate.ps1；
+  .github/workflows/* 对它们 **0 引用**（grep 验证），全部只能在宿主手动跑。
+- scripts/local/emu_timewindow.ps1 补入库：此前未跟踪，缺失时两个脚本会失去时间窗判断。
+- emulator_watchdog.ps1 加 **fail closed**：时间窗模块找不到就写日志并 exit 2，
+  防止 limitOff 为空后在免限窗口（21:00-06:00）按 30% 误杀满负荷模拟器。
+- 窗口判定实测：22:00 -> LIMIT=off、14:00 -> LIMIT=on、 6:00 -> LIMIT=on；两个 ps1 语法解析 OK。
+- 本机临时诊断 .ps1（tools 下 4 个：fetch_shots/gh_api/r5_dispatch/sample_suite）已改名为 .ps1.disabled。

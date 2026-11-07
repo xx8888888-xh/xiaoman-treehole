@@ -279,10 +279,41 @@ async def main():
             await pg2.unroute(pat)
         await ctx2.close()
 
+        # ---------- E- 存储满反例：正常写盘一次都不许出现内存兜底提示 ----------
+        ctx_n = await browser.new_context(viewport={"width": 414, "height": 860})
+        pg_n = await ctx_n.new_page()
+        pg_n.on("pageerror", lambda e: errors.append("normal-write:" + str(e)))
+        await boot(pg_n)
+        await apply_cfg(pg_n)
+        await send_and_wait(pg_n, "正常写盘反例")
+        fallback_n = await pg_n.evaluate(
+            "() => window.__cfgMemFallbackCount ? window.__cfgMemFallbackCount() : -1")
+        n_notice = pg_n.locator("#noticeBar")
+        n_visible = await n_notice.is_visible()
+        n_text = (await pg_n.locator("#noticeText").inner_text()) if n_visible else ""
+        cfg_saved = await pg_n.evaluate(
+            "() => localStorage.getItem('xiaoman_cfg') || ''")
+        check("正常写盘：零内存兜底计数", fallback_n == 0, fallback_n)
+        check("正常写盘：不出现存储满/重启会丢提示",
+              (not n_visible) or ("重启会丢" not in n_text and "存储满" not in n_text),
+              (n_visible, n_text))
+        check("正常写盘：配置确实落到 localStorage", '"mode"' in cfg_saved, cfg_saved[:60])
+        # 刷新后仍在 = 真落盘，不是内存兜底的假成功
+        await pg_n.reload(wait_until="load")
+        await pg_n.wait_for_timeout(900)
+        cfg_after = await pg_n.evaluate(
+            "() => localStorage.getItem('xiaoman_cfg') || ''")
+        check("正常写盘：刷新后配置仍在", '"mode"' in cfg_after, cfg_after[:60])
+        await ctx_n.close()
+
         # ---------- E 存储满 ----------
         ctx3 = await browser.new_context(viewport={"width": 414, "height": 860})
         pg3 = await ctx3.new_page()
         pg3.on("pageerror", lambda e: errors.append("quota:" + str(e)))
+        # 先按正常写盘把配置种进去（含本地 mock 端口），再注入 quota 覆盖：
+        # 否则默认配置指向 8902，本地换端口跑时发送会走"网断"分支，测不到落盘失败。
+        await boot(pg3)
+        await apply_cfg(pg3)
         await pg3.add_init_script(
             """(() => {
                 const orig = Storage.prototype.setItem;
@@ -293,7 +324,8 @@ async def main():
                     return orig.call(this, k, v);
                 };
             })()""")
-        await boot(pg3)
+        await pg3.reload(wait_until="load")
+        await pg3.wait_for_timeout(900)
         await send(pg3, "你好呀")
         await pg3.wait_for_timeout(3500)
         notice = pg3.locator("#noticeBar")
@@ -303,6 +335,13 @@ async def main():
               "备份" in (await pg3.locator("#noticeText").inner_text()) or
               "空间" in (await pg3.locator("#noticeText").inner_text()))
         check("存储满：聊天没崩", await pg3.locator("#messages .msg-row").count() >= 2)
+        # 显式触发一次配置落盘（等价于用户改设置）：验证"配置写失败 → 内存兜底"路径，
+        # 不依赖启动时是否自动保存配置（换端口/已有配置时该路径可能不触发）。
+        hits0 = await pg3.evaluate(
+            "() => window.__cfgMemFallbackCount ? window.__cfgMemFallbackCount() : -1")
+        if hits0 == 0:
+            await pg3.evaluate("() => window.API && window.API.saveCfg({ tts: 'off' })")
+            await pg3.wait_for_timeout(400)
         # 配置落盘失败会转内存兜底（本次会话照常聊天），但不能静默假成功：
         # 必须明确说"在内存里、重启会丢"，且只提示一次、不随每次写失败刷屏。
         mem_hits = await pg3.evaluate(

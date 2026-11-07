@@ -25,6 +25,13 @@ function Get-EmuGroup {
 
 $timeMod = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'emu_timewindow.ps1'
 if (-not (Test-Path -LiteralPath $timeMod)) { $timeMod = 'D:\android-avd\emu_timewindow.ps1' }
+# 收口：时间窗模块缺失时一律不启动（fail closed）。否则 $limitOff 为空 → 会按 30% 上限
+# 在免限时窗（21:00-06:00）里误杀满负荷的模拟器。
+if (-not (Test-Path -LiteralPath $timeMod)) {
+  Write-Log "REFUSE time window module missing ($timeMod) -> watchdog exit (fail closed)"
+  Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+  exit 2
+}
 . $timeMod
 
 # 时间窗状态：21:00-06:00 LIMIT=off（不采样不杀），其余 LIMIT=on
