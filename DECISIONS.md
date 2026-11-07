@@ -1,0 +1,202 @@
+# DECISIONS · 语音音色改造（树洞 v7）
+
+> 本文件是本轮「音色改造」的决策记录与实测证据，同时是第三轮「效率整改」要求的时间账与授权清单。
+> 所有数字都来自本机实测（`docs/voice-candidates/samples/manifest.json`、`docs/voice-candidates/live/e2e.json`），不是估计值；估计值会标注「估」。
+
+---
+
+## 0. 时间账（本轮）
+
+| 项目 | 数值 |
+|---|---|
+| 本轮耗时（断电恢复 → 本轮收尾） | ≈ 2 h 20 min（估：模型下载 6 min / 批量合成 25 min / 回听+CER 20 min / 代码+测试 40 min / 端到端与文档 25 min） |
+| 合成调用次数 | 本轮 34 次（样音 30 + 端到端 4）；含前几轮调参复测累计 ≈ 60 次 |
+| 单次合成成本 | 在线 edge 22 字 1.30 s、29 字 1.23 s、缓存命中 0.037 s；离线 Melo int8 RTF 4.3–5.2×（比在线慢一个数量级） |
+| 耗时主项 | ① 离线模型一次性下载（melo 233 MB / kokoro 169 MB / vosk 65 MB / piper 60 MB）；② 批量合成+回听；③ 离线 RTF 实测 |
+
+效率整改执行情况：样音一次批量产出（10 组 × 3 句 = 30 个文件，一轮跑完，不再一个音色一轮）；判据先定后测（见 §2）；决策项自己拍定并记录在此；代码先提交（`a5f5d70`）再补文档。
+
+---
+
+## 1. 现场核查（断电后）
+
+| 检查项 | 结果 |
+|---|---|
+| `git status` | 8 个已改文件（Dockerfile / TtsController.java / docker-compose.yml / test_tts_post.py / tts_server.py / index.html / tts.js / tts_provider.test.js）+ 未跟踪 `docs/voice-candidates/`；无冲突标记、无半截文件 |
+| 当前分支 | `feat/voice-candidates`（独立 worktree `treehole-voice`，主仓 `treehole-ci` 保持 `feat/r7-resilience` 不动） |
+| `git log -1` | `8defaf2 test(e2e): 失败态取 total 前先等本轮收尾（busy=false）` |
+| `index.lock` | worktree 与主仓均无 |
+| `dist/` | 不存在（本仓发布物是 `android/app/src/main/assets/www`，由 `scripts/build_assets.sh` 生成，`assets/www` 不入库） |
+| 源 ↔ 产物一致 | 已重跑 `scripts/build_assets.sh`：`ASSETS_MANIFEST files=74 bytes=1392959`，`ASSET_VERIFY PASS`（逐文件 sha256 对比通过） |
+| 断电时刻 | Windows 事件：`2026-11-07 08:01:45` 非正常关机（Kernel-Power 41 + EventLog 6008），随后 08:02、08:04 两次重启。这就是上轮中断的时点；工作区未受损，仅未提交改动留在 worktree |
+
+> 主仓上游已走到 `1ccbe9f`（月度回放等 4 个提交）。它们只动了 `web/app.js`、`web/js/api.js`、`web/index.html`（删 `resilience.js` 那一行）等，与本次改动无同行冲突，合并时按常规 merge 即可。
+
+---
+
+## 2. 现状归因：到底哪一层在响，差在哪
+
+**结论：出厂 APK 实际发声的是 Android 系统 TTS，不是 WebView 的 `speechSynthesis`，更不是服务端。**
+
+链路与证据：
+
+1. `web/js/config.js` 默认 `tts: "server"`、`ttsServer: ""`、`voice: "zh-CN-XiaoyiNeural"`；
+2. `web/js/tts.js` 的 `createServer()` 只有在 `ttsServer` 非空或注入了 `window.XIAOMAN_TTS_SERVER` 时才 available → 空值时 server 层直接跳过；
+3. 于是落到 native 层 `TtsController.java`：`setLanguage(Locale.SIMPLIFIED_CHINESE)`、不指定引擎、不指定 Voice，`tts.setPitch(1.15)` + `setSpeechRate(1.02)`；
+4. native 也不可用时才落到 `speechSynthesis`（大多数国产 ROM 的 WebView 本来就转调系统 TTS，音色还是同一个）。
+
+**"差"的三层拆解（按贡献排序）：**
+
+| 层 | 具体 | 量化证据 |
+|---|---|---|
+| 引擎本身 | 系统默认中文女声（各 ROM 多为拼接式/老式参数合成），没有情感与韵律，天然播报腔 | A1/A2 代理样音中位 F0 208/222 Hz、字速 3.03 字/s、单句 6.4–9.0 s，句尾拖 |
+| 参数没调 | `pitch = 1.15` 把基频再抬高 15%，机器腔被抬成"电子音"；`rate 1.02` 又略快，句尾还拖 | pitch 1.15 使中位 F0 从 208 → 222 Hz，p90 从 278 → 303 Hz（更尖） |
+| 音频通路 | **无损**。native 走 `TextToSpeech.synthesizeToFile`/PCM 直出，没有重采样或低码率压缩 | 采样率由设备引擎决定（多为 16k/22.05k 单声道 PCM），本次未引入任何转码 |
+
+所以"居然用默认的"不是通路问题，是**引擎 + 参数**双重问题；换引擎收益最大，改参数是零成本兜底。
+
+---
+
+## 3. 可验证判据（先定，后测）
+
+判据在合成前定死，避免"听着差不多"：
+
+| 指标 | 合格区间 | 依据 |
+|---|---|---|
+| 中位 F0 | 240–320 Hz | 年轻女声常见区间；>340 偏尖/儿童音，<200 偏中性或男声 |
+| 语速 | 3.4–4.2 字/s | 日常对话语速；<3.0 拖，>4.8 是播报 |
+| 单句时长 | 20–35 字句 5.0–7.5 s | 与语速互证，防止"字少但拖" |
+| 静音率 | 0.25–0.45 | 40 ms 帧 RMS<0.01 的占比；过低=黏连，过高=拖沓 |
+| CER | ≤ 0.10 | vosk `small-cn` 离线回听，3 句平均；>0.10 说明已听不清 |
+| RTF（离线） | ≤ 1.0 | 必须能实时，否则交互不可用 |
+| 首包延迟 | 在线 ≤ 2 s / 本地 ≤ 300 ms | 1 句以内不能明显卡顿 |
+
+测量方法：ffprobe 探采样率/码率/时长；16 kHz 单声道解码后按 40 ms 帧/10 ms 跳做自相关基频（只统计浊音帧，peak>0.45）；静音率按 40 ms 帧 RMS；CER 用 vosk 回听对齐原文。
+基频为自相关估计，存在 ±1 个倍频的可能（极少数帧会把 300 Hz 判成 150 Hz），故表中给 p10–p90 区间而不是单点。
+
+---
+
+## 4. 候选实测（30 个样音，同一段 3 句）
+
+同一样本：`1_greet`（22 字）/ `2_comfort`（29 字）/ `3_rest`（32 字），口语化、贴"小满"人设。
+试听目录：`docs/voice-candidates/samples/`；对照带：`_compare_A2_B4_C_D_E1.mp3`（95.2 s，A2→B4→C→D→E1 连播，组间 0.9 s 静音，整片解码 0 坏帧）。
+
+| 方案 | 均时长 s | 字速 字/s | 中位 F0 Hz | F0 p10–p90 | 静音率 | 均 CER | 均 KB | 判据 |
+|---|---|---|---|---|---|---|---|---|
+| A1 系统引擎代理·原调 | 7.7 | 3.03 | 208 | 142–278 | 0.440 | 0.044 | 91 | ✗ F0 偏低、语速偏慢、句尾拖 |
+| A2 系统引擎代理·pitch+15%（**当前 APK 参数**） | 7.7 | 3.03 | 222 | 156–303 | 0.440 | 0.044 | 91 | ✗ 同上，且更尖 |
+| B1 edge-tts · Xiaoyi（默认） | 6.0 | 3.89 | 299 | 223–363 | 0.414 | 0.044 | 35 | ✗ F0 上沿逼近 340，p90 已 363 |
+| B2 edge-tts · Xiaoxiao | 6.0 | 3.89 | 261 | 191–326 | 0.354 | 0.058 | 35 | ✓ 全项过，但偏"温柔客服" |
+| B3 edge-tts · 辽宁-Xiaobei | 6.7 | 3.45 | 245 | 192–301 | 0.390 | 0.058 | 39 | ✓ 全项过，带东北口音 |
+| **B4 edge-tts · Xiaoyi rate -5% pitch +2Hz（落地）** | **6.3** | **3.69** | **303** | **224–369** | **0.408** | **0.057** | **37** | ✓ 全项过 |
+| C sherpa-onnx · MeloTTS zh_en（离线） | 4.9 | 4.74 | 238 | 209–276 | 0.315 | 0.083 | 58 | ✗ 语速过快、F0 擦线 |
+| D piper · zh_CN-huayan-medium（离线） | 4.9 | 4.81 | 205 | 172–288 | 0.135 | 0.149 | 59 | ✗ CER 0.149（"待一会儿就好"听成"但也坏人啊"） |
+| E1 Kokoro int8 · sid45（离线） | 6.5 | 3.61 | 254 | 171–311 | 0.169 | 0.124 | 77 | ✗ 偶发整句念错（"已经很晚啦"→"的精神外卖"） |
+| E2 Kokoro int8 · sid47（离线） | 5.4 | 4.33 | 251 | 183–296 | 0.156 | 0.170 | 64 | ✗ CER 0.170 |
+
+分句 CER（按 1/2/3 句）：A 0.056/0.040/0.037；B4 0.056/0.040/0.074；C 0.056/0.120/0.074；D 0.056/**0.280**/0.111；E1 0.222/0.040/0.111；E2 0.167/0.120/0.222。
+
+---
+
+## 5. 三条路 + 决策表
+
+| 方案 | 授权 | 可离线 | 包体增量 | 音色可调程度 | 首字延迟 | 失败率/重试代价 | AVD 可验证 | 集成改动点 | 风险 |
+|---|---|---|---|---|---|---|---|---|---|
+| **edge-tts（选定主路径）** | `edge-tts` 库 MIT；音频受微软在线服务条款约束（个人/小规模免费，商用需评估） | 否（须联网） | **0**（不进 APK，装在服务端镜像里） | 高：30+ 中文音色 × rate/pitch 任意调，可换 Xiaoyi/Xiaoxiao/Xiaobei/Xiaoni | 22 字 1.30 s、29 字 1.23 s；命中缓存 0.037 s | 单次 12 s 超时 + 重试 1 次（代价 ≤ 12.8 s/句），仍失败回 503，前端静默降级 native | 可：与设备能力无关，只要能访问 TTS 服务（本机已跑通 HTTP 200 `audio/mpeg`） | 服务端新增 provider；客户端只需配 `ttsServer` | 依赖第三方在线服务；离线/被墙时降级；商用条款需评估 |
+| 系统 TTS 换 voice（兜底） | 随 ROM/Google TTS，无授权问题 | 是 | 0 | 低～中：仅设备自带音色，名字/质量因 ROM 而异；代码里已按名挑本地中文女声 | ~即时 | 极低；`isNetworkConnectionRequired` 的 voice 一律跳过，避免断网哑掉 | 部分：AVD `google_apis` 镜像默认无中文 TTS，需另装 Google TTS 才能验 | 已改 `TtsController.applyCuteVoice()`，零配置生效 | 各机型音色差异大，效果不可控 |
+| sherpa-onnx + MeloTTS zh_en（离线） | sherpa-onnx Apache-2.0；MeloTTS 代码 MIT，模型随包 | 是 | int8 约 60–70 MB（`model.int8.onnx` 51 MB + 词典/lexicon） | 中：多说话人 sid 可选，但语速韵律不及神经 TTS 自然 | 本地 RTF 4.3–5.2×（CPU）→ 30 字要 4–5 s，不达首包要求 | 无网络失败，但慢；低端机更慢 | 可，但 APK 体积与 CPU 占用需真机确认 | 客户端需 JNI/onnxruntime + 模型资产 | **RTF > 1 直接出局**（本机实测） |
+| Kokoro 多语 int8（离线） | Apache-2.0 | 是 | 约 115 MB（108.9 MB onnx + voices + 词典） | 中：多 sid，但中文发音不稳 | RTF 可接受，但整句错读 | 无网络失败，错读不可重试（同一输入同一错误） | 可，同上前提 | 同 sherpa | CER 0.124–0.170，错读出现在最不该错的安慰句 |
+| piper zh_CN-huayan-medium（离线） | piper MIT；**模型数据集许可 Unknown**（MODEL_CARD 原话） | 是 | ≈ 63 MB（60.3 MB onnx + config） | 低：单说话人、音色固定 | RTF < 1（快），但断句生硬 | 无网络失败 | 可 | 同 sherpa | 许可不明 + CER 0.149，商用不可接受 |
+| GPT-SoVITS / Bert-VITS2（自训练路线） | GPT-SoVITS MIT；Bert-VITS2 需按仓库协议核对 | 是 | 权重 1–2 GB 起 + 训练数据与训练时长 | 极高（可克隆/定制人设） | 推理慢，移动端需量化 | 训练与调参成本高 | 否，本机无法训练（用户已禁） | 需独立推理服务 | 本轮明确不做（不下大模型、不训练） |
+
+---
+
+## 6. 选型：走 edge-tts 主路径 + 系统 TTS 兜底，不做 100 MB+ 离线模型
+
+**理由（按证据，不按偏好）：**
+
+1. **判据只放行 B4**。B4 是唯一"四项全过且听感年轻偏软"的组合：F0 303（224–369）、字速 3.69、单句 5.2/6.3/7.4 s、静音率 0.408、CER 0.057。
+2. **包体零增量**。三条离线路最低也要 60 MB（piper），最高 115 MB（Kokoro），而 edge 是 0——APK 体积取舍不需要砍功能，也就不需要回来问。
+3. **离线路全被判据挡住**：Melo int8 RTF 4.3–5.2× 不实时；piper 许可 Unknown 且 CER 0.149；Kokoro CER 0.124–0.170 且有整句错读。它们不是"差一点"，是在关键句上听错。
+4. **授权干净**：edge 不需要 API key（不产生任何凭据），因此不存在"把凭据写进产物"的问题。
+5. **降级路径短**：服务端不可达时，前端自动落回 native 的系统 TTS，且 native 侧已改成"优先本地中文女声 + pitch 1.06"——不会因为 TTS 失败就不出文字（文字渲染先于语音，`speakSafe` 永不 reject）。
+
+**音色取向落地（"可爱"定义成参数，而不是形容词）：**
+- 语速略慢：edge `rate -5%`（≈ 字速 3.69，比默认 3.89 慢 5%）；
+- 音高略高：edge `pitch +2Hz`，且把 Android 侧 `setPitch` 从 1.15 降到 1.06（旧的 1.15 才是"电子尖"的来源）；
+- 句尾不拖：不加任何尾部停顿，静音率从默认 0.414 降到 0.408 不是目的，真正起作用的是 -5% 语速让末句 7.4 s（原 A 组 9.0 s）。
+
+---
+
+## 7. 落地改动（commit `a5f5d70`）
+
+| 文件 | 改动 |
+|---|---|
+| `server/tts_server.py` | 新增 `edge` provider：`_edge_synthesize()` 12 s 超时 + 1 次重试；`EDGE_RATES = {-12%, -5%, +5%}`；`_edge_pitch()` 默认 `+2Hz`；失败抛 `TtsProviderUnavailable` → 503；白名单删除不存在的 `zh-CN-XiaoyuanNeural`（实测 `NoAudioReceived`），换入 `zh-CN-shaanxi-XiaoniNeural`；`audio_content_type()` 让 edge 返回 `audio/mpeg` |
+| `server/tests/test_tts_post.py` | 新增 `EdgeProviderTest`（假模块验证拼包/rate/pitch 透传、缺包抛错且异常不含原文、空音频抛错）+ 语速表/白名单回归 |
+| `web/js/tts.js` | 语速表 0.84/0.96/1.12；`VOICES` 与后端白名单对齐；首包超时 7 s → 10 s；`u.pitch 1.15 → 1.06` |
+| `web/index.html` | 音色选项：小艺·元气少女 / 小晓·温柔轻语 / 小妮·软糯（删除"小圆"） |
+| `web/tests/tts_provider.test.js` | 语速与 pitch 断言、白名单回退用例 |
+| `android/.../TtsController.java` | `applyCuteVoice()`：初始化后遍历 `getVoices()`，跳过 `isNetworkConnectionRequired()`，按名字打分挑中文女声；`pendingRate 1.02 → 0.96`、`setPitch 1.15 → 1.06` |
+| `Dockerfile` / `docker-compose.yml` | 可选 `--build-arg TTS_EDGE=1` 把 edge-tts 打进镜像（默认关，保持镜像精简） |
+
+**端到端实测**（`docs/voice-candidates/live/e2e.json`，`XIAOMAN_TTS_PROVIDER=edge`、端口 8913、真实 HTTP）：
+
+| 请求 | 文本长度 | 耗时 | 状态 | Content-Type | 字节 |
+|---|---|---|---|---|---|
+| 1 | 22 字 | 1.304 s | 200 | `audio/mpeg` | 31 392 |
+| 2 | 29 字 | 1.225 s | 200 | `audio/mpeg` | 37 584 |
+| 3 | 32 字 | 0.037 s（缓存命中，`~/.cache/xiaoman_tts`） | 200 | `audio/mpeg` | 44 352 |
+| 重复请求 | — | 0.020 s（缓存） | 200 | `audio/mpeg` | 31 392 |
+| 非法 voice（XiaoyuanNeural） | 22 字 | — | **400**（不是 500） | — | — |
+
+**测试**：服务端 `pytest` 214 passed / 2 skipped（22 subtests）；web `node --test "tests/*.test.js"` 295 passed / 0 failed；资产 `ASSET_VERIFY PASS`（74 文件、1 392 959 字节）。
+
+---
+
+## 8. 失败与降级路径（没有 TTS 也必须出文字）
+
+```
+文字消息 → 立即渲染（不等语音）
+        └─ TTS.speakSafe()
+            ├─ server(edge)  200/audio/mpeg → 播放；Envelope 走 blob: 解码口型（音色改造不动 lipSync）
+            ├─ server 5xx/超时(10s) → 静默切下一层，不弹错、不阻断发送
+            ├─ native 系统 TTS：已挑本地中文女声、pitch 1.06 / rate 0.96
+            └─ speechSynthesis（WebView 转调系统引擎）
+                 └─ 全失败 → onEnd(false)，气泡不标"已播"，只写一条 voice_tip 排障记录
+```
+
+- 断网：server 不可达 → native 兜底；本轮把"需要联网的 voice"直接排除，避免断网时 `setVoice` 到网络音色导致整条哑掉。
+- 服务端 503：重试 1 次（0.4 s 退避）后放弃，代价 ≤ 12.8 s/句（12 s 超时 + 重试），不会把消息发送卡住。
+- 设备无任何中文 TTS：`onEnd(false)` + 文字照常，只是没有声音；不会阻塞会话。
+
+---
+
+## 9. 授权清单（我自己拍定的项，按用户第三轮授权）
+
+| 项 | 决定 | 是否触发"回来问" |
+|---|---|---|
+| 引擎选型 | edge-tts（服务端）+ 系统 TTS（设备兜底） | 否（授权内） |
+| 音色参数 | Xiaoyi、rate -5%、pitch +2Hz；Android pitch 1.06 / rate 0.96；前端语速 0.84/0.96/1.12 | 否 |
+| 包体取舍 | 接受 0 增量（不引入任何离线模型），不砍任何现有功能 | 否 |
+| 是否打进 APK | edge 走服务端；APK 只改代码不动资产 | 否 |
+| 凭据 | 全链路不需要 key/secret；仓库与产物中无凭据 | 否（无需回来问） |
+| 口型 lipSync | 本轮不动 | 否 |
+
+---
+
+## 10. 风险与遗留
+
+1. **依赖在线服务**。edge-tts 是免费无 key 的在线接口，微软侧限流/变更会导致 503 → 已按"重试 + native 兜底"处理，但音色会在降级瞬间变回系统音。生产若要求稳定可爱音色，需自建 sherpa/piper 服务或换有 SLA 的商用 TTS。
+2. **出厂 APK 的 `ttsServer` 仍为空**。这意味着**不配服务地址的安装包依然走系统 TTS**（只是参数从 1.15 柔化到 1.06）。要让 edge 音色真正生效，必须在 `web/js/config.js` 或构建期注入 `XIAOMAN_TTS_SERVER` 指向部署好的 TTS 服务——这是部署配置，不是代码缺陷，未擅自写死内网地址。
+3. **AVD 未能本地验证**。本机无 JDK/adb/AVD；`TtsController.applyCuteVoice()` 只做编译级改动 + 逻辑自检，真机/AVD 上的音色挑选结果需一次实际安装验证（或在 CI 里跑）。
+4. **F0 是自相关估计**，±1 倍频误差可能；B4 的 369 Hz p90 里含少量高音帧，主观上未出现"尖"的听感。
+5. **样音的 A 组是"系统引擎代理"**（本机无 Android TTS 引擎，用 Windows SAPI 中文女声近似系统默认音色的参数与韵律），用于量化"默认有多差"，不代表某一具体 ROM 的音色。
+
+---
+
+## 附：产物位置
+
+- 30 个样音：`docs/voice-candidates/samples/*.mp3` + `manifest.json`（逐句指标）
+- 对照带：`docs/voice-candidates/samples/_compare_A2_B4_C_D_E1.mp3`
+- 端到端：`docs/voice-candidates/live/e2e.json`、`live_1..3_*.mp3`、`server.log`
