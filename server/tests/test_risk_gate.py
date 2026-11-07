@@ -93,5 +93,34 @@ class OutputGuardTest(unittest.TestCase):
             self.assertIn(token, risk_guard.SCRIPT_HIGH)
 
 
+class ReflowMessagesTest(unittest.TestCase):
+    """输出侧分条归一：只换分隔符，不改字；切不动就原样。"""
+
+    def test_newline_becomes_pipe(self):
+        text = "第一句先说清楚。\n\n第二句接着往下说。"
+        fixed = risk_guard.reflow_messages(text)
+        self.assertEqual(fixed, "第一句先说清楚。||第二句接着往下说。")
+        self.assertNotIn("\n", fixed)
+
+    def test_long_bubble_split_by_sentence(self):
+        text = ("哈哈，团子是挺欠揍的，专挑你加班的时候霸占键盘。你说年糕啊，"
+                "那是你的猫吧，我养的是团子。不过你说得对，猫都这样，"
+                "专挑你忙的时候搞破坏。")
+        fixed = risk_guard.reflow_messages(text)
+        parts = [p for p in fixed.split("||") if p]
+        self.assertGreaterEqual(len(parts), 2)
+        self.assertTrue(all(len(p) <= 40 for p in parts), parts)
+        self.assertEqual(fixed.replace("||", ""), text)
+
+    def test_short_and_pipe_text_untouched(self):
+        self.assertEqual(risk_guard.reflow_messages("嗯，睡吧。"), "嗯，睡吧。")
+        good = "甲||乙"
+        self.assertEqual(risk_guard.reflow_messages(good), good)
+
+    def test_unpunctuated_long_text_unchanged(self):
+        hard = "这" * 41
+        self.assertEqual(risk_guard.reflow_messages(hard), hard)
+
+
 if __name__ == "__main__":
     unittest.main()

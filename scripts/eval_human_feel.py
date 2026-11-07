@@ -529,8 +529,10 @@ class ApiBackend:
                  stop_on_quota: bool = False):
         import prompt_core
         import memory_slots
+        import risk_guard
         self.prompt_core = prompt_core
         self.memory_slots = memory_slots
+        self.risk_guard = risk_guard
         self.base = (base or "").rstrip("/")
         self.model = model
         if not is_free_model(model):
@@ -644,6 +646,9 @@ class ApiBackend:
                       if k == "宠物" and not self.memory_slots._pet_generic(v)]
             payload["reply"] = self.memory_slots.guard_own_pet_name(
                 payload["reply"], names)
+        # 与产品输出兜底一致：客户端只按 || 切气泡，换行/超长单句要归一
+        if isinstance(payload.get("reply"), str):
+            payload["reply"] = self.risk_guard.reflow_messages(payload["reply"])
         if not payload.get("_parse_error"):
             self.slots.ingest(self.sid, user)
             updates = payload.get("memory_updates")

@@ -1524,10 +1524,31 @@ def _guard_pet_name(result, session_id):
     return result
 
 
-def _guard_pet_text(text, session_id):
+def _guard_pet_delta(text, session_id):
+    """增量帧只做名字兜底（分条归一要整段才知道切点，留到收尾）。"""
     if not session_id or not _SLOTS or not isinstance(text, str):
         return text
     return memory_slots.guard_own_pet_name(text, _SLOTS.pet_names(session_id))
+
+
+def _guard_pet_text(text, session_id):
+    if not isinstance(text, str):
+        return text
+    if session_id and _SLOTS:
+        text = memory_slots.guard_own_pet_name(text, _SLOTS.pet_names(session_id))
+    return risk_guard.reflow_messages(text)
+
+
+def _guard_result_flow(result, session_id):
+    """结果级兜底（mock 路径）：名字保真 + 分条归一。危机话术逐字保留，不重排。"""
+    result = _guard_pet_name(result, session_id)
+    if result.get("crisis") or result.get("risk_level"):
+        return result
+    fixed = risk_guard.reflow_messages(result.get("reply"))
+    if fixed != result.get("reply"):
+        result = dict(result)
+        result["reply"] = fixed
+    return result
 
 
 def guard_result(result, user_text, session_id=None):
@@ -1546,12 +1567,12 @@ def guard_result(result, user_text, session_id=None):
         if level in ("high", "medium"):
             result["crisis"] = True
             result["risk_level"] = "high" if level == "high" else "medium"
-        return _guard_pet_name(result, session_id)
+        return _guard_result_flow(result, session_id)
     fixed = risk_guard.filter_persona(reply, user_text)
     if fixed != reply:
         result = dict(result)
         result["reply"] = fixed
-    return _guard_pet_name(result, session_id)
+    return _guard_result_flow(result, session_id)
 
 
 # ---------------- 核心回复逻辑 ----------------
@@ -2229,9 +2250,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not prefix:
                     continue
                 # 输出侧兜底：每个增量先过 sanitize，危险肯定语不会等到收完整段才拦
-                safe_prefix = risk_guard.sanitize_output(prefix, level_out)
-                if safe_prefix != prefix:
-                    self._sse("replace", {"text": safe_prefix,
+                clean_prefix = risk_guard.sanitize_output(prefix, level_out)
+                if clean_prefix != prefix:
+                    self._sse("replace", {"text": clean_prefix,
                                           "mode": "crisis", "reason": "output_guard"})
                     self._stream_finish(
                         json.dumps(risk_guard.crisis_payload(
@@ -2240,8 +2261,11 @@ class Handler(BaseHTTPRequestHandler):
                         usage, session_id, started,
                         first_token or int((time.time() - started) * 1000),
                         model, "crisis", body_messages, level_out, user_text, degraded=0,
-                        already_emitted=safe_prefix, skip_text=True)
+                        already_emitted=clean_prefix, skip_text=True)
                     return
+                # 名字兜底也下沉到增量帧：猫名不会等到收尾才改口。
+                # 它只改称呼、不触发危机路径，由下面的常规 delta/replace 分支处理。
+                safe_prefix = _guard_pet_delta(clean_prefix, session_id)
                 # 留 2 字缓冲，避免把刚成形的危险词先露出去
                 target = safe_prefix[:-2] if len(safe_prefix) > 2 else ""
                 if target and target.startswith(emitted):

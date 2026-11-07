@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "server"))
 import eval_human_feel as ev  # noqa: E402  只复用判定常量/函数，不触发网络
 import memory_slots as ms  # noqa: E402  只做内存槽/名字兜底，不联网
 import prompt_core as pc  # noqa: E402  只读常量，不联网
+import risk_guard as rg  # noqa: E402  只做输出侧归一，不联网
 
 ARCHIVE = ROOT / "docs" / "eval_real_w20.json"
 CASES = ROOT / "server" / "tests" / "human_feel_cases.json"
@@ -877,10 +878,77 @@ def name_fidelity_audit():
     return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
 
 
+def reply_shape_audit():
+    """输出侧分条归一：模型用换行/一长句时，整理成客户端认的 ||。
+
+    样本全部取自 R7 真实复测原文（r7_results.json / r7b_results.json）。
+    判据不变（单条 >40 仍红、MSG_HARD_CHARS 不动），这里只证明产品层
+    交给客户端的气泡形状和提示词要求的“|| 分条”一致。
+    """
+    checks = []
+
+    def add(name, got, want, note=""):
+        checks.append({"name": name, "got": got, "want": want,
+                       "pass": got == want, "note": note})
+
+    def shape(text):
+        fixed = rg.reflow_messages(text)
+        parts = [p for p in fixed.split("||") if p.strip()]
+        return fixed, len(parts), max((len(p) for p in parts), default=0)
+
+    def bare(text):
+        return re.sub(r"[\s|]+", "", text)
+
+    # 真实 detail-pet-01 轮1：用 \n\n 当分条，客户端不认，整条渲染成一个气泡
+    real_pet = ("团子前阵子也这样，饿了一天给我吓坏了。你先别急，它精神怎么样？\n\n"
+                "不吃超过一天的话，猫粮里掺点罐头试试，不行就带去看医生。"
+                "我上次就是这么好的。")
+    fixed, n, longest = shape(real_pet)
+    add("真实 detail-pet-01 轮1：换行不算分条（原判红）",
+        max(ev.msg_lengths(real_pet)) > ev.MSG_HARD_CHARS, True,
+        "最长 %d" % max(ev.msg_lengths(real_pet)))
+    add("归一到 || 后不再有换行", "\n" in fixed, False)
+    add("归一后至少两条", n >= 2, True, "实际 %d 条" % n)
+    add("归一后每段 ≤40", longest <= ev.MSG_HARD_CHARS, True, "最长 %d" % longest)
+    add("归一不改一个字（只改分隔）", bare(fixed) == bare(real_pet), True)
+
+    # 真实 followup-01 轮4：58 字一整条，没有任何分隔符
+    real_fu = ("哈哈，团子是挺欠揍的，专挑你加班的时候霸占键盘。你说年糕啊，"
+               "那是你的猫吧，我养的是团子。不过你说得对，猫都这样，"
+               "专挑你忙的时候搞破坏。")
+    add("真实 followup-01 轮4：一整条（原判红）",
+        max(ev.msg_lengths(real_fu)) > ev.MSG_HARD_CHARS, True,
+        "最长 %d" % max(ev.msg_lengths(real_fu)))
+    fixed, n, longest = shape(real_fu)
+    add("轮4 归一后至少两条", n >= 2, True, "实际 %d 条" % n)
+    add("轮4 归一后每段 ≤40", longest <= ev.MSG_HARD_CHARS, True, "最长 %d" % longest)
+    add("轮4 归一不改一个字", bare(fixed) == bare(real_fu), True)
+
+    # 不该动：短句、已经用 || 且每段都短
+    add("短句不被误切", rg.reflow_messages("嗯，睡吧。"), "嗯，睡吧。")
+    good = "年糕啊，听起来就很好rua||我养了只橘猫叫团子，天天跟我抢沙发"
+    add("已合规的 || 分条原样保留", rg.reflow_messages(good), good)
+    # 如实记录的边界：整句无标点且超长，切不了就保持原样（不硬切、不伪造达标）
+    hard = "这" * (ev.MSG_HARD_CHARS + 1)
+    add("无标点超长句保持原样（切不了，仍判红）", rg.reflow_messages(hard), hard,
+        "不硬切，交由判据继续判红")
+    add("判据阈值未被放宽", ev.MSG_HARD_CHARS, 40)
+    return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
+
+
 def main():
     if "--name-fidelity" in sys.argv:
         a = name_fidelity_audit()
         print("== 记忆回带自然度（名字保真 / 不许解释记岔） ==")
+        for c in a["checks"]:
+            print("  [%s] %s -> got=%r want=%r%s"
+                  % ("PASS" if c["pass"] else "RED", c["name"],
+                     c["got"], c["want"], (" | " + c["note"]) if c["note"] else ""))
+        return 0 if a["all_pass"] else 1
+
+    if "--reply-shape" in sys.argv:
+        a = reply_shape_audit()
+        print("== 输出侧分条归一（换行/长句 -> ||，判据不放宽） ==")
         for c in a["checks"]:
             print("  [%s] %s -> got=%r want=%r%s"
                   % ("PASS" if c["pass"] else "RED", c["name"],

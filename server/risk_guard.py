@@ -453,6 +453,39 @@ def filter_persona(reply, user_text="") -> str:
     return txt
 
 
+def reflow_messages(text, hard=40) -> str:
+    """把“换行当分条”和超长单句整理成客户端认的 || 分条。
+
+    客户端只按 || 切气泡（换行不切），模型偶尔仍用换行/一长句。
+    这里只改分隔方式、不改一个字：按换行和句末标点切，尽量每段 ≤ hard。
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    out = []
+    for bubble in text.split("||"):
+        for seg in re.split(r"\r?\n+", bubble):
+            seg = seg.strip()
+            if not seg:
+                continue
+            if len(seg) <= hard:
+                out.append(seg)
+                continue
+            sents = re.findall(r"[^。！？!?…\n]+[。！？!?…]*", seg) or [seg]
+            cur = ""
+            for s in sents:
+                if len(cur) + len(s) <= hard:
+                    cur += s
+                else:
+                    if cur.strip():
+                        out.append(cur.strip())
+                    cur = s
+            if cur.strip():
+                out.append(cur.strip())
+    if len(out) <= 1:
+        return text
+    return "||".join(out)
+
+
 def crisis_payload(level: str, subject: str = "self") -> dict:
     """与客户端统一协议：reply/emotion/motion/memory_updates/hook/crisis"""
     key = "third" if subject == "third" else ("high" if level == "high" else "medium")
