@@ -481,6 +481,34 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   scroll-padding-top: var(--tap);
   scroll-behavior: smooth;
 }
+/* 回到底部浮钮：锚点在对话列表之后就位（0 高、不占流），按钮绝对定位在锚点上方
+ * 8px——无论下面叠着提示条/排队条/语音提示还是只有输入栏，浮钮都落在它们上沿，
+ * 不会盖住「重试」按钮或输入框（矩阵 §7 用矩形相交面积断言）。
+ * 只在 pinned=false（用户主动上翻看历史）时显示；点一下平滑回底后自动收起。 */
+.jump-anchor { position: relative; flex: 0 0 0; height: 0; }
+.jump-bottom {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-2);
+  z-index: 6;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--text-title);
+  line-height: var(--lh-snug);
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.jump-bottom:active { transform: scale(.94); color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .jump-bottom:active { transform: none; } }
 
 .msg-row {
   display: flex;
@@ -1153,6 +1181,9 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
    * 60px，把聊天区从 145px 压到 89px（云端 AVD 同时有多条时只剩 52px）。它们不是
    * 可操作控件，键盘收起（视口回 363px）即恢复。 */
   .status-stack, .hook-bar { display: none !important; }
+  /* 这一档输入栏是 absolute 浮在列底，浮钮没有"既不压输入栏又在视口内"的位置；
+   * 聊天区本身只剩 ~149px（等于最新一条的预览条），浮钮随状态条一起让位。 */
+  .jump-anchor { display: none; }
   /* 输入栏实测高 = 输入框/按钮 --tap(44) + 上下 padding 各 --space-1，聊天列表底部
    * 预留同高，滚到底时最后一条气泡正好落在输入栏上沿而不是被它盖住。 */
   #chatScroll {

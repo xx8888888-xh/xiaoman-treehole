@@ -62,6 +62,26 @@ MEASURE = """() => {
   }
   const pending = document.getElementById('pendingBar');
   const pendingShown = visible(pending) && getComputedStyle(pending).display !== 'none';
+  const inter = (a, b) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l))
+                        * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+  const jumpEl = document.getElementById('jumpBottom');
+  let jump = null;
+  if (jumpEl) {
+    const d = getComputedStyle(jumpEl).display;
+    const vis = d !== 'none' && jumpEl.getBoundingClientRect().height > 0;
+    jump = { exists: true, display: d, visible: vis, rect: rect(jumpEl),
+             aria: jumpEl.getAttribute('aria-label') || '' };
+    if (vis) {
+      const b = jumpEl.getBoundingClientRect();
+      const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      jump.hit = !!el && (el === jumpEl || jumpEl.contains(el));
+      jump.overlapInputbar = +inter(jump.rect, rect(document.querySelector('.inputbar'))).toFixed(1);
+      jump.overlapNotice = +inter(jump.rect, rect(noticeEl)).toFixed(1);
+      jump.overlapPending = +inter(jump.rect, rect(pending)).toFixed(1);
+      jump.overlapVoice = +inter(jump.rect, rect(voiceEl)).toFixed(1);
+      jump.overlapRetry = +inter(jump.rect, rect(retry)).toFixed(1);
+    }
+  }
   return {
     iw: innerWidth, ih: innerHeight,
     inputbar: rect(document.querySelector('.inputbar')),
@@ -80,7 +100,8 @@ MEASURE = """() => {
     chatScrollHeight: document.getElementById('chatScroll').scrollHeight,
     chatClientHeight: document.getElementById('chatScroll').clientHeight,
     fs: getComputedStyle(document.documentElement).getPropertyValue('--fs').trim(),
-    fontAttr: document.documentElement.getAttribute('data-font') || ''
+    fontAttr: document.documentElement.getAttribute('data-font') || '',
+    jump
   };
 }"""
 
@@ -260,6 +281,45 @@ async def main():
                   (before["chatScrollTop"], after["chatScrollTop"],
                    before["chatClientHeight"], after["chatClientHeight"]))
         await pg.screenshot(path=os.path.join(SHOTS, "collapse_restored.png"))
+
+        # ---------- 7) 「回到最新」浮钮：上翻可见、可命中、不压控件、点击回底 ----------
+        await pg.set_viewport_size({"width": 414, "height": 860})
+        await pg.wait_for_timeout(300)
+        await ensure_overlays(pg)
+        await pg.evaluate("""() => { const s = document.getElementById('chatScroll');
+          s.scrollTop = Math.max(0, s.scrollHeight - s.clientHeight - 900); }""")
+        await pg.wait_for_timeout(250)
+        m = await measure(pg)
+        metrics["jump_scrolled"] = m
+        j = m["jump"] or {}
+        jr = j.get("rect") or {}
+        check("浮钮 414x860 上翻历史后可见", bool(j.get("visible")), j.get("display"))
+        check("浮钮：中心可命中（elementFromPoint 落在按钮上）", bool(j.get("hit")), j.get("aria"))
+        check("浮钮：触控目标 >= 44px", jr.get("w", 0) >= 44 and jr.get("h", 0) >= 44, jr)
+        zeros = {k: j.get(k) for k in ("overlapInputbar", "overlapNotice", "overlapPending",
+                                       "overlapVoice", "overlapRetry")}
+        check("浮钮：不与输入栏/提示条/排队条/语音提示/重试重叠",
+              all(v == 0 for v in zeros.values()), zeros)
+        # 上翻期间来一条新消息：浮钮仍在，条数写进 aria-label（底栏在列表末端、视口外）
+        await pg.evaluate(
+            "() => window.ChatPager.push({text: '刚泡了杯热茶，慢慢喝。'})")
+        await pg.wait_for_timeout(200)
+        m2 = await measure(pg)
+        j2 = m2["jump"] or {}
+        check("上翻期间来新消息：浮钮保持可见且带条数",
+              bool(j2.get("visible")) and "条新消息" in (j2.get("aria") or ""), j2.get("aria"))
+        await pg.screenshot(path=os.path.join(SHOTS, "jump_button.png"))
+        await pg.click("#jumpBottom")
+        m3 = None
+        gap = None
+        for _ in range(12):   # 平滑滚动：轮询到贴底或 1.2s 超时
+            await pg.wait_for_timeout(100)
+            m3 = await measure(pg)
+            gap = m3["chatScrollHeight"] - m3["chatScrollTop"] - m3["chatClientHeight"]
+            if gap <= 1:
+                break
+        check(f"浮钮点击后贴底（gap={gap} <= 1）", gap is not None and gap <= 1, gap)
+        check("浮钮点击后自动收起", not (m3["jump"] or {}).get("visible"), m3["jump"])
 
         await browser.close()
 

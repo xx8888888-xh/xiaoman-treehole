@@ -284,3 +284,26 @@ localStorage、刷新后仍在。本地 50/50 PASS。
 - 断言落在 `scripts/test_layout_matrix.py` §6：先把消息列表拉长（25 条克隆）保证两侧都有滚动余量，
   再置 `scrollTop=120`，收起后 60ms 采样；42 → **46 条**，本地 18.2s。
 
+## 15. 回到底部浮钮（`docs/UI_R2.md` §三-4 遗留项落地）
+
+- **改前观感**：上翻历史到中段时，`pinned=false`，唯一提示是列表末端的底栏「↓ N 条新消息」——
+  它随内容滚出视口；此刻来新消息，屏幕上没有任何回底入口（改前截图实测 `jumpExists:false`）。
+- **改后**：`#chatArea` 内、`#chatScroll` 之后放 0 高 `.jump-anchor`，44px 圆钮 `.jump-bottom`
+  绝对定位在锚点上方 8px。锚点在文档流里就位于"对话区底边"（状态条/输入栏之上），
+  所以无论下面叠着提示条、排队条、语音提示还是只有输入栏，浮钮都落在它们上沿；
+  矩阵用矩形相交面积断言 `overlapInputbar/Notice/Pending/Voice/Retry` 全为 0。
+- **显隐**：由 pager 的 `pinned` 驱动（用户上滚即显示，回底即收起），不依赖 `is-scrolled`
+  这类"滚了 4px 就算"的弱条件；条数写进 `aria-label`（`回到最新消息（N 条新消息）`）。
+- **平滑滚动防闪**：`scroll-behavior:smooth` 下回底途中会连续触发 scroll，若照常按位置判定，
+  `pinned` 被中间帧改回 false、浮钮闪一下。`jumpLatest()` 给 800ms 程序化窗口，
+  期间只等"真正贴底"再确认。
+- **边角**：横屏 ≤260px 时输入栏是 `position:absolute` 浮在列底，浮钮没有"不压输入栏"的位置，
+  随状态条一起让位（`.jump-anchor{display:none}`）；其余档位不受影响。
+- **顺带修的真 bug（计数语义）**：`syncBars()` 的已渲染位置原为 `min(total, start+VIEW)`，
+  短会话（≤VIEW）上翻后新消息进不了窗口却会被算作"已渲染"，条数恒为 0——
+  底栏与浮钮都不提示。改为 `start + rendered.length`（真实挂到 DOM 的条数），
+  短会话上翻后来 1 条新消息现在显示「↓ 1 条新消息」/「（1 条新消息）」。
+- **验证**：`scripts/test_layout_matrix.py` 46 → **53 条**（新增 §7：上翻可见、中心可命中、
+  ≥44px 触控、五类控件零相交、新消息带条数、点击贴底 gap=0、点击后收起），本地全绿；
+  `web/tests/chat_pager.test.js` 新增 2 条（浮钮时序 + 短会话计数），`npm test` 307 → **309/309**。
+

@@ -29,8 +29,10 @@ function setup(opts = {}) {
   typing.className = "msg-row hidden";
   host.appendChild(typing);
   const scroll = doc.createElement("div");
-  Pager.mount(Object.assign({ host, typing, scroll, build, doc }, opts));
-  return { doc, host, typing, scroll };
+  const jump = doc.createElement("button");
+  jump.className = "jump-bottom hidden";
+  Pager.mount(Object.assign({ host, typing, scroll, build, doc, jump }, opts));
+  return { doc, host, typing, scroll, jump };
 }
 
 function pushN(p, n, from = 0) {
@@ -129,6 +131,38 @@ test("用户翻历史时新消息不打断：只提示条数，回到底部才�
   assert.equal(Pager.stats().start, 19);
   const texts = rowTexts(host);
   assert.equal(texts[texts.length - 1], "m32");
+});
+
+test("回到底部浮钮：上翻出现、新消息带条数、点击回底后收起", () => {
+  const { scroll, jump } = setup();
+  pushN(Pager, 30);
+  assert.equal(jump.className.includes("hidden"), true, "跟随最新时浮钮隐藏");
+  // 用户滚到历史中段（离底 500px）
+  scroll.scrollHeight = 1200;
+  scroll.clientHeight = 400;
+  scroll.scrollTop = 300;
+  scroll.onscroll();
+  assert.equal(jump.className.includes("hidden"), false, "上翻历史后浮钮出现");
+  assert.equal(jump.getAttribute("aria-label"), "回到最新消息");
+  pushN(Pager, 3, 30);   // 上翻期间来 3 条新消息：浮钮不消失，条数写进 aria-label
+  assert.equal(jump.className.includes("hidden"), false, "新消息不打断阅读");
+  assert.equal(jump.getAttribute("aria-label"), "回到最新消息（3 条新消息）");
+  jump.onclick();
+  assert.equal(jump.className.includes("hidden"), true, "回底后自动收起");
+  assert.equal(Pager.stats().last, "m32");
+});
+
+test("短会话（<=VIEW）上翻后新消息：底栏与浮钮按未渲染条数提示", () => {
+  const { host, scroll, jump } = setup();
+  pushN(Pager, 3);
+  const bottomBar = host.findAll("window-tip").pop();
+  scroll.scrollHeight = 900;
+  scroll.clientHeight = 400;
+  scroll.scrollTop = 100;
+  scroll.onscroll();
+  pushN(Pager, 1, 3);
+  assert.equal(bottomBar.textContent, "↓ 1 条新消息", "新消息未进窗口，条数不能算成 0");
+  assert.equal(jump.getAttribute("aria-label"), "回到最新消息（1 条新消息）");
 });
 
 test("markVoice 写回记录：滑出窗口后重新渲染仍带「语音已播」", async () => {

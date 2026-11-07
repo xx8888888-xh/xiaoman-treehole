@@ -35,6 +35,8 @@ const ChatPager = (() => {
   let lastEdgeAt = 0;
   let pinned = true;        // 是否"跟着最新"：仅在用户手动上滚时置 false
   let topBar = null, bottomBar = null;
+  let jump = null;          // 「回到最新」浮钮（可选：页面提供节点，pager 只管显隐/点击）
+  let autoScrollUntil = 0;  // 程序化回底的平滑滚动窗口：期间不把中间帧当成"用户上翻"
 
   function el(tag, cls, text) {
     const node = doc.createElement(tag);
@@ -50,6 +52,8 @@ const ChatPager = (() => {
     build = opts.build;
     loader = typeof opts.loader === "function" ? opts.loader : null;
     doc = opts.doc || host.ownerDocument;
+    jump = opts.jump || null;
+    autoScrollUntil = 0;
     recs = [];
     evicted = 0;
     evictedFirst = null;
@@ -64,6 +68,7 @@ const ChatPager = (() => {
     bottomBar = el("div", "msg-row window-tip hidden", "新消息");
     topBar.onclick = () => { older(); };
     bottomBar.onclick = () => { jumpLatest(); };
+    if (jump) jump.onclick = () => { jumpLatest(); };
     host.insertBefore(topBar, typing);
     host.insertBefore(bottomBar, typing);
     if (scroll) {
@@ -189,7 +194,10 @@ const ChatPager = (() => {
   function syncBars() {
     if (!topBar) return;
     const total = totalCount();
-    const end = Math.min(total, start + VIEW);
+    // 「已渲染到哪」= 窗口起点 + 实际挂到 DOM 的条数。短会话（≤VIEW）里上翻后
+    // 新消息不推进窗口，若按 min(total, start+VIEW) 算，末尾会被当成"已渲染"，
+    // 条数恒为 0、底栏与浮钮都不提示。按真实渲染条数算才和屏幕上的内容一致。
+    const end = Math.min(total, start + rendered.length);
     // 还有更早：内存里（窗口起点之后）或库里（loader 未确认到底）都算
     const canOlder = start > evicted || (!!loader && total > 0 && !exhausted);
     const showTop = total > 0 && (start > 0 || !!loader);
@@ -206,6 +214,23 @@ const ChatPager = (() => {
     const fresh = total - end;
     setClass(bottomBar, "msg-row window-tip" + (fresh > 0 ? "" : " hidden"));
     setText(bottomBar, `↓ ${fresh} 条新消息`);
+    syncJump();
+  }
+
+  /**
+   * 「回到最新」浮钮：用户主动上翻（pinned=false）时浮在对话区底部。
+   * 底栏「N 条新消息」只在列表末端，上翻时在视口外——浮钮才是那个随时可见、
+   * 随时可点的入口。文字保持 44px 圆钮的一枚箭头；条数写进 aria-label。
+   */
+  function syncJump() {
+    if (!jump) return;
+    setClass(jump, "jump-bottom" + (pinned ? " hidden" : ""));
+    const total = totalCount();
+    const fresh = total - Math.min(total, start + rendered.length);
+    if (typeof jump.setAttribute === "function" && typeof jump.getAttribute === "function") {
+      const label = fresh > 0 ? `回到最新消息（${fresh} 条新消息）` : "回到最新消息";
+      if (jump.getAttribute("aria-label") !== label) jump.setAttribute("aria-label", label);
+    }
   }
 
   /**
@@ -276,7 +301,7 @@ const ChatPager = (() => {
       render("keep");
       return true;
     }
-    if (!loader || exhausted) return false;
+    if (!loader || exhausted) { syncBars(); return false; }
     busy = true;
     syncBars();
     let list = [];
@@ -305,12 +330,19 @@ const ChatPager = (() => {
   function jumpLatest() {
     start = Math.max(evicted, totalCount() - VIEW);
     pinned = true;
+    // 平滑回底途中会连续触发 scroll：若照常按位置判定，pinned 会被中间帧改回 false，
+    // 浮钮闪一下再消失。给这段程序化滚动一个窗口，期间只等"真正贴底"再确认。
+    autoScrollUntil = Date.now() + 800;
     render("bottom");
+    syncJump();
   }
 
   function onScroll() {
     if (busy || !scroll) return;
-    pinned = nearBottom();          // 用户手动上滚即解除"跟随最新"
+    // 用户手动上滚即解除"跟随最新"；程序化回底窗口内不打断（见 jumpLatest）
+    if (Date.now() >= autoScrollUntil) pinned = nearBottom();
+    else if (nearBottom()) pinned = true;
+    syncJump();
     const now = Date.now();
     if (now - lastEdgeAt < THROTTLE) return;
     lastEdgeAt = now;

@@ -2411,6 +2411,7 @@ const App = (() => {
         typing: $("typingRow"),
         scroll: $("chatScroll"),
         build: buildRow,
+        jump: $("jumpBottom"),   // 上翻历史时浮在输入栏上方的「回到最新」圆钮
         loader: loadOlderPage   // IndexedDB：首屏 30 条 → 上翻可回看全部 300 条
       });
       // 状态区（错误卡/旁白行）出现或收起会改变可视高度：只在"跟随最新"时贴底，

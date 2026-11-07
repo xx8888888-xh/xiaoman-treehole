@@ -216,7 +216,7 @@ jobs:
             # all = 云端已验证跑绿的 9 套。test_paging 的两项 WebGL 显存断言为既有环境红项
             # （stage 已换 Canvas 2D，texImage2D 探针恒 0；2048/1024 阈值与档位面积比不自洽），
             # 不放宽断言、不 skip，因此不进默认矩阵；需要时显式 ui_scripts=test_paging。
-            # test_layout_matrix：42 条布局断言（键盘高度/字体放大/转屏瞬时），本地实测 ~2 分钟；
+            # test_layout_matrix：53 条布局断言（键盘高度/字体放大/转屏瞬时/键盘收起/回底浮钮），本地实测 ~20 秒；
             # 它抓到过 h=284 溢出 130px 这类其余用例全漏的真问题，故纳入默认矩阵。
             json='["test_appearance","test_lifeline_ui","test_onboarding","test_phase3_e2e","test_stream_e2e","ui_tour","ux_walkthrough","shot","test_layout_matrix"]'
           else

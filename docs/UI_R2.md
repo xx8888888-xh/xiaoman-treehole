@@ -54,7 +54,7 @@
 1. **流式增量的文字过渡**：`app.js` 直接 `bubble.textContent = 累积文本`，每次替换都会重建文本节点，CSS 无法只对新增字符做淡入。建议：给流式气泡加 `.is-streaming`，用 `requestAnimationFrame` 之外的 CSS（例如外层 `opacity` 从 .86→1、300ms）或在末尾插入 `span.stream-tail` 只对尾巴做 120ms 淡入。**不改也能用，但"逐字出现"的顺滑度差一档**。
 2. **消息入场动画**：`chat_pager.js` 在窗口未满时整窗重建（`replaceChildren`），任何 `.msg-row` 入场动画都会在每次追加时对全部行重播。建议给"新增行"打 `data-fresh="1"`，只对该行做 200ms 上浮 6px + 淡入。
 3. **时间分隔行**：现在只有分页提示（`.window-tip`）。建议在连续消息间隔 >30 分钟时插入 `.time-divider`（复用 `.window-tip` 样式），文案"今天 14:20 / 昨天 / 10月28日"。**（已落地，见第六节；实际阈值取 5 分钟）**
-4. **滚动锚点**：`chat_pager` 已做"贴底才自动跟随"，但用户手动上翻后没有"回到底部"浮钮。建议加 `.jump-bottom`（44px 圆钮，`position:absolute` 于输入栏上方，`is-scrolled` 时显示），点击滚到底。
+4. **滚动锚点**：`chat_pager` 已做"贴底才自动跟随"，但用户手动上翻后没有"回到底部"浮钮。建议加 `.jump-bottom`（44px 圆钮，`position:absolute` 于输入栏上方，`is-scrolled` 时显示），点击滚到底。**（已落地，见 §6.4 与 `DECISIONS.md` §15；实际用 `pinned` 驱动）**
 5. **加载骨架**：聊天没有骨架屏（首页直接渲染空态）。如需"历史加载中"占位，建议在 `chat_pager` 的 loader 状态给 `.window-tip` 加 `.is-loading`，用三条 shimmer 线（CSS 动画，`prefers-reduced-motion` 关闭）。
 6. **`web/js/tween.js` 未新增**：本次没有任何 JS 侧动画需要统一曲线，单独建文件会成为死代码；统一曲线已放在 CSS 令牌 `--ease-out / --ease-standard`。若后续做流式淡入，再在该文件里导出 `tween(el, {duration, easing})` 给 `app.js` 用。
 7. **`prefers-reduced-motion` 与"手动覆盖"**：`test_appearance.py` 明确要求"系统 reduce 下用户手动选生动仍生效（160ms）"，因此本轮保留"用户显式选择优先"。这是与硬性文案"全量尊重 reduce"的一处刻意取舍，已在测试约束内。
@@ -134,6 +134,6 @@
 
 ### 6.4 仍留的取舍
 
-- 回到底部浮钮（第三节-4）未做：`pinned=false` 时只有底栏"N 条新消息"提示；需要新增 HTML 节点与显隐状态，改动面大于本轮两项。
+- ~~回到底部浮钮（第三节-4）未做~~：**已落地**（`#jumpBottom` + `.jump-anchor`，`pinned=false` 时显示，44px 圆钮落在提示条/输入栏上沿，矩阵 §7 七条断言 + 短会话计数修正，见 `DECISIONS.md` §15）。
 - 加载骨架（第三节-5）未做：分页占位条已能表达"正在翻出…"，但没有 shimmer。
 - 流式逐字过渡（第三节-1/2）未做：`bubble.textContent` 整段替换，入场动画会在整窗重建时重播，需先给新增行打 `data-fresh`。
