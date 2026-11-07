@@ -42,6 +42,9 @@ CI 门禁（`ci.yml` / `e2e.yml` / `android-e2e.yml` 的 job 与判定）未改�
 - 走查断言收紧（不是放宽）：`inputbar_problems` 从 `b > ih+0.5` 改成 `b > ih-8`（横竖屏都跑）；
   横屏提示条出现后额外断言输入栏不后移（>2px 判红），上移超过 40px 也判红（"位置不动或小幅上移"）。
 - 保留「再发一次」按钮 82.2×34 命中检查（`fail_layout_problems` 的 `hitAtCenter` 在横屏同一网关内照跑）。
+- 云端 AVD 实测（run `42373201520`，`782×363`）：提示条出现时 `inputbar.t/b = 240.3/319.3`
+  （与提示条前 `319.3` 完全一致，未后移），硬线 `ih-8 = 355` 通过；`notice.b=204.3`、`retry 82.2×34 hitAtCenter=true`；
+  竖屏 `inputbar.b=739.3 ≤ 743`。`#pendingBar` 在短横屏提示条期间 `display:none`（与提示条的"再发一次"语义重复）。
 
 ## 2. 存储满内存兜底提示（用户批准产品行为）
 
@@ -72,8 +75,17 @@ CI 门禁（`ci.yml` / `e2e.yml` / `android-e2e.yml` 的 job 与判定）未改�
 
 - 仅加诊断、不改断言：`test_onboarding.py` 在 ⑧ 失败时打印 reload 之后的 `[probe] greet*` /
   `history restored` / `GREET_FAIL` 控制台行，以及 `xiaoman_greet_day`、today、`xiaoman_memory`、pending 数快照。
-- 待定论：greet 只读 `xiaoman_memory`（profile），不读 `MemoryStore` pins；⑧ 断言要的"阿秋/考试"依赖 profile。
-  结论与依据见本轮报告。
+- **判定：不是随机问候分支，也不是漏称呼；是旧 ⑧ 断言的场景错误 + 弱判据。**
+  - `GreetDay.decide(lastDay, todayKey, hasPending)` 是纯函数、无随机；`greet()` 文案全部由模板拼接，
+    称呼/大事读 `xiaoman_memory`（profile），同一 profile 输出恒定。
+  - 红 run（`9842d1c`，旧断言）在同一天 reload 后要求全文出现"上次"：同日重入按设计
+    `plan.play=false`（只播"话没丢"），开场根本不发；若某条聊天回复碰巧含"上次"→ 误绿（假绿）。
+    该红日志收尾文本里既无"对了，你上次说"也无"上次"。
+  - 已在 `a6fe3aa` 修正：reload 前把 `xiaoman_greet_day` 回拨一天（还原"隔天再访"），
+    判据收紧为"对了，你上次说"（不再接受聊天回复里的散字）。
+  - 修复后连续 8 次云端 onboarding 全绿（含本次 6 连跑 42373319777 / 42373403183 / 42373487274 /
+    42373572492 / 42373668121 / 42373757702），⑧ 输出稳定为
+    `阿秋，中午好呀，吃饭了没 … 对了，你上次说下周要考试——怎么样啦？我一直记着呢`。
 
 ---
 
