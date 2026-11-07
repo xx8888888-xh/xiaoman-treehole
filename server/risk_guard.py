@@ -453,13 +453,46 @@ def filter_persona(reply, user_text="") -> str:
     return txt
 
 
+_SENT_END = "。！？!?…"
+_OPEN_QUOTE = "“‘「『"
+_CLOSE_QUOTE = "”’」』"
+_NO_REFLOW_RE = re.compile(r"```|`|https?://|www\.")
+
+
+def _split_sentences(seg):
+    """按句末标点切句；引号内的句号不切（ta 的原话要整段留着）。"""
+    out, cur, depth = [], "", 0
+    for ch in seg:
+        cur += ch
+        if ch in _OPEN_QUOTE:
+            depth += 1
+        elif ch in _CLOSE_QUOTE:
+            depth = max(0, depth - 1)
+        elif ch in _SENT_END and depth == 0:
+            out.append(cur)
+            cur = ""
+    if cur.strip():
+        out.append(cur)
+    return [s for s in out if s.strip()]
+
+
 def reflow_messages(text, hard=40) -> str:
     """把“换行当分条”和超长单句整理成客户端认的 || 分条。
 
     客户端只按 || 切气泡（换行不切），模型偶尔仍用换行/一长句。
     这里只改分隔方式、不改一个字：按换行和句末标点切，尽量每段 ≤ hard。
+
+    逐字保留的边界：
+    - 危机话术（SCRIPTS 原样返回）不重排；
+    - 含代码/命令/URL 的整段跳过，避免切坏命令与链接；
+    - 引号内的句子不切分，ta 的原话不被拆成两条；
+    - 整段无标点且超长时切不了，保持原样（不硬切，由判据继续判红）。
     """
     if not isinstance(text, str) or not text:
+        return text
+    if text.strip() in SCRIPTS.values():
+        return text
+    if _NO_REFLOW_RE.search(text):
         return text
     out = []
     for bubble in text.split("||"):
@@ -470,9 +503,8 @@ def reflow_messages(text, hard=40) -> str:
             if len(seg) <= hard:
                 out.append(seg)
                 continue
-            sents = re.findall(r"[^。！？!?…\n]+[。！？!?…]*", seg) or [seg]
             cur = ""
-            for s in sents:
+            for s in _split_sentences(seg):
                 if len(cur) + len(s) <= hard:
                     cur += s
                 else:

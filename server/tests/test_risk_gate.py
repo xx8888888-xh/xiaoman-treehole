@@ -102,6 +102,12 @@ class ReflowMessagesTest(unittest.TestCase):
         self.assertEqual(fixed, "第一句先说清楚。||第二句接着往下说。")
         self.assertNotIn("\n", fixed)
 
+    def test_newline_paragraphs_without_period(self):
+        text = "第一段没有句号\n第二段也没有句号"
+        self.assertEqual(risk_guard.reflow_messages(text),
+                         "第一段没有句号||第二段也没有句号")
+        self.assertEqual(risk_guard.reflow_messages("\n\n"), "\n\n")
+
     def test_long_bubble_split_by_sentence(self):
         text = ("哈哈，团子是挺欠揍的，专挑你加班的时候霸占键盘。你说年糕啊，"
                 "那是你的猫吧，我养的是团子。不过你说得对，猫都这样，"
@@ -112,10 +118,39 @@ class ReflowMessagesTest(unittest.TestCase):
         self.assertTrue(all(len(p) <= 40 for p in parts), parts)
         self.assertEqual(fixed.replace("||", ""), text)
 
+    def test_crisis_scripts_verbatim(self):
+        for script in risk_guard.SCRIPTS.values():
+            self.assertEqual(risk_guard.reflow_messages(script), script)
+        plain = ("这不是你的错，也不用一个人扛着。你先深呼吸，慢慢来，"
+                 "我在这儿，哪也不去。今天先把自己照顾好。")
+        self.assertIn("||", risk_guard.reflow_messages(plain))
+
+    def test_quoted_original_not_split_inside(self):
+        quoted = "他说“我今天真的不行了。想睡一整天，谁也别叫我。”我听完整个人都愣住了，这话太真实。"
+        fixed = risk_guard.reflow_messages(quoted)
+        self.assertIn("“我今天真的不行了。想睡一整天，谁也别叫我。”", fixed)
+        plain = ("他说我今天真的不行了。想睡一整天，谁也别叫我。"
+                 "我听完整个人都愣住了，这话太真实。说实话，这种话听一次心里就沉一次。")
+        parts = [p for p in risk_guard.reflow_messages(plain).split("||") if p]
+        self.assertGreaterEqual(len(parts), 2)
+
+    def test_code_and_numbers_untouched(self):
+        code = ("先跑 `git rebase --continue`，冲突解决完再 `git add .`，"
+                "最后 `git rebase --continue` 继续。")
+        self.assertEqual(risk_guard.reflow_messages(code), code)
+        url = "报名链接是 https://example.com/signup?from=treehole，你点进去填一下就行。"
+        self.assertEqual(risk_guard.reflow_messages(url), url)
+        digits = "订单号 2026110812345678901234，帮我查下这个订单号到底卡在哪个环节了，我等着。"
+        self.assertEqual(risk_guard.reflow_messages(digits), digits)
+
     def test_short_and_pipe_text_untouched(self):
         self.assertEqual(risk_guard.reflow_messages("嗯，睡吧。"), "嗯，睡吧。")
         good = "甲||乙"
         self.assertEqual(risk_guard.reflow_messages(good), good)
+        # 反例：|| 里夹着超长的一条，仍要切
+        mixed = "先说结论。||" + "第二段这句真的太长了，说了一堆还没说完。" * 3
+        parts = [p for p in risk_guard.reflow_messages(mixed).split("||") if p]
+        self.assertGreaterEqual(len(parts), 3)
 
     def test_unpunctuated_long_text_unchanged(self):
         hard = "这" * 41

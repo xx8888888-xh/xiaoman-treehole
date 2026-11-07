@@ -933,6 +933,24 @@ def reply_shape_audit():
     add("无标点超长句保持原样（切不了，仍判红）", rg.reflow_messages(hard), hard,
         "不硬切，交由判据继续判红")
     add("判据阈值未被放宽", ev.MSG_HARD_CHARS, 40)
+
+    # 逐字保留类边界：正例原样、反例照切
+    add("危机话术逐字保留", rg.reflow_messages(rg.SCRIPT_HIGH), rg.SCRIPT_HIGH)
+    code = ("先跑 `git rebase --continue`，冲突解决完再 `git add .`，"
+            "最后继续。")
+    add("含代码/命令整段不重排", rg.reflow_messages(code), code)
+    url = "报名链接是 https://example.com/signup?from=treehole，你点进去填一下就行。"
+    add("含 URL 整段不重排", rg.reflow_messages(url), url)
+    quoted = "他说“我今天真的不行了。想睡一整天，谁也别叫我。”我听完整个人都愣住了，这话太真实。"
+    add("引号内原话不拆开",
+        "“我今天真的不行了。想睡一整天，谁也别叫我。”" in rg.reflow_messages(quoted), True)
+    plain = ("他说我今天真的不行了。想睡一整天，谁也别叫我。"
+             "我听完整个人都愣住了，这话太真实。说实话，这种话听一次心里就沉一次。")
+    add("无引号同句会被切开（反例）",
+        len([p for p in rg.reflow_messages(plain).split("||") if p]) >= 2, True)
+    para = "第一段没有句号\n第二段也没有句号"
+    add("只有换行没有句号的段落",
+        rg.reflow_messages(para), "第一段没有句号||第二段也没有句号")
     return {"checks": checks, "all_pass": all(c["pass"] for c in checks)}
 
 
