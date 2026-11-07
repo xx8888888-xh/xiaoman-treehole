@@ -1,12 +1,15 @@
-param(
-  [ValidateSet('start','stop','status')]
+﻿param(
+  [ValidateSet('start','stop','status','guard','test-window')]
   [string]$Action = 'status',
   [string]$Avd = 'treehole_api34',
   [string]$Gpu = 'swiftshader_indirect',
   [int]$Cores = 4,
   [int]$MemoryMb = 3072,
   [int]$BootTimeoutSec = 240,
-  [switch]$StopWatchdog
+  [switch]$StopWatchdog,
+  [switch]$ViewOnly,
+  [switch]$UpdateBaseline,
+  [string]$ShotDir = ''
 )
 $ErrorActionPreference = 'Continue'
 $env:ANDROID_HOME = 'D:\android-sdk'
@@ -20,6 +23,82 @@ $watchdog = 'D:\android-avd\emulator_watchdog.ps1'
 $log = 'D:\android-avd\avd_local.log'
 $shot = 'D:\android-avd\avd_last.png'
 $coresTotal = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+
+# ---- 基线策略：云端 720x1280 是唯一像素/几何基线源，本地降配只允许目视 ----
+$repoRoot = ''
+if ($PSScriptRoot) { $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
+if (-not $repoRoot -or -not (Test-Path (Join-Path $repoRoot '.git'))) {
+  $repoRoot = 'D:\我的\编程\vibe coding tools\treehole-ci'
+}
+$protectedDirs = @('docs\shots', 'docs\ui-shots-r2', 'docs\android-battery\shots')
+
+# 限流时间窗（21:00-06:00 解除）：与看门狗共用同一判定
+$timeMod = 'D:\android-avd\emu_timewindow.ps1'
+if (-not (Test-Path -LiteralPath $timeMod)) { $timeMod = Join-Path $PSScriptRoot 'emu_timewindow.ps1' }
+. $timeMod
+function Get-LimitLine { "$(Get-LimitLabel (Get-Date)) window=21:00-06:00 now=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" }
+
+function Get-AvdLcd([string]$avdName) {
+  $ini = Join-Path 'D:\android-avd' "$avdName.avd\config.ini"
+  $r = [pscustomobject]@{ width = 0; height = 0; density = 0 }
+  if (-not (Test-Path $ini)) { return $r }
+  foreach ($line in Get-Content -LiteralPath $ini) {
+    if ($line -match '^\s*hw\.lcd\.width\s*=\s*(\d+)') { $r.width = [int]$Matches[1] }
+    elseif ($line -match '^\s*hw\.lcd\.height\s*=\s*(\d+)') { $r.height = [int]$Matches[1] }
+    elseif ($line -match '^\s*hw\.lcd\.density\s*=\s*(\d+)') { $r.density = [int]$Matches[1] }
+  }
+  return $r
+}
+
+$lcd = Get-AvdLcd $Avd
+$deviceLcd = $null
+try {
+  $wmOut = (& $adb shell wm size 2>$null | Out-String)
+  if ($wmOut -match 'Override size:\s*(\d+)x(\d+)') { $deviceLcd = [pscustomobject]@{ width = [int]$Matches[1]; height = [int]$Matches[2] } }
+  elseif ($wmOut -match 'Physical size:\s*(\d+)x(\d+)') { $deviceLcd = [pscustomobject]@{ width = [int]$Matches[1]; height = [int]$Matches[2] } }
+} catch { $deviceLcd = $null }
+$viewOnly = $false
+$viewReason = ''
+if ($ViewOnly) { $viewOnly = $true; $viewReason = 'forced' }
+elseif ($lcd.width -le 0 -or $lcd.height -le 0) { $viewOnly = $true; $viewReason = 'lcd-unknown' }
+elseif ($lcd.width -lt 720 -or $lcd.height -lt 1280) { $viewOnly = $true; $viewReason = "lcd=$($lcd.width)x$($lcd.height)" }
+elseif ($deviceLcd -and ($deviceLcd.width -lt 720 -or $deviceLcd.height -lt 1280)) {
+  $viewOnly = $true; $viewReason = "device=$($deviceLcd.width)x$($deviceLcd.height)"
+}
+
+function Get-ModeLine {
+  $mode = if ($viewOnly) { 'viewonly' } else { 'baseline' }
+  $writes = if ($viewOnly) { 'REFUSED' } else { 'allowed' }
+  $lcdText = if ($lcd.width -gt 0) { "$($lcd.width)x$($lcd.height)@$($lcd.density)" } else { 'unknown' }
+  return "MODE=$mode avd=$Avd lcd=$lcdText cores=$Cores gpu=$Gpu baseline_writes=$writes reason=$viewReason"
+}
+
+function Test-ProtectedPath([string]$p) {
+  $full = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($p)) { $p } else { Join-Path $repoRoot $p }))
+  foreach ($d in $protectedDirs) {
+    $dp = [IO.Path]::GetFullPath((Join-Path $repoRoot $d))
+    if ($full.StartsWith($dp, [StringComparison]::OrdinalIgnoreCase)) { return $d }
+  }
+  return ''
+}
+
+function Assert-BaselineGuard {
+  if (-not $viewOnly) { return }
+  if ($UpdateBaseline) {
+    Write-Log "REFUSED baseline write: --update-baseline in MODE=viewonly ($viewReason)"
+    "REFUSED baseline write: --update-baseline is not allowed in MODE=viewonly ($viewReason); 720x1280 baselines are produced on cloud only."
+    exit 2
+  }
+  if ($ShotDir) {
+    $hit = Test-ProtectedPath $ShotDir
+    if ($hit) {
+      Write-Log "REFUSED baseline write: ShotDir=$ShotDir -> $hit in MODE=viewonly ($viewReason)"
+      "REFUSED baseline write: $ShotDir -> $hit is not allowed in MODE=viewonly ($viewReason); write local shots outside docs/shots."
+      exit 2
+    }
+    Write-Log "viewonly shot dir accepted (non-baseline): $ShotDir"
+  }
+}
 
 function Write-Log([string]$msg) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg" | Add-Content -LiteralPath $log -Encoding UTF8 }
 
@@ -76,7 +155,47 @@ function Get-NonBlackRatio([string]$path) {
   }
 }
 
+if ($Action -eq 'test-window') {
+  # 时间窗边界自检：固定日期，跨零点用次日
+  $cases = @(
+    @{ t = '2026-11-07 20:59:00'; expect = 'LIMIT=on' },
+    @{ t = '2026-11-07 21:00:00'; expect = 'LIMIT=off' },
+    @{ t = '2026-11-07 23:59:00'; expect = 'LIMIT=off' },
+    @{ t = '2026-11-08 00:30:00'; expect = 'LIMIT=off' },
+    @{ t = '2026-11-08 05:59:00'; expect = 'LIMIT=off' },
+    @{ t = '2026-11-08 06:00:00'; expect = 'LIMIT=on' },
+    @{ t = '2026-11-08 06:01:00'; expect = 'LIMIT=on' }
+  )
+  $fail = 0
+  foreach ($c in $cases) {
+    $dt = [datetime]::ParseExact($c.t, 'yyyy-MM-dd HH:mm:ss', $null)
+    $got = Get-LimitLabel $dt
+    $ok = if ($got -eq $c.expect) { 'PASS' } else { $fail++; 'FAIL' }
+    "$($c.t) -> $got (expect $($c.expect)) $ok"
+  }
+  if ($fail -gt 0) { "WINDOW TEST FAIL count=$fail"; exit 1 }
+  'WINDOW TEST PASS 7/7'
+  exit 0
+}
+
+if ($Action -eq 'guard') {
+  # 供走查脚本在写截图前调用：viewonly 下拒绝任何落到基线目录的路径
+  Get-ModeLine
+  Get-LimitLine
+  if ($ShotDir) {
+    $hit = Test-ProtectedPath $ShotDir
+    if ($hit -and $viewOnly) {
+      "REFUSED baseline write: $ShotDir -> $hit in MODE=viewonly ($viewReason)"
+      exit 2
+    }
+    "GUARD OK: $ShotDir allowed"
+  }
+  exit 0
+}
+
 if ($Action -eq 'status') {
+  Get-ModeLine
+  Get-LimitLine
   $g = Get-Group
   $g | Select-Object ProcessId,Name,CreationDate,CommandLine | Format-List
   "watchdog: $(Test-Watchdog)"
@@ -101,6 +220,9 @@ if ($Action -eq 'stop') {
 }
 
 # start
+Assert-BaselineGuard
+Get-ModeLine
+Get-LimitLine
 Start-Watchdog
 $left = Get-Group
 if ($left) {

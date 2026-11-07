@@ -66,7 +66,58 @@ powershell -ExecutionPolicy Bypass -File D:\android-avd\avd_local.ps1 -Action st
 
 硬件 GPU 不可用，本地只能 `-gpu swiftshader_indirect`；Android 端到端仍以 CI（`android-e2e.yml`，`-no-window -gpu swiftshader_indirect`）为准。
 
-## 看门狗（硬规则：CPU > 30% 即杀）
+## 基线策略（云端唯一基线源 / 本地仅目视）
+
+1. **云端 720×1280 是唯一像素/几何基线源。** `docs/shots/**`、`docs/ui-shots-r2/**`、`docs/android-battery/shots/**` 全部保持 720 基线，**不重拍**——本机 GPU 不可用是硬件限制，不该拿重拍基线来补偿。
+2. **本地 480×800 / 2 核只用于目视。** 不产出任何进入基线的截图，也不拿它跑会写基线数字的走查。依赖视口尺寸的布局硬线必须在云端 720×1280 上判定，本地降配结果**不得**作为通过依据。
+3. **脚本写死 viewonly 守卫。** `scripts/local/avd_local.ps1` 读 AVD `config.ini` 的 `hw.lcd.width/height`：低于 720×1280（或显式 `-ViewOnly`）即进入 viewonly，启动时打印 `MODE=viewonly ... baseline_writes=REFUSED`；`-UpdateBaseline` 直接以退出码 2 拒绝；`-ShotDir` 落在上述基线目录同样拒绝。另有 `-Action guard -ShotDir <path>` 供走查脚本在写图前自检。
+4. **冷却提示。** 本地若确实需要在 720 上看动画超过 120 秒，就承认会被看门狗杀掉（硬规则不调阈值）；要跑长任务去云端。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/local/avd_local.ps1 -Action start -Avd treehole_gputest -Cores 2 -MemoryMb 2048
+# MODE=viewonly avd=treehole_gputest lcd=480x800@240 cores=2 gpu=swiftshader_indirect baseline_writes=REFUSED reason=lcd=480x800
+
+powershell -ExecutionPolicy Bypass -File scripts/local/avd_local.ps1 -Action start -Avd treehole_gputest -UpdateBaseline
+# REFUSED baseline write: --update-baseline is not allowed in MODE=viewonly (...)，退出码 2
+
+powershell -ExecutionPolicy Bypass -File scripts/local/avd_local.ps1 -Action guard -ShotDir docs/shots
+# REFUSED baseline write: docs/shots -> docs\shots is not allowed in MODE=viewonly (...)，退出码 2
+```
+
+## 限流时间窗（21:00–次日 06:00 解除）
+
+- 本地时间落在 **21:00–06:00**：`LIMIT=off`，看门狗不采样、不杀，可全核/满分辨率跑；其余时段 `LIMIT=on`，恢复 30% 硬规则。
+- 跨零点按小时判定（22:30 / 00:30 / 05:59 都在窗内，06:00 起恢复）。
+- 抗时钟跳变：看门狗用单调时钟（Stopwatch）与墙钟增量对比，偏差 >5s 视为跳变，本次不切换状态并清空 CPU 采样；正常切换需连续 2 次采样一致（2s 间隔）才生效，单次向前跳变不会误判。
+- 两处判定共用 `scripts/local/emu_timewindow.ps1`，避免脚本与看门狗各写一份。
+
+边界自检（`-Action test-window`，固定日期）实测：
+
+```
+2026-11-07 20:59:00 -> LIMIT=on  PASS
+2026-11-07 21:00:00 -> LIMIT=off PASS
+2026-11-07 23:59:00 -> LIMIT=off PASS
+2026-11-08 00:30:00 -> LIMIT=off PASS
+2026-11-08 05:59:00 -> LIMIT=off PASS
+2026-11-08 06:00:00 -> LIMIT=on  PASS
+2026-11-08 06:01:00 -> LIMIT=on  PASS
+WINDOW TEST PASS 7/7
+```
+
+窗内实测（720×1280 / 4 核 / 3072MB，原始 AVD，12 次滑动 + 返回，不降配、不加豁免）：
+
+| 指标 | 值 |
+|---|---|
+| 冷启动到 boot_completed | 59.1s |
+| 走查耗时 | 53.9s |
+| 走查 CPU 均值 | 8.9% |
+| 走查 CPU 峰值 | 42.9%（窗内允许，未触发击杀） |
+| GPU 峰值 | 0%（硬件 GPU 判死，与时间窗无关） |
+
+看门狗日志：`watchdog start ... window=21:00-06:00 state=LIMIT=off`，全程无 `KILL trigger`。
+**基线规矩不变**：像素/几何基线仍只认云端 720×1280，本地不重拍。
+
+## 看门狗（硬规则：CPU > 30% 即杀，仅限窗外时段）
 
 `D:\android-avd\emulator_watchdog.ps1`，2 秒采样，统计 `emulator.exe + qemu-system-x86_64.exe` 进程组占整机 CPU：
 
@@ -93,7 +144,7 @@ SUMMARY killed emulator group: ran=186.9s peak_cpu=68.3% threshold=30% residual=
 
 - 原 AVD `treehole_api34`（720x1280 / 4 核）恢复后：冷启动 **46.8s**，截图非黑 **87.74%**，静置 60 秒 **avg 0.7% / peak 1%**（证明 30% 线在空载下完全满足；之前的 40%–70% 来自启动/动画阶段）。
 - swangle：可启动（61.4s），但 Guest 仍为 SwiftShader，30–90s CPU avg 34.9% / peak 47.5%，GPU 0%。
-- 降配（480x800 + 2 核）能把走查峰值压到 30% 以下；**只测不切默认**。若切换，`docs/shots/**`、`docs/ui-shots-r2/**` 等 720x1280 截图基线全部失效，需要按 480x800（0.667 倍宽高）整体重拍。
+- 降配（480x800 + 2 核）能把走查峰值压到 30% 以下；**只测不切默认**，且按上面的基线策略它只用于目视、不写基线。若真要让降配成为默认，才需要按 480x800（0.667 倍宽高）整体重拍 720 基线——当前裁定是不重拍。
 
 ## 本次改动的 AVD 状态与回滚
 

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [double]$LimitPercent = 30.0,
   [int]$GraceSeconds = 120,
   [int]$IntervalSeconds = 2,
@@ -23,7 +23,19 @@ function Get-EmuGroup {
   return @($all) + @($extra)
 }
 
-Write-Log "watchdog start limit=$LimitPercent% grace=${GraceSeconds}s interval=${IntervalSeconds}s cores=$cores"
+$timeMod = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'emu_timewindow.ps1'
+if (-not (Test-Path -LiteralPath $timeMod)) { $timeMod = 'D:\android-avd\emu_timewindow.ps1' }
+. $timeMod
+
+# 时间窗状态：21:00-06:00 LIMIT=off（不采样不杀），其余 LIMIT=on
+$limitOff = Test-QuietWindow (Get-Date)
+$mono = [Diagnostics.Stopwatch]::StartNew()
+$lastWall = Get-Date
+$lastMono = 0.0
+$candidate = $null
+$candidateCount = 0
+
+Write-Log "watchdog start limit=$LimitPercent% grace=${GraceSeconds}s interval=${IntervalSeconds}s cores=$cores window=21:00-06:00 state=$(Get-LimitLabel (Get-Date))"
 $prev = @{}
 $lastTick = Get-Date
 $peak = 0.0
@@ -32,8 +44,48 @@ $groupStart = $null
 while (-not (Test-Path -LiteralPath $stopFile)) {
   Start-Sleep -Seconds $IntervalSeconds
   $now = Get-Date
-  $dt = ($now - $lastTick).TotalSeconds
+  $m = $mono.Elapsed.TotalSeconds
+  $wallDelta = ($now - $lastWall).TotalSeconds
+  $monoDelta = $m - $lastMono
+  $lastWall = $now
+  $lastMono = $m
+  if ($wallDelta -le 0) { $wallDelta = $IntervalSeconds }
+  $dt = $wallDelta
   $lastTick = $now
+
+  # 时钟跳变：墙钟增量与单调时钟偏差 > 5s 时，本次不信任墙钟，保持原状态并重新确认
+  if ([math]::Abs($wallDelta - $monoDelta) -gt 5) {
+    Write-Log "clock jump wall_delta=$([math]::Round($wallDelta,1))s mono_delta=$([math]::Round($monoDelta,1))s -> keep $(Get-LimitLabel $now) state, re-confirm next samples"
+    $candidate = $null
+    $candidateCount = 0
+    $prev = @{}
+    $lastTick = $now
+    continue
+  }
+
+  $rawOff = Test-QuietWindow $now
+  if ($rawOff -ne $limitOff) {
+    if ($candidate -eq $rawOff) { $candidateCount++ } else { $candidate = $rawOff; $candidateCount = 1 }
+    # 连续 2 次采样一致才切换，单次跳变不会立刻改判
+    if ($candidateCount -ge 2) {
+      $limitOff = $rawOff
+      $candidate = $null
+      $candidateCount = 0
+      Write-Log "window switch -> $(Get-LimitLabel $now) (2 consecutive samples confirmed)"
+    }
+  } else {
+    $candidate = $null
+    $candidateCount = 0
+  }
+
+  if ($limitOff) {
+    # 免限时窗内：不采样、不杀
+    $prev = @{}
+    $peak = 0.0
+    $groupStart = $null
+    continue
+  }
+
   $group = Get-EmuGroup
   if ($group.Count -eq 0) {
     $prev = @{}
