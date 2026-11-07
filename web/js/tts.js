@@ -41,6 +41,11 @@ const TTS = (() => {
   const DEFAULT_VOICE = "zh-CN-XiaoyiNeural";
   const AUDIO_START_TIMEOUT = 10000;  // 弱网/长句：音频 10s 还没真正开播就降级，先保住文字
                                       // （edge 一句 60 字实测 ~4.9s，7s 会把长句误杀成系统音）
+  // 服务端请求预算单独一套：server 侧 edge 最坏 12s×2（EDGE_TIMEOUT + 重试），
+  // 用 10s 会在服务器刚回 200 时 abort（AbortError），把快好的音频扔了。
+  const SERVER_FETCH_TIMEOUT = 20000;
+  const SERVER_FETCH_ATTEMPTS = 2;    // 网络层失败（TypeError）重试一次
+  const SERVER_RETRY_BACKOFF = 300;
   const ENVELOPE_FRAME_MS = 50;       // 口型包络关键帧间隔（20Hz，足够 15/30fps 舞台）
 
   /** 纯函数：PCM 通道 → 归一化 RMS 包络（可单测，不依赖 WebAudio） */
@@ -370,30 +375,46 @@ const TTS = (() => {
       audio.play().catch(() => settle(true));
     }
 
-    /** 服务端语音请求：POST JSON body → blob URL（原文不进 URL） */
+    /** 服务端语音请求：POST JSON body → blob URL（原文不进 URL）
+     *  网络层失败（TypeError: Failed to fetch）重试一次。AVD 实测这条错误串
+     *  对应三种可复现故障：连接被拒 / 局域网明文被拦 / 服务端 200 后 body 中断
+     *  （net::ERR_CONNECTION_REFUSED / ERR_CLEARTEXT_NOT_PERMITTED /
+     *   ERR_CONTENT_LENGTH_MISMATCH）。前两种重试也没用（但只多 300ms），
+     *  第三种重试一次就能救回来，不必降级成系统音。
+     *  AbortError 是本端主动放弃（超时预算用尽），不重试。 */
     async function fetchServerAudio(base, text, voice, rate) {
-      const ctrl = typeof W.AbortController !== "undefined" ? new W.AbortController() : null;
-      const abortTimer = ctrl ? setTimeout(() => ctrl.abort(), AUDIO_START_TIMEOUT) : 0;
-      try {
-        const res = await W.fetch(`${base}/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, voice, rate }),
-          signal: ctrl ? ctrl.signal : undefined
-        });
-        if (!res.ok) {
-          let detail = "";
-          try {
-            const j = await res.json();
-            detail = j && j.error ? ` ${j.error}` : "";
-          } catch (e) { /* 非 JSON 错误体不深究 */ }
-          throw new Error(`tts http ${res.status}${detail}`);
+      let lastErr = null;
+      for (let attempt = 0; attempt < SERVER_FETCH_ATTEMPTS; attempt++) {
+        const ctrl = typeof W.AbortController !== "undefined" ? new W.AbortController() : null;
+        const abortTimer = ctrl ? setTimeout(() => ctrl.abort(), SERVER_FETCH_TIMEOUT) : 0;
+        try {
+          const res = await W.fetch(`${base}/tts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, voice, rate }),
+            signal: ctrl ? ctrl.signal : undefined
+          });
+          if (!res.ok) {
+            let detail = "";
+            try {
+              const j = await res.json();
+              detail = j && j.error ? ` ${j.error}` : "";
+            } catch (e) { /* 非 JSON 错误体不深究 */ }
+            throw new Error(`tts http ${res.status}${detail}`);
+          }
+          const blob = await res.blob();
+          return W.URL.createObjectURL(blob);
+        } catch (e) {
+          lastErr = e;
+          const transient = !!(e && e.name === "TypeError");
+          if (!transient || attempt + 1 >= SERVER_FETCH_ATTEMPTS) throw e;
+          console.info("server tts 网络层失败，重试一次:", e.message);
+          await new Promise((r) => setTimeout(r, SERVER_RETRY_BACKOFF));
+        } finally {
+          if (abortTimer) clearTimeout(abortTimer);
         }
-        const blob = await res.blob();
-        return W.URL.createObjectURL(blob);
-      } finally {
-        if (abortTimer) clearTimeout(abortTimer);
       }
+      throw lastErr;
     }
 
     // ---------- provider 实现（统一 available / speak / stop） ----------
@@ -490,7 +511,8 @@ const TTS = (() => {
         try {
           blobUrl = await fetchServerAudio(base, text, safeVoice(cfg), (cfg && cfg.ttsRate) || "normal");
         } catch (e) {
-          console.info("server tts 不可用，降级本机语音:", e && e.message ? e.message : e);
+          console.info("server tts 不可用，降级本机语音:",
+                       e && e.name ? `${e.name}: ${e.message}` : e);
           return false;
         }
         if (gen !== speakGen) {                // 请求期间用户又发了新消息 → 丢弃旧音频

@@ -283,6 +283,44 @@ test("服务端音频拿到了但设备播不出来：onEnd(false) 且只一次�
   assert.equal(calls.includes(true), false, "没出声绝不能报成功");
 });
 
+test("服务端 200 后 body 中断（TypeError: Failed to fetch）：重试一次，不降级系统音", async () => {
+  // 2026-11-07 AVD 实测：服务端已回 200、响应体中途 RST → 浏览器只给
+  // TypeError: Failed to fetch（net::ERR_CONTENT_LENGTH_MISMATCH）。
+  // 单发请求会让这条音频直接降级成系统音；重试一次即可救回。
+  let attempts = 0;
+  const win = fakeWin({
+    fetch: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError("Failed to fetch");
+      return { ok: true, blob: async () => ({ type: "audio/mpeg" }) };
+    },
+    URL: { createObjectURL: () => "blob:fake", revokeObjectURL: () => {} },
+    Audio: function FakeAudio() {
+      this.currentTime = 0; this.readyState = 0;
+      this.play = () => Promise.reject(new Error("no audio device"));
+      this.pause = () => {};
+    }
+  });
+  const engine = makeEngine(win, { tts: "server", ttsServer: "http://127.0.0.1:8903" });
+  const res = await engine.speak("今天有点累", () => {}, () => {});
+  assert.deepEqual(res, { spoke: true, provider: "server" });
+  assert.equal(attempts, 2, "网络层失败恰好重试一次");
+});
+
+test("服务端 503 不重试（HTTP 错误体已读到，重试只会拖慢降级）", async () => {
+  let attempts = 0;
+  const win = fakeWin({
+    fetch: async () => {
+      attempts += 1;
+      return { ok: false, status: 503, json: async () => ({ error: "tts_provider_unavailable" }) };
+    }
+  });
+  const engine = makeEngine(win, { tts: "server", ttsServer: "http://127.0.0.1:8903" });
+  const res = await engine.speakSafe("你好", () => {});
+  assert.equal(attempts, 1);
+  assert.deepEqual(res, { spoke: false, provider: "none" });
+});
+
 test("包络帧下标：越界钳制在 [0, len-1]", () => {
   const idx = TTS._envelopeIndex;
   assert.equal(idx(-1, 50, 10), 0);
