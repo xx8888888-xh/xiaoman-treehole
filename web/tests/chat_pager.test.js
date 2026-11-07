@@ -88,6 +88,21 @@ test("向上翻页：节点数不变，窗口前移，能回到更早的消息",
   assert.equal(countNodes(host), before);
 });
 
+test("整页重建后句柄 el 指向新节点（逐字 paint 不会写到已脱离文档的旧节点）", () => {
+  const { host } = setup();
+  pushN(Pager, 3);
+  const h = Pager.push({ text: "先说半句", who: "them" });
+  const old = h.el;
+  assert.ok(old, "push 后应有节点");
+  Pager.jumpLatest();                       // 整页重建（bottom）
+  assert.notEqual(h.el, old, "重建必须把句柄指向新节点");
+  assert.ok(host.findAll("msg-row").includes(h.el), "句柄节点应仍在文档里");
+  h.rec.text = "先说半句，再补后半句";       // 重建后才到达的增量（流式收尾）
+  const bubble = h.el.children[0];
+  bubble.textContent = h.rec.text;
+  assert.equal(h.el.children[0].textContent, "先说半句，再补后半句");
+});
+
 test("翻页占位不闪烁：同一条占位节点从等待到完成始终在原地", async () => {
   let release = null;
   const { host } = setup({
@@ -97,7 +112,11 @@ test("翻页占位不闪烁：同一条占位节点从等待到完成始终在�
   const barBefore = host.children[0];
   const pending = Pager.older();
   assert.equal(host.children[0], barBefore, "占位节点未被重建");
-  assert.equal(barBefore.textContent, "正在翻出更早的消息…");
+  // 加载中是骨架（三条静态占位线），不再是文字；语义走 aria-label
+  assert.ok(barBefore.className.includes("is-loading"));
+  assert.equal(barBefore.findAll("sk-line").length, 3, "骨架三条线");
+  assert.equal(barBefore.getAttribute("aria-busy"), "true");
+  assert.equal(barBefore.getAttribute("aria-label"), "正在翻出更早的消息");
   assert.equal(barBefore.className.includes("hidden"), false);
   release(Array.from({ length: 10 }, (_, i) => ({ text: `old${i}`, who: "them" })));
   await pending;

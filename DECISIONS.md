@@ -307,3 +307,64 @@ localStorage、刷新后仍在。本地 50/50 PASS。
   ≥44px 触控、五类控件零相交、新消息带条数、点击贴底 gap=0、点击后收起），本地全绿；
   `web/tests/chat_pager.test.js` 新增 2 条（浮钮时序 + 短会话计数），`npm test` 307 → **309/309**。
 
+## 16. 加载骨架 + 流式逐字（`docs/UI_R2.md` §6.4 遗留项落地）
+
+### 16.1 骨架：静态三条线，不做 shimmer
+
+- **改前**：`loader` 挂起时 `.window-tip` 仍是一行「正在翻出更早的消息…」，没有 `aria-busy`，
+  屏幕和读屏都只能靠文案推断；`active` 状态没有任何占位结构。
+- **改后**：`ChatPager.syncBars()` 的 busy 分支调用 `sketch()`，在同一个 40px 浮条里放
+  3 条 `span.sk-line`（145.2 / 107.4 / 75.5px，高 3px），Node 只建一次（`__sk` 缓存），
+  切回 idle 走 `clearKids()` 恢复文案。`aria-busy=true` + `aria-label="正在翻出更早的消息"`。
+- **为什么不做 shimmer**：产品硬约束是「静止零动画」（`appearance.test.js` 只允许登记过的
+  一次性 keyframes），无限循环的脉冲既违反约束，也会在低端 WebView 上持续唤醒合成器；
+  三条静态线 + 可读语义已经表达"正在取更早的消息"。
+- **为什么宽度/高度要钉死**：浮条高度必须和 idle 一致（实测 40 → 40px、顶边 352 → 352），
+  否则切 busy 的瞬间会把下面 10 条消息整体推一下，正好落在「用户刚滚到顶」的时刻。
+
+### 16.2 流式逐字：与网络到达解耦的展示节奏（`web/js/stream_typer.js`）
+
+- **改前**：`paint()` 每次把累积文本整段写入 `bubble`。服务端/代理一次吐整段时，
+  屏幕上是「0 → 97 字」一帧完成（探针 2 次更新、单帧 95 字、388ms），读起来像闪屏。
+- **改后**：`StreamTyper` 只负责「这一刻该显示到第几个字」，不碰 DOM，可注入假时钟做单测。
+  - 短回复 `≤20 字`：`speedFor()` 返回 `Infinity`，整段落屏——短句本来就是一句话，
+    拆成 3 字一顿反而更假；网络分块到达的节奏原样保留（11 字实测 4 次更新）。
+  - 长回复：`cps = min(400, 170 + 0.6 × len)`，97 字约 228cps；实测 26 帧、单帧 ≤4 字、
+    494ms 补齐，和网络块到达时间基本重合，不会"先到先灌"。
+  - 切后台回来：单帧计时封顶 `MAX_DT=120ms`，不会把暂停期间的欠账一次性补进一帧。
+- **收尾**：流结束时 `api.js` 的最后 2 字是缓冲的，`replace(full)` 若直接 `flush()` 会有
+  一次 29 字的跳变。新增 `finishSoon(160)`：按剩余欠账算补速（上限 `2×MAX_CPS`），
+  在 160ms 窗口内播完，绝不瞬移半段；降级/危机改写仍用 `flush()` 立即定稿（TTS 不等动画）。
+- **行入场**：新行打 `data-fresh=1`，CSS `msg-in` 200ms；260ms 后由 `app.js` 摘掉标记。
+  整窗重建（窗口未满时的 `replaceChildren`）只给真正的新行播一次，历史行不重播；
+  极简模式 `animation:none`，矩阵同时断言 `rowH>0`（不播动画 ≠ 不可见）。
+
+### 16.3 滚动：四条必须同时成立的保护
+
+流式每帧都在长高，滚动位置只要有一处"顺手写成 `scrollTop = scrollHeight`"就会出事：
+
+1. **关闭浏览器滚动锚定**：`#chatScroll { overflow-anchor:none }`。Chrome 在内容长高时会
+   自动改 `scrollTop` 把锚点拉回视野；实测上翻后 `1355 → 1409 → 1627`，全程没有一行 JS
+   写 `scrollTop`，也没有 `scrollIntoView` 调用。所有滚动位置本来都由 JS 显式管理，锚定必须关。
+2. **贴底用 `instant`**：`stickBottom()` 与 pager 的 `pinBottom()` 统一
+   `scrollTo({top: scrollHeight, behavior:"instant"})`。CSS 里有 `scroll-behavior:smooth`，
+   逐帧贴底会变成"永远追不上的缓动"，流式结束停在离底 200+px，下一帧又被当成"用户在看历史"。
+3. **贴底门控当场算 gap**：`MutationObserver` 原来读缓存的 `lastGap`，程序化贴底后缓存
+   仍是 ≤60，一次 `scrollIntoView` 就能把上翻的用户拽到底；改为每次回调现算 `gap()`。
+4. **句柄重建后重绑**：`ChatPager.render()` 整页重建节点后，流式句柄的 `el` 仍指向已脱离
+   文档的旧节点，`paint()` 的 `parentElement === #messages` 守卫会静默停写（实测短回复停在
+   9 字）。用 `handleOf`（WeakMap，`rec → handle`）在 `render()` 里把 `h.el = node` 重绑。
+
+### 16.4 验证（本轮未放宽任何阈值）
+
+- 探针（同一 SSE 脚本、414×860、改前快照跑在独立静态服务上）：
+  长回复 **2 帧 / 单帧 95 字 / 388ms → 26 帧 / 单帧 4 字 / 494ms**；
+  短回复 **4 帧 / 11 字 → 4 帧 / 11 字**（网络分块节奏不变，末尾 2 字由 `finishSoon` 补齐）。
+- `scripts/test_layout_matrix.py` **53 → 80 条**：§8 骨架 9 条（线数/递减宽度/线高/静态/
+  aria/高度不推挤/切回可逆），§9 流式 18 条（短句整段、长句帧数与单帧上限、350–1400ms 补齐、
+  短/长节奏差、`data-fresh` 生命周期、`msg-in`、极简零动画、贴底跟随、**流式中上翻不被拽回**、
+  语音提示不抢滚动、点浮钮回底）。原 53 条一条未删，**80/80 PASS**。
+- `web/` Node 单测 **309 → 320/320**：新增 `finishSoon` 收尾节奏与「整页重建后句柄重绑」；
+  Biome 0 error，`stream_typer.js` 新文件 0 warning。
+
+

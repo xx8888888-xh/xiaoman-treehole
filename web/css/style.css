@@ -480,6 +480,10 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   padding: var(--space-3) var(--space-4) var(--space-2);
   scroll-padding-top: var(--tap);
   scroll-behavior: smooth;
+  /* 流式气泡在底部持续长高时，浏览器自带的滚动锚定会悄悄改 scrollTop（实测上翻后
+   * 被拽回 200px），把"用户正在看历史"的视口挪走。滚动位置全部由 JS 显式管理
+   * （stickBottom / followBottom / 翻页 offset 回填），这里必须关掉锚定。 */
+  overflow-anchor: none;
 }
 /* 回到底部浮钮：锚点在对话列表之后就位（0 高、不占流），按钮绝对定位在锚点上方
  * 8px——无论下面叠着提示条/排队条/语音提示还是只有输入栏，浮钮都落在它们上沿，
@@ -522,6 +526,17 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
 .msg-row.them.same-group { padding-left: var(--space-6); }
 #typingRow { padding-left: var(--space-6); }
 .msg-row.me { justify-content: flex-end; }
+/* 新到达的一行：120–200ms 淡入上浮，只播一次。
+ * 标记由 app.js 打在“刚 push 出来的节点”上，窗口重建/翻页重建不带标记，不会重播。
+ * data-motion=off / 系统 reduce 由全局规则整条关掉，行直接以最终态出现。 */
+.msg-row[data-fresh],
+.msg-unit[data-fresh] {
+  animation: msg-in var(--dur-base) var(--ease-out) both;
+}
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(var(--space-1)); }
+  to { opacity: 1; transform: none; }
+}
 
 /* 时间分隔：两侧发丝线 + 一行小字。与旁白同一字号档（--text-caption 12.5px），
    用第三级文字色（明暗两套都 ≥4.5:1），不抢气泡。只在间隔 ≥5 分钟或跨天时出现；
@@ -1010,6 +1025,25 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
 }
 .window-tip::after { background: linear-gradient(90deg, var(--line), transparent); }
 .window-tip:hover { color: var(--text-2); }
+/* 分页加载骨架：三条占位线收在同一个 40px 顶栏里（高度与静态文案一致，不推挤列表）。
+ * 沿用产品约束：骨架是静态占位，不做 shimmer / 转圈；切换时只换 class。 */
+.window-tip .sk-stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-1);
+  width: 38%;
+  max-width: 13em;
+}
+.window-tip .sk-line {
+  display: block;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--skeleton);
+}
+.window-tip .sk-line:nth-child(2) { width: 74%; }
+.window-tip .sk-line:nth-child(3) { width: 52%; background: var(--skeleton-strong); }
+.window-tip.is-loading { cursor: default; }
 .care-card .hotline {
   display: flex;
   flex-wrap: wrap;

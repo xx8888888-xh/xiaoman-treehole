@@ -211,7 +211,7 @@ test("仅极简模式命中零动画，其余过渡只允许 --dur-* 令牌（�
 
   // 三种预设都不许循环装饰动画 / 自动播放；只允许一次性面板入场
   const keyframes = [...CSS.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]).sort();
-  assert.deepEqual(keyframes, ["modal-in", "panel-in"], "只允许抽屉/弹层的一次性入场");
+  assert.deepEqual(keyframes, ["modal-in", "msg-in", "panel-in"], "只允许抽屉/弹层/新消息的一次性入场");
   assert.doesNotMatch(CSS, /animation-iteration-count\s*:\s*infinite/);
   assert.doesNotMatch(CSS, /\bautoplay\b/i);
   assert.doesNotMatch(HTML, /<audio\b/i);

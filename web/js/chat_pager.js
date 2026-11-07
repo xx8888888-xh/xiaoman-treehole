@@ -37,6 +37,9 @@ const ChatPager = (() => {
   let topBar = null, bottomBar = null;
   let jump = null;          // 「回到最新」浮钮（可选：页面提供节点，pager 只管显隐/点击）
   let autoScrollUntil = 0;  // 程序化回底的平滑滚动窗口：期间不把中间帧当成"用户上翻"
+  // rec → push 句柄：整页重建会换掉节点，句柄的 el 必须跟着换，
+  // 否则流式逐字的 paint 会写到已脱离文档的旧节点上（屏幕上停在半句）。
+  let handleOf = new WeakMap();
 
   function el(tag, cls, text) {
     const node = doc.createElement(tag);
@@ -63,6 +66,7 @@ const ChatPager = (() => {
     exhausted = false;
     lastEdgeAt = 0;
     pinned = true;
+    handleOf = new WeakMap();
     // 两条占位条常驻 DOM（用 hidden 切换显隐）：翻页期间只改文字，不重建节点
     topBar = el("div", "msg-row window-tip hidden", "更早的消息");
     bottomBar = el("div", "msg-row window-tip hidden", "新消息");
@@ -169,7 +173,10 @@ const ChatPager = (() => {
       ? doc.createDocumentFragment() : null;
     for (let i = start; i < end; i++) {
       const mi = i - evicted;
-      const node = build(recs[mi], i, mi > 0 ? recs[mi - 1] : null, prevStamp(i));
+      const rec = recs[mi];
+      const node = build(rec, i, mi > 0 ? recs[mi - 1] : null, prevStamp(i));
+      const h = handleOf.get(rec);
+      if (h) h.el = node;      // 重建后句柄指向新节点（否则流式 paint 写到旧节点）
       if (frag) frag.appendChild(node); else host.insertBefore(node, typing);
       rendered.push(node);
     }
@@ -177,8 +184,20 @@ const ChatPager = (() => {
     host.insertBefore(bottomBar, typing);   // 底栏始终排在最后一行之后
     syncBars();
     if (!scroll) return;
-    if (anchor === "bottom") scroll.scrollTop = scroll.scrollHeight;
+    if (anchor === "bottom") pinBottom();
     else if (anchor === "keep") scroll.scrollTop = y0 + (scroll.scrollHeight - h0);
+  }
+
+  /** 贴底跳转必须绕开 CSS 的 scroll-behavior:smooth：
+   *  流式逐字每帧追加时平滑动画永远追不上，最后停在离底两三百 px（下一次发言还会
+   *  被当成"用户在看历史"）。instant 让每一帧都真的落在底部。 */
+  function pinBottom() {
+    if (!scroll) return;
+    if (typeof scroll.scrollTo === "function") {
+      scroll.scrollTo({ top: scroll.scrollHeight, behavior: "instant" });
+    } else {
+      scroll.scrollTop = scroll.scrollHeight;
+    }
   }
 
   /** 只在值真的变化时才写 DOM：push 每条都会走 syncBars，重复写同一串
@@ -191,6 +210,28 @@ const ChatPager = (() => {
     if (node && node.textContent !== text) node.textContent = text;
   }
 
+  /** 清空子节点（真实 DOM 里 textContent="" 就够了，测试桩需显式移除） */
+  function clearKids(node) {
+    if (!node || !node.children) return;
+    while (node.children.length) node.removeChild(node.children[0]);
+    node.textContent = "";
+  }
+
+  /** 加载骨架节点（只建一次）：三条占位线，空文本 + aria-label 表达语义 */
+  function sketch(node) {
+    if (!node || node.__sk) return;
+    clearKids(node);
+    const stack = doc.createElement("span");
+    stack.className = "sk-stack";
+    for (let i = 0; i < 3; i++) {
+      const line = doc.createElement("span");
+      line.className = "sk-line";
+      stack.appendChild(line);
+    }
+    node.appendChild(stack);
+    node.__sk = stack;
+  }
+
   function syncBars() {
     if (!topBar) return;
     const total = totalCount();
@@ -201,11 +242,22 @@ const ChatPager = (() => {
     // 还有更早：内存里（窗口起点之后）或库里（loader 未确认到底）都算
     const canOlder = start > evicted || (!!loader && total > 0 && !exhausted);
     const showTop = total > 0 && (start > 0 || !!loader);
-    setClass(topBar, "msg-row window-tip" + (busy || showTop ? "" : " hidden"));
-    if (busy) setText(topBar, "正在翻出更早的消息…");
-    else if (start > evicted) setText(topBar, `↑ 更早的消息（还有 ${start} 条）`);
-    else if (exhausted) setText(topBar, "没有更早了");
-    else setText(topBar, "↑ 更早的消息");
+    setClass(topBar, "msg-row window-tip" + (busy ? " is-loading" : (showTop ? "" : " hidden")));
+    if (busy) {
+      // 加载骨架：三条静态占位线（收在同一个 40px 顶栏里，不推挤列表）。
+      // 沿用产品既定约束：骨架必须是静态占位，不做 shimmer/循环动画。
+      sketch(topBar);
+      topBar.setAttribute("aria-busy", "true");
+      topBar.setAttribute("aria-label", "正在翻出更早的消息");
+    } else {
+      topBar.removeAttribute("aria-busy");
+      topBar.removeAttribute("aria-label");
+      clearKids(topBar);
+      topBar.__sk = null;
+      if (start > evicted) setText(topBar, `↑ 更早的消息（还有 ${start} 条）`);
+      else if (exhausted) setText(topBar, "没有更早了");
+      else setText(topBar, "↑ 更早的消息");
+    }
     // 到这里没有更早记录时，顶栏保留提示但不再触发实际加载（visible 语义供 E2E 断言）
     if (topBar.dataset) {
       const flag = canOlder ? "1" : "0";
@@ -255,6 +307,7 @@ const ChatPager = (() => {
   /** 追加一条消息；返回句柄（记录 + 已渲染节点，未渲染时 el=null） */
   function push(rec) {
     const handle = { rec, el: null };
+    handleOf.set(rec, handle);
     recs.push(rec);
     // pinned：原本停在底部；容忍内容增高导致的半行级偏移，避免新消息悄悄不显示
     if (nearBottom() || (pinned && scrollGap() <= FOLLOW_SLACK)) {
@@ -272,7 +325,7 @@ const ChatPager = (() => {
         host.insertBefore(bottomBar, typing);
         evictOld();      // 贴底推进后窗口外最早的一批落库释放（不碰当前窗口）
         syncBars();
-        if (scroll) scroll.scrollTop = scroll.scrollHeight;
+        if (scroll) pinBottom();
         handle.el = node;
         return handle;
       }
@@ -431,7 +484,9 @@ const ChatPager = (() => {
 
   const api = {
     mount, push, older, jumpLatest, followBottom, markVoice, remove, patch,
-    list, stats, PAGE, VIEW
+    list, stats, PAGE, VIEW,
+    /** 探针/矩阵：把顶栏切到"加载骨架"再切回（production 由 older() 的 busy 驱动） */
+    _setLoading(on) { busy = !!on; syncBars(); }
   };
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof window !== "undefined") window.ChatPager = api;   // classic script 顶层 const 不挂 window
