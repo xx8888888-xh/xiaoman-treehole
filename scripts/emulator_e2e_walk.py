@@ -1357,6 +1357,10 @@ def main():
     text: (document.getElementById('voiceTipText') || {}).textContent || '',
     logs: logs.length,
     last: logs.length ? logs[logs.length - 1].reason : null,
+    // 2026-11-07：整条日志带 detail（原因/长度桶/错误码/超时），
+    // 让「失败在哪」进入 e2e 产物，而不是只剩一个总数
+    entries: logs.slice(-5),
+    stats: window.__voiceFailStats ? window.__voiceFailStats() : null,
     ttl: ctl ? ctl.ttlMs : null,
   };
 })()

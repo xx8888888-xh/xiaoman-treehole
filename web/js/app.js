@@ -671,10 +671,22 @@ const App = (() => {
   }
   function showVoiceTip(reason) {
     const c = voiceTip();
-    if (c) c.show(reason);
+    if (c) {
+      // 失败诊断来自同一次 speak（入口即重置）；无诊断时保持旧 schema
+      let detail = null;
+      try {
+        if (typeof TTS !== "undefined" && TTS && typeof TTS._lastFailure === "function") {
+          detail = TTS._lastFailure();
+        }
+      } catch (e) { /* 诊断读取失败不影响提示条 */ }
+      c.show(reason, detail);
+    }
   }
   window.__onVoiceUnavailable = showVoiceTip;
   window.__voiceTip = voiceTip;   // E2E：可见性 / 存活期 / 失败日志探针
+  // E2E/排障：整条失败日志与分布（不落原文，只有原因/长度桶/哈希/错误码）
+  window.__voiceFailLog = () => { const c = voiceTip(); return c ? c.log() : []; };
+  window.__voiceFailStats = () => { const c = voiceTip(); return c ? c.stats() : null; };
 
   // ---------- 渲染 ----------
   // 长会话分页交给 ChatPager（chat_pager.js）：DOM 只保留当前页 + 缓冲，

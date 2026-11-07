@@ -119,3 +119,86 @@ test("index.html 先加载 voice_tip.js，再加载 app.js", () => {
   const app = html.indexOf("js/app.js");
   assert.ok(tip > 0 && app > 0 && tip < app, "voice_tip.js 必须在 app.js 之前");
 });
+
+// ---------- 2026-11-07：失败日志结构化（原因分布可重算） ----------
+
+test("detail 只落白名单字段：不写对话原文/未知键", () => {
+  const store = memStore();
+  const c = VoiceTip.create({ el: fakeEl(true), store, now: () => 5, setTimeout: () => 1, clearTimeout: () => {} });
+  c.show("play_failed", {
+    provider: "server",
+    error: "http_503",
+    httpStatus: 503,
+    textLen: 42,
+    textHash: "deadbeef",
+    elapsedMs: 123.6,
+    timedOut: false,
+    attempts: [{ provider: "server", error: "start_timeout", timedOut: true, elapsedMs: 7000 }],
+    text: "这是不该落盘的正文",
+    stack: "Error: boom\n  at app.js:1",
+  });
+  const e = c.log()[0];
+  assert.equal(e.reason, "play_failed");
+  assert.deepEqual(e.detail, {
+    provider: "server",
+    error: "http_503",
+    textLen: 42,
+    bucket: "mid",
+    textHash: "deadbeef",
+    elapsedMs: 124,
+    httpStatus: 503,
+    attempts: [{ provider: "server", error: "start_timeout", timedOut: true, elapsedMs: 7000 }],
+  });
+  const dump = JSON.stringify(c.log());
+  assert.ok(!dump.includes("这是不该落盘的正文"), "正文不得进入 sessionStorage 日志");
+  assert.ok(!dump.includes("at app.js"), "堆栈不得进入日志");
+});
+
+test("无 detail 时保持旧 schema（旧读端不受影响）", () => {
+  const store = memStore();
+  const c = VoiceTip.create({ el: fakeEl(true), store, now: () => 7, setTimeout: () => 1, clearTimeout: () => {} });
+  c.show("play_failed");
+  assert.deepEqual(c.log(), [{ at: 7, reason: "play_failed" }]);
+});
+
+test("长度分桶：short ≤20 / mid ≤60 / long >60", () => {
+  assert.equal(VoiceTip.bucketOf(0), "empty");
+  assert.equal(VoiceTip.bucketOf(12), "short");
+  assert.equal(VoiceTip.bucketOf(20), "short");
+  assert.equal(VoiceTip.bucketOf(21), "mid");
+  assert.equal(VoiceTip.bucketOf(60), "mid");
+  assert.equal(VoiceTip.bucketOf(61), "long");
+});
+
+test("stats 能从既有日志重算原因/错误码/长度桶/超时/重复文本", () => {
+  const log = [
+    { at: 1, reason: "play_failed" },   // 旧记录：只有 reason
+    { at: 2, reason: "start_failed", detail: { provider: "none", error: "no_provider", textLen: 8, bucket: "short", textHash: "aaa" } },
+    { at: 3, reason: "start_failed", detail: { provider: "server", error: "http_503", httpStatus: 503, textLen: 70, bucket: "long", textHash: "aaa" } },
+    { at: 4, reason: "play_failed", detail: { provider: "server", error: "start_timeout", timedOut: true, textLen: 30, bucket: "mid", textHash: "bbb" } },
+  ];
+  const s = VoiceTip.stats(log);
+  assert.equal(s.total, 4);
+  assert.equal(s.legacy, 1);
+  assert.deepEqual(s.byReason, { play_failed: 2, start_failed: 2 });
+  assert.deepEqual(s.byError, { no_provider: 1, http_503: 1, start_timeout: 1 });
+  assert.deepEqual(s.byBucket, { short: 1, long: 1, mid: 1 });
+  assert.deepEqual(s.byProvider, { none: 1, server: 2 });
+  assert.equal(s.timeouts, 1);
+  assert.deepEqual(s.topTextHashes, [{ hash: "aaa", count: 2 }, { hash: "bbb", count: 1 }]);
+});
+
+test("会话内 20 条写满后，detail 仍在（不会退化成只有总数）", () => {
+  const store = memStore();
+  const c = VoiceTip.create({ el: fakeEl(true), store, now: () => 1, setTimeout: () => 1, clearTimeout: () => {} });
+  for (let i = 0; i < 25; i++) {
+    c.show("play_failed", { provider: "server", error: "audio_error", textLen: i, textHash: "h" + i });
+  }
+  const log = c.log();
+  assert.equal(log.length, 20);
+  assert.ok(log.every((e) => e.detail && e.detail.error === "audio_error"));
+  const s = c.stats();
+  assert.equal(s.total, 20);
+  assert.equal(s.byError.audio_error, 20);
+});
+
