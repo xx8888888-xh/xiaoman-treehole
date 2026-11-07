@@ -9,8 +9,11 @@
  *
  * provider：
  * 1. native  → 安卓系统 TTS（AndroidTTS JS Bridge；优先，离线、零依赖、零许可风险）
- * 2. server  → 可选自建语音服务（**默认关闭**：只有注入 XIAOMAN_TTS_SERVER
- *              或用户显式配置 ttsServer 才可用；没配地址 available()=false）
+ * 2. server  → 自建语音服务（三种启用方式，优先级从高到低：
+ *              XIAOMAN_TTS_SERVER 注入 → 设置页显式地址 ttsServer →
+ *              从对话后端 apiBase 推导出「同一台机器:8903」的局域网地址）
+ *              推导只在 apiBase 是内网/局域网地址时生效，公网 API 域名一律不猜
+ *              （否则会凭空造出一个永远 503 的 provider，每句白等 10s）
  *              POST {base}/tts  JSON {text, voice, rate} → audio/*
  *              原文只放 body，不进查询串（避免整句对话被访问日志落盘，审计 P1-5）
  * 3. browser → Web Speech API speechSynthesis（离线兜底）
@@ -130,14 +133,42 @@ const TTS = (() => {
     return VOICES.indexOf(v) >= 0 ? v : DEFAULT_VOICE;
   }
 
+  /** 从 URL 里取主机名（带端口会被去掉）；非法/相对地址返回空串 */
+  function hostOf(url) {
+    const m = /^https?:\/\/([^/?#]+)/i.exec(String(url || "").trim());
+    if (!m) return "";
+    let h = m[1].toLowerCase();
+    const colon = h.lastIndexOf(":");
+    if (colon > 0 && h.indexOf("]") === -1) h = h.slice(0, colon);
+    return h;
+  }
+
+  /** 内网/局域网主机：只有这类地址才敢"同机推导"，公网 API 域名不猜语音端口 */
+  function isLanHost(h) {
+    return /^10\./.test(h) || /^192\.168\./.test(h)
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /\.local$/i.test(h);
+  }
+
   /**
-   * 服务端地址：默认关闭。只有显式注入/显式配置才启用（新装用户不会请求任何
-   * 远程语音服务；provider 缺失时 available()=false）。
+   * 服务端地址解析（开箱即用）：
+   *  1) XIAOMAN_TTS_SERVER 注入（CI/内嵌页面用）
+   *  2) 设置页显式 ttsServer
+   *  3) 显式 ttsBase（非回环才算，避免历史默认值把 provider 误开）
+   *  4) 对话后端是内网地址 → 语音服务就在同一台机器 8903（只配一次后端，语音自动跟上）
    */
   function serverBase(win, cfg) {
     const injected = normalizeBase(win && win.XIAOMAN_TTS_SERVER);
+    if (injected) return injected;
     const fromCfg = normalizeBase(cfg && cfg.ttsServer);
-    return injected || fromCfg || "";
+    if (fromCfg) return fromCfg;
+    const ttsBase = normalizeBase(cfg && cfg.ttsBase);
+    const tbHost = hostOf(ttsBase);
+    if (tbHost && tbHost !== "127.0.0.1" && tbHost !== "localhost") return ttsBase;
+    const apiBase = normalizeBase(cfg && cfg.apiBase);
+    const apiHost = hostOf(apiBase);
+    // 手机上的 127.0.0.1 是手机自己，推导出来只会永远连不上
+    if (apiHost && isLanHost(apiHost)) return "http://" + apiHost + ":8903";
+    return "";
   }
 
   /** 按环境创建一套引擎（浏览器用真实 window；单测注入 fake window） */
@@ -442,14 +473,14 @@ const TTS = (() => {
       }
     };
 
-    /** 自建语音服务（默认关闭；请求失败只降级，不打扰用户） */
+    /** 自建语音服务（地址解析见 serverBase；请求失败只降级，不打扰用户） */
     const serverProvider = {
       id: "server",
       available(cfg) {
         const c = cfg || loadCfg();
         const injected = normalizeBase(W.XIAOMAN_TTS_SERVER);
         if (injected) return true;
-        return c.tts === "server" && !!normalizeBase(c.ttsServer);
+        return c.tts === "server" && !!serverBase(W, c);
       },
       async speak(text, opts) {
         const { cfg, onFrame, onEnd, gen } = opts || {};

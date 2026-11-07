@@ -117,6 +117,28 @@ test("静音开关：muted 时不出声、available=false、onEnd 仍回调（�
   assert.equal(ended, 1);
 });
 
+test("开箱即用：对话后端是内网地址时，语音服务自动推导到同机 8903", async () => {
+  const seen = [];
+  const win = fakeWin({
+    fetch: async (url) => {
+      seen.push(url);
+      return { ok: false, status: 503, json: async () => ({}) };
+    }
+  });
+  const lan = { tts: "server", apiBase: "http://192.168.1.5:8902/v1", ttsServer: "" };
+  const engine = makeEngine(win, lan);
+  assert.equal(engine.providerObjects.server.available(lan), true);
+  assert.equal(engine.provider(lan), "server");
+  await engine.speak("只配了后端也能出声", () => {}, () => {});
+  assert.equal(seen[0], "http://192.168.1.5:8903/tts");
+  // 公网 API 域名不猜语音端口（否则每句白等 10s 才降级）
+  assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "https://openrouter.ai/api/v1" }), false);
+  // 手机上的 127.0.0.1 是手机自己，不推导
+  assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "http://127.0.0.1:8902" }), false);
+  // AVD 的 10.0.2.2 映射宿主机，属于可推导的局域网地址
+  assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "http://10.0.2.2:8902" }), true);
+});
+
 test("远程 provider：POST body 参数正确、文本不进 URL、503 只降级", async () => {
   const seen = [];
   const win = fakeWin({

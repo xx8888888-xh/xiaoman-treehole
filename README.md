@@ -38,9 +38,21 @@ docker compose up -d --build      # 必须在仓库根目录执行：web 与 ass
 |------|------|------|
 | 8901 | web | 前端静态站 |
 | 8902 | mock | 对话服务（mock 规则引擎 + LLM 代理） |
-| 8903 | tts | 语音服务（默认 `provider=none`，不内置合成后端，由设备系统 TTS 接管） |
+| 8903 | tts | 语音服务（默认 `provider=none`；`XIAOMAN_TTS_PROVIDER=edge` 打开在线音色，见下） |
 
 容器统一打 label `com.dsh.project=treehole`，可用 `docker ps --filter label=com.dsh.project=treehole` 查看。
+
+### 语音开箱即用（三选一）
+
+1. **只配对话后端就够了**：App 里 `apiBase` 填内网地址（如 `http://192.168.1.5:8902`），语音地址会自动推导成同机 `:8903`，不用再填第二项。
+2. **一条命令起语音服务**（手机与电脑同一局域网）：
+   ```bash
+   bash scripts/start_tts.sh      # 打印「手机该填的地址」，Ctrl-C 结束
+   ```
+   把打印出的 `http://<局域网IP>:8903` 填进 App「设置 → 语音服务地址」。
+3. **Docker**：`TTS_PUBLISH=0.0.0.0 XIAOMAN_TTS_PROVIDER=edge docker compose up -d tts`。
+
+三样都不可达时，App 自动落回柔化后的系统 TTS（pitch 1.06 / rate 0.96），文字照常输出。
 
 ### 方式 ②-b：本地进程（不想用 Docker）
 
