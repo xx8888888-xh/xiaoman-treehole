@@ -1189,19 +1189,19 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
  * 浏览器实测（414 宽，失败提示条 52.2 + 语音提示 32 + 排队条 52 + 输入栏 79，
  * 舞台 min-height 158）：h=364 时输入栏 b=406.2，超出硬线 ih-8=356 达 50.2px；
  * h=284 时超出 130.2px。舞台原为 flex:0 0 auto，不让位，溢出一律转嫁给输入栏。
- * 这里在键盘期把舞台压到 72~158 并允许收缩：h=364 → b≈320.8（余 35.2）。
+ * 这里在键盘期把舞台压到 72~158 并允许收缩：h=364 实测 b=352（硬线 356，余 4）。
  * 键盘收起（>480px）恢复原设计。 */
 /* 注意：软键盘把高度压到小于宽度后，CSS `orientation` 会翻成 landscape
  *（414×364 判为 landscape），所以这里按"窄 + 矮"匹配，而不是 orientation: portrait。 */
 @media (max-width: 560px) and (max-height: 480px) {
-  #app #stage, #app:has(#emptyState.hidden) #stage {
-    flex: 0 1 auto; height: clamp(72px, 20vh, 158px); min-height: 72px;
-  }
+  #app #stage { flex: 0 1 auto; height: clamp(72px, 20vh, 158px); min-height: 72px; }
+  #app:has(#emptyState.hidden) #stage { flex: 0 1 auto; height: clamp(72px, 20vh, 158px); min-height: 72px; }
 }
 /* 更矮（≤340px，键盘占掉大半屏）：舞台整体让位，聊天与输入栏才是当时的操作面。
- * 实测 h=284：舞台隐藏后 b=248 ≤ ih-8=276；h=340 时 b=248 ≤ 332。 */
+ * 实测 h=284：舞台隐藏后 b=272（硬线 276，余 4）；h=340 时 b=328（硬线 332）。 */
 @media (max-width: 560px) and (max-height: 340px) {
-  #app #stage, #app:has(#emptyState.hidden) #stage { display: none; }
+  #app #stage { display: none; }
+  #app:has(#emptyState.hidden) #stage { display: none; }
 }
 
 /* ---------- 记忆抽屉空态 ---------- */
