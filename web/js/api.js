@@ -43,8 +43,9 @@ const API = (() => {
     try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch { return {}; }
   }
 
-  // 配置写不进 localStorage（配额满/隐私模式）时，本次会话继续用内存里这份。
-  // 否则会退回默认 openai，明明服务端能聊却每句都"没送出去"。
+  // 仅在配置确实写不进 localStorage（配额满/隐私模式）时兜底到内存，
+  // 否则会退回默认 openai：服务端明明能聊，却每句都"没送出去"。
+  // 平时仍以 localStorage 为准，外部直接改写 cfg 后无需刷新即可生效。
   let memCfg = null;
 
   function loadCfg() {
@@ -68,9 +69,12 @@ const API = (() => {
       delete incoming.apiKey;
     }
     const cfg = XMConfig.normalizeCfg(incoming, memCfg || rawCfg());
-    memCfg = cfg;
-    try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+    try {
+      localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+      memCfg = null;   // 落盘成功：以后一律以 localStorage 为准
+    }
     catch (e) {
+      memCfg = cfg;    // 落盘失败：本次会话仍按这份配置聊天
       // 配额满/隐私模式：配置没落盘要让用户知道，而不是假装保存成功
       try { if (typeof window !== "undefined" && window.__storageFull) window.__storageFull("设置"); } catch {}
     }
