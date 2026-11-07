@@ -94,34 +94,34 @@
     {
       "id": "float.clear_px_per_frame",
       "section": "float",
-      "rule": {"type": "near", "value": 98610.0, "tolerance": 0.01},
+      "rule": {"type": "near", "value": 98610.0, "tolerance": 0.005},
       "r6": 98610,
       "unit": "px",
-      "note": "每帧清屏光栅 = 后备面积（恒等式）；±1% 只吸收每秒采样的整除误差"
+      "note": "每帧清屏光栅 = 后备面积（恒等式）；w21 收紧 ±1%→±0.5%（实测偏差 0.017%）"
     },
     {
       "id": "float.raster_outside_ratio",
       "section": "float",
-      "rule": {"type": "max", "value": 0.01},
+      "rule": {"type": "max", "value": 0.005},
       "r6": 0.0031,
       "unit": "ratio",
-      "note": "R6 判据：窗口外光栅 / pageFill <= 1%"
+      "note": "R6 判据：窗口外光栅 / pageFill <= 1%；w21 收紧到 <= 0.5%（实测 0.31%）"
     },
     {
       "id": "float.throttle_frames_per_sec",
       "section": "float",
-      "rule": {"type": "range", "value": [10.0, 20.0]},
+      "rule": {"type": "range", "value": [10.5, 13.0]},
       "r6": [10.25, 12.0],
       "unit": "per_sec",
-      "note": "6–10s 降档档位（R6 判据下限 10，沿用 R6 前的 10–20 带）"
+      "note": "6–10s 降档档位；w21 收紧 10–20 → 10.5–13.0（实测 11.25–11.75）"
     },
     {
       "id": "float.stopped_frames_per_sec",
       "section": "float",
-      "rule": {"type": "max", "value": 0.5},
+      "rule": {"type": "max", "value": 0.1},
       "r6": 0.04,
       "unit": "per_sec",
-      "note": ">10s 停循环，每 10s 补 1 帧 ≈0.1/s；沿用既有上限 0.5"
+      "note": ">10s 停循环，每 10s 补 1 帧 ≈0.1/s；w21 把上限 0.5 收到 0.1（实测 0.04）"
     },
     {
       "id": "float.geometry_matrix_ok",
