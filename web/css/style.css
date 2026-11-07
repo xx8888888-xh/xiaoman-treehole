@@ -1191,15 +1191,14 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   .topbar { display: none; }
 }
 
-/* 横屏极窄（≤640 宽）键盘态：40% 左列只剩 ~200px，右列 301px 宽，
+/* 横屏极窄（560–640 宽）键盘态：40% 左列只剩 ~200px，右列 301px 宽，
  * 提示条被迫换行到 157.7px 高，输入栏 b=371.8（硬线 312，超 59.8）。
- * 这一档舞台已挤成窄条、不再是操作面，让位给对话：单列后聊天 504px 宽，
- * 提示条回到 52.2px，输入栏 b≈232（余 80）。键盘收起（>480px）自动恢复分栏。 */
-@media (orientation: landscape) and (max-width: 640px) and (max-height: 480px) {
-  #app { grid-template-columns: minmax(0, 1fr); }
-  #app #stage { display: none; }
-  #app:has(#emptyState.hidden) #stage { display: none; }
-  #chatArea { grid-column: 1 / -1; }
+ * 这一档不整列隐藏舞台（用户裁定：角色完全消失是可见回退），改成"缩小版舞台"：
+ * 左列 clamp(120px, 22%, 160px)，560 宽时右列仍有 376px（提示条回到 73.3px）。
+ * 实测 568×320 缩舞台后 b=277.3（硬线 312）；560×320 需右列 ≥374px 才不折行，
+ * 故下限取 120px。键盘收起（>480px）自动恢复 40% 分栏；舞台自始至终 display 不为 none。 */
+@media (orientation: landscape) and (min-width: 560px) and (max-width: 640px) and (max-height: 480px) {
+  #app { grid-template-columns: clamp(120px, 22%, 160px) minmax(0, 1fr); }
 }
 
 /* 竖屏软键盘弹起：可视高压到 ≤520px 时舞台让出高度。
@@ -1225,7 +1224,7 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
 }
 /* 更矮（≤340px，键盘占掉大半屏）：舞台整体让位，聊天与输入栏才是当时的操作面。
  * 实测 h=284：舞台隐藏后 b=272（硬线 276，余 4）；h=340 时 b=328（硬线 332）。 */
-@media (max-width: 560px) and (max-height: 340px) {
+@media (max-width: 559px) and (max-height: 340px) {
   #app #stage { display: none; }
   #app:has(#emptyState.hidden) #stage { display: none; }
 }

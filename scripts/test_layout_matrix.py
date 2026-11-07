@@ -74,7 +74,11 @@ MEASURE = """() => {
     pendingDisplay: pending ? getComputedStyle(pending).display : '',
     pending: rect(pending),
     stage: rect(document.getElementById('stage')),
+    stageDisplay: getComputedStyle(document.getElementById('stage')).display,
     chatScroll: rect(document.getElementById('chatScroll')),
+    chatScrollTop: document.getElementById('chatScroll').scrollTop,
+    chatScrollHeight: document.getElementById('chatScroll').scrollHeight,
+    chatClientHeight: document.getElementById('chatScroll').clientHeight,
     fs: getComputedStyle(document.documentElement).getPropertyValue('--fs').trim(),
     fontAttr: document.documentElement.getAttribute('data-font') || ''
   };
@@ -222,6 +226,40 @@ async def main():
         m = await measure(pg)
         metrics["after_rotate"] = m
         assert_case("切换结束 782x363", m, pending_must_be_hidden=True)
+
+        # ---------- 6) 键盘收起：舞台立刻恢复 + 滚动位置不跳 ----------
+        # 拉长消息列表，保证收起前后都有滚动余量；否则 scrollTop 会被物理夹到 0/底部，
+        # 那是滚动范围变化，不是我们布局规则造成的"跳变"，会误判。
+        await pg.evaluate("""() => {
+          const s = document.getElementById('chatScroll');
+          const rows = [...s.querySelectorAll('.msg-row')];
+          const last = rows[rows.length - 1];
+          if (last) for (let i = 0; i < 25; i++) {
+            const c = last.cloneNode(true); c.classList.remove('hidden'); s.appendChild(c);
+          }
+        }""")
+        # 两组：竖屏键盘（414×364→860）；横屏键盘收起（782×300→363，此组修前 scrollTop 120→1599）
+        for tag, (w_open, h_open, w_closed, h_closed) in (
+                ("竖屏", (414, 364, 414, 860)), ("横屏", (782, 300, 782, 363))):
+            await pg.set_viewport_size({"width": w_open, "height": h_open})
+            await pg.wait_for_timeout(350)
+            await pg.evaluate("() => { document.getElementById('chatScroll').scrollTop = 120; }")
+            await pg.wait_for_timeout(120)
+            before = await measure(pg)
+            await pg.set_viewport_size({"width": w_closed, "height": h_closed})
+            await pg.wait_for_timeout(60)  # 一帧多，测"立刻"而不是等动画结束
+            after = await measure(pg)
+            metrics[f"collapse_{tag}_before"] = before
+            metrics[f"collapse_{tag}_after"] = after
+            check(f"收起 {tag} {w_open}x{h_open}->{w_closed}x{h_closed}: 舞台立刻可见且尺寸恢复",
+                  after["stageDisplay"] != "none" and after["stage"]["h"] >= 158,
+                  (before["stageDisplay"], before["stage"]["h"],
+                   after["stageDisplay"], after["stage"]["h"]))
+            check(f"收起 {tag}: scrollTop 前后一致（{before['chatScrollTop']} -> {after['chatScrollTop']}）",
+                  before["chatScrollTop"] == after["chatScrollTop"],
+                  (before["chatScrollTop"], after["chatScrollTop"],
+                   before["chatClientHeight"], after["chatClientHeight"]))
+        await pg.screenshot(path=os.path.join(SHOTS, "collapse_restored.png"))
 
         await browser.close()
 

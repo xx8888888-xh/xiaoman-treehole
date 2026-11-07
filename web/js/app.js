@@ -2470,13 +2470,17 @@ const App = (() => {
         // resize 监听因此整个是死代码（scrollTop 仍停在 8）。直接盯容器自身的尺寸变化，
         // 键盘弹起（304→82）一定会命中；且不依赖任何系统事件。
         if (typeof ResizeObserver !== "undefined") {
-          let w = s.clientHeight;
+          let w = s.clientHeight, vh = window.innerHeight;
           const ro = new ResizeObserver(() => {
-            const next = s.clientHeight;
-            if (next === w) return;
+            const next = s.clientHeight, nextVh = window.innerHeight;
+            if (next === w && nextVh === vh) return;
             const shrunk = next < w;
-            w = next;
-            if (lastGap <= 60 || shrunk) { stick(); lastGap = gap(); }
+            // 只有"键盘弹起"（视口本身变矮）才无条件贴底；
+            // 键盘收起时顶栏/状态条回归会让聊天容器反而变矮（300→363 实测 59→54），
+            // 那不是键盘弹起，不能把用户正在翻看的历史一把拽到底部（scrollTop 120→1599）。
+            const keyboardOpening = nextVh < vh;
+            w = next; vh = nextVh;
+            if (lastGap <= 60 || (shrunk && keyboardOpening)) { stick(); lastGap = gap(); }
           });
           ro.observe(s);
         }
