@@ -638,6 +638,9 @@ html[data-preset="minimal"] { --bubble-me: var(--surface-2); }
   padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
   background: var(--bg);
   border-top: 1px solid var(--line-soft);
+  /* 输入栏与视口底边留一条安全缝：云端 AVD 实测竖屏 inputbar 底边 = 视口底边（751.3=751），
+   * 任何浮层/安全区误差都会让它被判定"出视口"。12px 不改变布局结构，只把输入栏抬离硬边。 */
+  margin-bottom: var(--space-3);
 }
 #textInput {
   flex: 1;
@@ -1164,6 +1167,11 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
     display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #chatScroll { min-height: calc(var(--tap) * 2); }
+  /* 提示条出现时让聊天区继续收缩（保住输入栏在视口内）：
+   * 云端 AVD 782×363 实测提示条 73.3 + 排队条 52.2 + voiceTip 32 + 输入栏 79，
+   * 叠加 88 的聊天区兜底高会把输入栏顶到 b=444.5（超出视口 81.5px）。
+   * 只在有提示条时解除 88 的兜底；无提示条的日常横屏仍是两条气泡高，设计不变。 */
+  #chatArea.has-notice #chatScroll { min-height: 0; }
 }
 
 /* ---------- 记忆抽屉空态 ---------- */

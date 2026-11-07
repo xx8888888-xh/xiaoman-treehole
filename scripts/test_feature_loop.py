@@ -303,6 +303,19 @@ async def main():
               "备份" in (await pg3.locator("#noticeText").inner_text()) or
               "空间" in (await pg3.locator("#noticeText").inner_text()))
         check("存储满：聊天没崩", await pg3.locator("#messages .msg-row").count() >= 2)
+        # 配置落盘失败会转内存兜底（本次会话照常聊天），但不能静默假成功：
+        # 必须明确说"在内存里、重启会丢"，且只提示一次、不随每次写失败刷屏。
+        mem_hits = await pg3.evaluate(
+            "() => window.__cfgMemFallbackCount ? window.__cfgMemFallbackCount() : -1")
+        ntxt = await pg3.locator("#noticeText").inner_text()
+        check("存储满：内存兜底明确告知（在内存里/重启会丢）",
+              mem_hits == 1 and "内存" in ntxt and "重启会丢" in ntxt, (mem_hits, ntxt))
+        check("存储满：该提示只出现一次（不重复刷屏）", ntxt.count("重启会丢") == 1, ntxt)
+        await send(pg3, "再试一次")
+        await pg3.wait_for_timeout(3000)
+        mem_hits2 = await pg3.evaluate(
+            "() => window.__cfgMemFallbackCount ? window.__cfgMemFallbackCount() : -1")
+        check("存储满：再次写入失败仍只提示一次", mem_hits2 == 1, mem_hits2)
         await ctx3.close()
 
         # ---------- IndexedDB 不可用（隐私模式/被清空） ----------

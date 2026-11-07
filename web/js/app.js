@@ -479,9 +479,14 @@ const App = (() => {
     retry.textContent = (opts && opts.label) || "重试";
     noticeAction = canRetry ? opts.action : null;
     bar.classList.remove("hidden");
+    // 横屏矮视口（≤420px）据此把聊天区的 88px 兜底高让出来，输入栏才不会被顶出视口
+    const area = $("chatArea");
+    if (area) area.classList.add("has-notice");
   }
   function hideNotice() {
     $("noticeBar").classList.add("hidden");
+    const area = $("chatArea");
+    if (area) area.classList.remove("has-notice");
     noticeAction = null;
   }
   /** R7：发送失败的可感知入口——toast + 常驻提示条（带「再发一次」）。 */
@@ -492,12 +497,27 @@ const App = (() => {
   }
   // 各模块 localStorage 写失败时（配额满/隐私模式）经此统一提示，只提示一次避免刷屏
   let storageWarned = false;
+  // 配置落盘失败时 api.js 用内存兜底（本次会话照常聊天），但必须让用户知道
+  // "这不是真存下了"——只提示一次；计数暴露给 E2E 断言"出现一次且不重复刷屏"。
+  let cfgMemNotices = 0;
+  let cfgMemActive = false;
+  window.__cfgMemFallback = () => {
+    cfgMemNotices++;
+    cfgMemActive = true;
+    if (cfgMemNotices !== 1) return;
+    toast("设置我先记在内存里，重启会丢");
+    showNotice("本机存储满了：设置我先记在内存里，重启会丢。", { retry: false });
+  };
+  window.__cfgMemFallbackCount = () => cfgMemNotices;
   window.__storageFull = (where) => {
     if (!storageWarned) {
       storageWarned = true;
       toast("本机存储满了，这次没存上");
     }
-    showNotice(XMErrors.storageText(where), { retry: false });
+    // 已在内存兜底时，后续存储提示也把"重启会丢"带上，别让最后一条提示变成
+    // 只说"没存上"而漏了配置还在内存里的事实。
+    const memTail = cfgMemActive ? " 设置我先记在内存里，重启会丢。" : "";
+    showNotice(XMErrors.storageText(where) + memTail, { retry: false });
   };
 
   /** 空状态：只在还没有用户消息时出现；第一条发出后自动收起 */
