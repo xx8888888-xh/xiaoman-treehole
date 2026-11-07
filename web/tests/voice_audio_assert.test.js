@@ -244,11 +244,13 @@ test("服务端拿到音频但迟迟不开播：超时判失败并走降级（st
   assert.equal(res.spoke, true, "音频已拿到，server 接手播放");
   assert.equal(state.played, 1);
 
-  // 第一跳：包络路 7s 未开播 → 判超时 → 纯播放再试
-  t.mock.timers.tick(7000);
+  // 阈值可能被音色线调整（7s→10s），按引擎暴露的值 tick，不硬编码
+  const timeout = engine._audioStartTimeout ? engine._audioStartTimeout() : 7000;
+  // 第一跳：包络路超时未开播 → 判超时 → 纯播放再试
+  t.mock.timers.tick(timeout);
   await flush();
-  // 第二跳：纯播放同样未开播 → 7s 再超时 → 无 browser 兜底 → onEnd(false)
-  t.mock.timers.tick(7000);
+  // 第二跳：纯播放同样未开播 → 再超时 → 无 browser 兜底 → onEnd(false)
+  t.mock.timers.tick(timeout);
   await flush();
   assert.equal(ended, false, "超时必须明确「没播成」");
 

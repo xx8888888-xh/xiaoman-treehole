@@ -119,6 +119,7 @@ async def main():
         return 1
 
     errors, bad = [], []
+    console_logs = []   # ⑧ 复诊用：开场是否真的被调用/播放（[probe] 前缀）
     results = []
 
     def check(name, ok):
@@ -134,6 +135,7 @@ async def main():
         try:
             pg = await b.new_page(viewport={"width": 390, "height": 844})
             pg.on("pageerror", lambda e: errors.append(str(e)))
+            pg.on("console", lambda m: console_logs.append(m.text))
             pg.on("response", lambda r: bad.append((r.status, r.url)) if r.status >= 400 else None)
 
             # ⓪ 全新身份：清 localStorage（xiaoman_sid / 记忆库全清）→ reload
@@ -199,6 +201,7 @@ async def main():
             # greet 分条发送带"真实延迟"动画，轮询等待而非固定 sleep
             await pg.evaluate(
                 "() => localStorage.setItem('xiaoman_greet_day', GreetDay.dayKey(Date.now()-86400000))")
+            console_logs.append("=== reload-for-greet ===")
             await pg.reload(wait_until="domcontentloaded")
             await pg.wait_for_selector("#textInput", state="visible", timeout=15000)
             end = time.time() + 15
@@ -213,6 +216,22 @@ async def main():
                 await asyncio.sleep(0.5)
             ok8 = ("阿秋" in msgs2) and ("考试" in msgs2) and ("对了，你上次说" in msgs2)
             print(f"⑧ 再访 greet 引用(称呼+大事): {'PASS' if ok8 else 'FAIL'} | {msgs2.strip()[-70:]!r}")
+            if not ok8:
+                # 复诊证据：开场是否被调用/播放，以及 greet_day / profile 的实际值
+                since = ""
+                for line in console_logs:
+                    if line == "=== reload-for-greet ===":
+                        since = ""
+                        continue
+                    if any(k in line for k in ("[probe] greet", "GREET_FAIL", "HISTORY", "PAGER_FAIL",
+                                               "history restored", "INIT_FAIL", "BIND_FAIL")):
+                        since += line + " | "
+                snap = await pg.evaluate(
+                    "() => JSON.stringify({greet_day: localStorage.getItem('xiaoman_greet_day'),"
+                    " today: GreetDay.dayKey(Date.now()),"
+                    " mem: JSON.parse(localStorage.getItem('xiaoman_memory')||'{}'),"
+                    " pending: JSON.parse(localStorage.getItem('xiaoman_pending')||'[]').length})")
+                print(f"⑧ 复诊: console={since[:200]!r} state={snap[:200]!r}")
             check("⑧ 再访 greet 引用", ok8)
             await pg.screenshot(path=os.path.join(SHOTS, "12_p01_onboarding_greet.png"))
 
