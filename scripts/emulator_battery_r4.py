@@ -542,7 +542,20 @@ def run_foreground(minutes, uid):
     sh(f"adb shell am start -n {MAIN} -f 0x20000000", timeout=60)
     if not wait_pid(60):
         raise RuntimeError("App 进程未起来")
-    ep.apply_preset(PORT, ep.PRESET_DEFAULT, "default")[0].close()
+    # 冷启动时 WebView devtools socket 晚于进程出现：单次 Cdp() 会瞬时失败
+    # （run 42380392111 的 foreground 段即因此整体失败）。重试到 60s。
+    preset, last = None, None
+    end = time.time() + 60
+    while time.time() < end:
+        try:
+            preset = ep.apply_preset(PORT, ep.PRESET_DEFAULT, "default")[0]
+            break
+        except Exception as e:
+            last = e
+            time.sleep(2)
+    if preset is None:
+        raise RuntimeError(f"主界面 CDP 未就绪（60s 内找不到 devtools socket）：{last}")
+    preset.close()
     cdp, info = ensure_pet_probe()
     _FOREGROUND_CDP = cdp
     print(f"[BATT] foreground 浮窗：{json.dumps(info.get('frame'), ensure_ascii=False)} "
