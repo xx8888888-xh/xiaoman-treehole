@@ -298,10 +298,13 @@ html[data-icons="color"] .brand-dot { background: var(--icon-accent); }
   background: var(--skeleton-strong);
 }
 /* 用相邻兄弟选择器代替 :has()（Chrome 105 起）：画布由 stage.js 插到容器首位，
- * 占位层必在其后，旧版 WebView 83 同样能把占位层让位。 */
+ * 占位层必在其后，旧版 WebView 83 同样能把占位层让位。
+ * 同样不能把 :has() 和普通选择器写进同一个列表：旧内核整条规则作废，
+ * 连兄弟选择器一起失效，占位层会一直盖在画布上。 */
 #stage .stage-canvas ~ .stage-skeleton,
-#stage:has(.stage-canvas) .stage-skeleton,
 #stage.is-fallback .stage-skeleton { display: none; }
+/* 新版内核的等价写法单独一条；旧内核整条丢弃，不影响上一条。 */
+#stage:has(.stage-canvas) .stage-skeleton { display: none; }
 
 #stage {
   position: relative;

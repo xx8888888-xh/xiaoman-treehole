@@ -222,6 +222,14 @@ localStorage、刷新后仍在。本地 50/50 PASS。
 （AVD 终验），本地矩阵 42/42。**守卫**：`web/tests/appearance.test.js` 断言 CSS 里不出现
 `#stage,\s*#app:has` 这类混写，并要求无条件规则与 `:has` 规则各存在；`node --test` 20/20。
 
+**同日复查（同类问题第二次出现）**：舞台占位层也有混写——
+`#stage .stage-canvas ~ .stage-skeleton, #stage:has(...) ..., #stage.is-fallback ... { display:none }`。
+旧内核整条作废，兄弟选择器和 `is-fallback` 兜底一起失效，占位层会一直盖在画布上。
+已拆成两条（`#stage:has(...)` 单独一条）。守卫升级为**全站规则扫描**：
+把 CSS 按规则切开，任何"含 `:has(` 且含 `,`"的选择器列表即判红，不再只盯一条具体规则。
+实测：修前混写列表 1 处 → 修后 0 处；模拟 WebView 83（删掉所有含 `:has` 的规则）后，
+占位层 `display=none` 仍由兄弟选择器兜住；`node --test` **21/21 PASS**。
+
 ## 12. `test_layout_matrix` 纳入云端默认矩阵（用户批准）
 
 - `.github/workflows/e2e.yml`：`ui_scripts=all` 追加 `test_layout_matrix`（默认 9 套），
@@ -229,5 +237,6 @@ localStorage、刷新后仍在。本地 50/50 PASS。
 - **场景数不变**：仍是 42 条断言（竖屏 7 档 ×2、横屏 6 档、字体 2 档、转屏 12 帧采样、基线与收尾），
   没有为跑快去删场景。
 - **时长**：本地单次 **14.6s**（含启动/造失败态/42 条断言，`ELAPSED_SEC=14.6 EXIT=0`），
-  远低于 3 分钟，因此**不拆片**；云端单 job 实测见提交后的 run 记录。
+  远低于 3 分钟，因此**不拆片**；云端 `ui-test_layout_matrix` 单 job **68s**
+  （run `42382188323`，14:34:02Z→14:35:10Z），同样不拆片。
 
