@@ -679,7 +679,9 @@ const TTS = (() => {
     _speechLevel: speechLevel,
     _charMs: CHAR_MS,
     /** 单测入口：注入 fake window 造独立引擎（不触碰真实浏览器/音频） */
-    _create: createEngine
+    _create: createEngine,
+    /** 设置页 / 诊断用：真实生效的服务端地址（与 provider 判定同一套规则） */
+    resolveServer: (win, cfg) => serverBase(win, cfg)
   });
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof window !== "undefined") window.TTS = api;

@@ -137,6 +137,10 @@ test("开箱即用：对话后端是内网地址时，语音服务自动推导�
   assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "http://127.0.0.1:8902" }), false);
   // AVD 的 10.0.2.2 映射宿主机，属于可推导的局域网地址
   assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "http://10.0.2.2:8902" }), true);
+  // 设置页提示必须与 provider 判定同源：否则界面写"安卓系统语音"，实际却在走服务端
+  assert.equal(TTS.resolveServer(win, lan), "http://192.168.1.5:8903");
+  assert.equal(TTS.resolveServer(win, { tts: "server", apiBase: "https://openrouter.ai/api/v1" }), "");
+  assert.equal(TTS.resolveServer(win, { tts: "server", apiBase: "http://10.0.2.2:8902" }), "http://10.0.2.2:8903");
 });
 
 test("远程 provider：POST body 参数正确、文本不进 URL、503 只降级", async () => {
