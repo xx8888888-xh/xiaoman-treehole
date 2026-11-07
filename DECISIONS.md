@@ -150,7 +150,7 @@
 | 重复请求 | — | 0.020 s（缓存） | 200 | `audio/mpeg` | 31 392 |
 | 非法 voice（XiaoyuanNeural） | 22 字 | — | **400**（不是 500） | — | — |
 
-**测试**：服务端 `pytest` 214 passed / 2 skipped（22 subtests）；web `node --test "tests/*.test.js"` 295 passed / 0 failed；资产 `ASSET_VERIFY PASS`（74 文件、1 392 959 字节）。
+**测试**：服务端 `pytest` 214 passed / 2 skipped（22 subtests）；web `node --test "tests/*.test.js"` 295 passed / 0 failed；资产 `ASSET_VERIFY PASS`（74 文件、1 392 959 字节）；`TtsController.java` + `AudioFocusPolicy` + `NoisyGuard` + `AndroidTtsBridge` 用 `javac 21` 对 `android-34/android.jar` 编译通过（WSL）。编译期真抓到一个错：`TextToSpeech.getVoices()` 返回 `Set<Voice>` 而非 `List<Voice>`，已改。
 
 ---
 

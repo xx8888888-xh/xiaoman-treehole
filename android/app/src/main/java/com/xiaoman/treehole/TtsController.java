@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * TtsController · 进程级唯一的系统 TTS 通道（主界面 + 两条浮窗共用一个引擎）
@@ -207,7 +208,7 @@ final class TtsController {
     private void applyCuteVoice() {
         if (tts == null) return;
         try {
-            List<Voice> all = tts.getVoices();
+            Set<Voice> all = tts.getVoices();
             if (all == null || all.isEmpty()) return;
             Voice best = null;
             int bestScore = 0;
