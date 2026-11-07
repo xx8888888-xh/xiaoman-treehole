@@ -239,10 +239,11 @@ const App = (() => {
       });
       savePending([]);
       renderPending();
+      if (noticeAction === retryPending) hideNotice();
       await sendSplit(data, null);
       toast("接上了，刚才说的都补回来了");
     } catch (e) {
-      toast(e && e.kind === "limit" ? "还是没信号，晚点再试" : "信号还没回来，话先记着呢");
+      reportSendFailure(e);
     } finally {
       retrying = false;
     }
@@ -475,12 +476,19 @@ const App = (() => {
     $("noticeText").textContent = text;
     const canRetry = !!(opts && opts.retry && opts.action);
     retry.classList.toggle("hidden", !canRetry);
+    retry.textContent = (opts && opts.label) || "重试";
     noticeAction = canRetry ? opts.action : null;
     bar.classList.remove("hidden");
   }
   function hideNotice() {
     $("noticeBar").classList.add("hidden");
     noticeAction = null;
+  }
+  /** R7：发送失败的可感知入口——toast + 常驻提示条（带「再发一次」）。 */
+  function reportSendFailure(e) {
+    const R = window.XMResilience;
+    if (!R) { toast("这句没送到，稍后再发一次？"); return; }
+    R.createFailureUI({ toast, showNotice, hideNotice, retry: retryPending }).report(e);
   }
   // 各模块 localStorage 写失败时（配额满/隐私模式）经此统一提示，只提示一次避免刷屏
   let storageWarned = false;
@@ -1559,14 +1567,22 @@ const App = (() => {
         });
         hideTyping();
         savePending([]);   // P1-3：真模型回复成功 = 欠的话补上了，清排队队列
+        if (noticeAction === retryPending) hideNotice();
         if (sticky) { data.emotion = "gentle"; data.hook = null; }   // 粘滞期不回闲聊
         await finalizeStreamed(data, text, renderer);
         await checkMilestone();   // P1-1：里程碑播报（幂等；危机轮已早退也不误播——ms_done 闸门兜底）
       } catch (e) {
         hideTyping();
+        // 存储满不是"没送出去"：回复已经拿到，只是本机没存上。
+        // 保留 setItem 时给出的备份/清理提示条，别用发送失败文案把它盖掉。
+        if (window.XMErrors && XMErrors.isQuota(e)) {
+          console.warn("存储写入失败，跳过发送失败提示:", e && e.message);
+          return;
+        }
         if (e && e.kind === "limit") {
           // P1-3 排队 UX：诚实告知信号不好（不静默换离线人格），消息落盘不丢，
           // 排队文案进 history（模型恢复后看得到"自己欠过回复"，自然补话）
+          reportSendFailure(e);   // R7-1：429/402 也要有常驻「再发一次」
           const wasQueued = loadPending().length >= 1;
           queuePending(text);
           const line = pickLimitLine(wasQueued);
@@ -1575,11 +1591,9 @@ const App = (() => {
           return;
         }
         console.error(e);
-        // 边界兜底：把技术错误翻译成人话（500/断网/坏 JSON 各有说法），
-        // 但回复文案保持原样，不让错误术语砸到正在倾诉的人。
-        try {
-          if (window.XMErrors) toast(XMErrors.describe(e).title + "；这条已经记下了，稍后补发", 3000);
-        } catch (e2) {}
+        // R7-1：超时/非 2xx/断网都不许静默——toast + 常驻提示条（带「再发一次」），
+        // 文案保持可爱风，不让 HTTP/错误码等术语砸到正在倾诉的人。
+        reportSendFailure(e);
         // P1-3：极端兜底也入队（原版只回显文案不落盘，刷新即丢——补"不丢消息"）
         queuePending(text);
         await showTyping(300);
@@ -1993,14 +2007,50 @@ const App = (() => {
       send(v);
     }
     $("sendBtn").onclick = submitText;
-    $("textInput").addEventListener("keydown", e => {
-      // isComposing / keyCode 229：中文输入法候选确认回车，不算发送；Shift+Enter 换行
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    const inputEl = $("textInput");
+    // R7-2：显式跟踪输入法合成态（部分 WebView 在候选确认回车时 isComposing 为 false）
+    const imeGate = window.XMResilience ? window.XMResilience.createCompositionGate() : null;
+    if (imeGate) {
+      inputEl.addEventListener("compositionstart", () => imeGate.start());
+      inputEl.addEventListener("compositionend", () => imeGate.end());
+    }
+    inputEl.addEventListener("keydown", e => {
+      const allow = imeGate
+        ? imeGate.allowEnter(e)
+        : (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229);
+      if (allow) {
         e.preventDefault();
         submitText();
       }
     });
-    $("textInput").addEventListener("input", syncComposer);
+    // R7-3：粘贴超长时按 500 字截断并告知；没超就交给浏览器默认插入（保留撤销栈）
+    inputEl.addEventListener("paste", e => {
+      if (!window.XMResilience) return;
+      const cd = e.clipboardData || window.clipboardData;
+      const raw = cd ? cd.getData("text") : "";
+      if (!raw) return;
+      const cur = inputEl.value || "";
+      const start = inputEl.selectionStart == null ? cur.length : inputEl.selectionStart;
+      const end = inputEl.selectionEnd == null ? cur.length : inputEl.selectionEnd;
+      const r = window.XMResilience.clampInput(cur.slice(0, start) + raw + cur.slice(end));
+      if (!r.truncated) return;
+      e.preventDefault();
+      inputEl.value = r.text;
+      inputEl.setSelectionRange(r.text.length, r.text.length);
+      syncComposer();
+      toast(window.XMResilience.truncationLine(r.max));
+    });
+    inputEl.addEventListener("input", () => {
+      // 安卓 WebView 偶发绕过 maxlength：兜底截断（合成态内不动，避免打断候选）
+      if (window.XMResilience && !(imeGate && imeGate.isComposing())) {
+        const r = window.XMResilience.clampInput(inputEl.value);
+        if (r.truncated) {
+          inputEl.value = r.text;
+          toast(window.XMResilience.truncationLine(r.max));
+        }
+      }
+      syncComposer();
+    });
     syncComposer();
     const micBtn = $("micBtn");
     if (micBtn) micBtn.onclick = () => toast("语音输入接入中，先打字撩她吧");

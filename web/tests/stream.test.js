@@ -133,28 +133,31 @@ test("chatStream 在 mock/offline 时通知 UI 标注离线示例模式", async 
   }
 });
 
-// ---------- 降级链 ----------
-test("provider 500 → 自动降级到 mock（不换人格、不丢回复）", async () => {
+// ---------- 失败可感知（R7：不静默降级） ----------
+test("provider 500 → 抛回调用方，不再静默降级 mock（R7-1）", async () => {
   setCfg({ mode: "openai" });
   let call = 0;
   globalThis.fetch = async () => {
     call += 1;
-    if (call === 1) {
-      return {
-        ok: false, status: 500,
-        headers: { get: () => "application/json" },
-        json: async () => ({ error: "上游炸了", kind: "http", status: 500 }),
-        body: { getReader: () => ({ read: async () => ({ done: true }) }) }
-      };
-    }
-    return sseResponse(deltaEvents("我在呢"));
+    return {
+      ok: false, status: 500,
+      headers: { get: () => "application/json" },
+      json: async () => ({ error: "上游炸了", kind: "http", status: 500 }),
+      body: { getReader: () => ({ read: async () => ({ done: true }) }) }
+    };
   };
   const { handlers, got } = collectors();
-  const r = await API.chatStream(HISTORY, {}, handlers);
-  assert.equal(r.mode, "mock");
-  assert.equal(r.reply, "我在呢");
-  assert.equal(got.meta[got.meta.length - 1].mode, "mock");
-  assert.equal(call, 2);
+  await assert.rejects(
+    () => API.chatStream(HISTORY, {}, handlers),
+    (e) => {
+      assert.equal(e.kind, "http");
+      assert.equal(e.status, 500);
+      return true;
+    }
+  );
+  assert.equal(call, 1, "不得再打 mock 兜底");
+  assert.equal(got.meta.filter((m) => m && m.mode === "mock").length, 0, "不能冒充 mock");
+  assert.equal(got.delta.length, 0, "失败时不得逐字冒充回复");
 });
 
 test("上游返回空回复 → 不冒充真模型，切本地引擎并标注 mock", async () => {
@@ -177,7 +180,7 @@ test("上游返回空回复 → 不冒充真模型，切本地引擎并标注 mo
   assert.ok(got.delta.length > 0, "本地引擎仍要逐字出字");
 });
 
-test("首字超时 → 降级，且不会永久等待", async () => {
+test("首字超时 → 抛 timeout 回调用方，不再静默兜底（R7-1）", async () => {
   setCfg({ mode: "openai" });
   API.LIMITS.proxy.first = 30;
   API.LIMITS.proxy.idle = 30;
@@ -185,31 +188,36 @@ test("首字超时 → 降级，且不会永久等待", async () => {
   let call = 0;
   globalThis.fetch = (url, options) => {
     call += 1;
-    if (call === 1) {
-      return Promise.resolve({
-        ok: true,
-        headers: { get: () => "text/event-stream" },
-        body: {
-          getReader: () => ({
-            read: () => new Promise((_, reject) => {
-              options.signal.addEventListener("abort", () => {
-                const e = new Error("aborted");
-                e.name = "AbortError";
-                reject(e);
-              });
-            })
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => "text/event-stream" },
+      body: {
+        getReader: () => ({
+          read: () => new Promise((_, reject) => {
+            options.signal.addEventListener("abort", () => {
+              const e = new Error("aborted");
+              e.name = "AbortError";
+              reject(e);
+            });
           })
-        }
-      });
-    }
-    return Promise.resolve(sseResponse(deltaEvents("缓过来了")));
+        })
+      }
+    });
   };
-  const r = await API.chatStream(HISTORY, {}, {});
-  assert.equal(r.mode, "mock");
-  assert.equal(r.reply, "缓过来了");
-  API.LIMITS.proxy.first = 1400;
-  API.LIMITS.proxy.idle = 8000;
-  API.LIMITS.proxy.total = 45000;
+  try {
+    await assert.rejects(
+      () => API.chatStream(HISTORY, {}, {}),
+      (e) => {
+        assert.equal(e.kind, "timeout");
+        return true;
+      }
+    );
+    assert.equal(call, 1, "超时后不得再打 mock 兜底");
+  } finally {
+    API.LIMITS.proxy.first = 1400;
+    API.LIMITS.proxy.idle = 8000;
+    API.LIMITS.proxy.total = 45000;
+  }
 });
 
 test("流中途断连：保留已收到的部分，标记 partial", async () => {

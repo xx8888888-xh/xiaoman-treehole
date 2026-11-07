@@ -43,6 +43,11 @@ const API = (() => {
     try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch { return {}; }
   }
 
+  // 仅在配置确实写不进 localStorage（配额满/隐私模式）时兜底到内存，
+  // 否则会退回默认 openai：服务端明明能聊，却每句都"没送出去"。
+  // 平时仍以 localStorage 为准，外部直接改写 cfg 后无需刷新即可生效。
+  let memCfg = null;
+
   function loadCfg() {
     const raw = rawCfg();
     // 兼容旧版本：曾把 apiKey 明文存在 localStorage —— 迁移到内存并立刻抹掉
@@ -52,7 +57,7 @@ const API = (() => {
         localStorage.setItem(CFG_KEY, JSON.stringify(XMConfig.stripSecret(raw)));
       } catch {}
     }
-    const cfg = XMConfig.normalizeCfg(raw);
+    const cfg = XMConfig.normalizeCfg(memCfg || raw);
     cfg.apiKey = memKey;   // 仅本次调用可见，saveCfg 不会持久化它
     return cfg;
   }
@@ -63,9 +68,13 @@ const API = (() => {
       memKey = String(incoming.apiKey || "");
       delete incoming.apiKey;
     }
-    const cfg = XMConfig.normalizeCfg(incoming, rawCfg());
-    try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
+    const cfg = XMConfig.normalizeCfg(incoming, memCfg || rawCfg());
+    try {
+      localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+      memCfg = null;   // 落盘成功：以后一律以 localStorage 为准
+    }
     catch (e) {
+      memCfg = cfg;    // 落盘失败：本次会话仍按这份配置聊天
       // 配额满/隐私模式：配置没落盘要让用户知道，而不是假装保存成功
       try { if (typeof window !== "undefined" && window.__storageFull) window.__storageFull("设置"); } catch {}
     }
@@ -643,8 +652,9 @@ const API = (() => {
   }
 
   /**
-   * 流式对话入口。降级链：自填 key 直连 → 服务端代理 → mock → offline；
-   * 安卓未授权免费端点时直接从 mock/offline 兜底。每级有超时与熔断。
+   * 流式对话入口。在线路由（direct/native/proxy）都失败时抛回调用方，
+   * 由 app.js 显示失败提示 + 一键重发（R7：不静默换离线人格）；
+   * 只有本来就没有在线路由（隐私闸门/本地模式）才落 mock/offline 兜底。
    * handlers: { onMeta(meta), onDelta(acc, delta), onReplace(acc), onError(err) }
    */
   async function chatStream(history, opts, handlers) {
@@ -671,9 +681,11 @@ const API = (() => {
     }
 
     // openai 模式
-    const routes = routePlan(cfg, { native: !!nativeBridge() })
-      .filter((r) => r === "direct" || !breakerOpen(r));
+    const planned = routePlan(cfg, { native: !!nativeBridge() });
+    const realPlanned = planned.filter((r) => r === "direct" || r === "native" || r === "proxy");
+    const routes = planned.filter((r) => r === "direct" || !breakerOpen(r));
     let limitErr = null;
+    let lastErr = null;
     for (const route of routes) {
       try {
         let r;
@@ -683,16 +695,23 @@ const API = (() => {
         breakerReset(route);
         return r;
       } catch (e) {
+        lastErr = e;
         // 429/402 计入独立标记但不熔断：额度耗尽说明路由本身是通的，
         // 熔断会把"恢复后立刻补话"也一起挡 30s
         if (e && e.kind === "limit") limitErr = e;
         else breakerFail(route);
-        console.warn(`[stream] ${route} 失败，降级:`, e && e.message);
+        console.warn(`[stream] ${route} 失败:`, e && e.message);
       }
     }
     // 限流是"共情能力被上游卡住"，不能降级成离线人格假装没事：
     // 抛回 app.js 的 limit 分支，落盘排队 + 诚实告知（P1-3）
     if (limitErr) throw limitErr;
+    // R7-1：在线路由真的试过且全失败（超时/断网/非 2xx/熔断）→ 抛回 app.js，
+    // 由它显示失败提示 + 一键重发；不再静默切换成离线人格
+    if (realPlanned.length) {
+      throw lastErr || tagError(new Error("在线通道暂时不可用（熔断中）"), null, "network");
+    }
+    // 隐私闸门关闭或显式为本地模式：没有在线请求可失败，保留本地兜底
     // mock 兜底（安卓壳内 mock 即离线引擎）
     if (!nativeBridge() && !breakerOpen("mock")) {
       try {
@@ -983,8 +1002,8 @@ const API = (() => {
     }
     const route = cfg.apiKey ? "direct" : (nativeBridge() ? "native" : "proxy");
     if (breakerOpen(route)) {
-      console.warn("路由熔断中，直接降级:", route);
-      return fallbackMock(history);
+      // R7-1：熔断中也必须让调用方感知失败，不能静默换成离线人格
+      throw tagError(new Error("在线通道冷却中"), null, "network");
     }
     try {
       const r = await chatOpenAI(history, opts, cfg);
@@ -992,8 +1011,8 @@ const API = (() => {
       return r;
     } catch (e) {
       breakerFail(route);
-      console.warn("openai 失败，降级 mock:", e.message);
-      return fallbackMock(history);
+      console.warn("openai 失败（不静默降级）:", e.message);
+      throw e;
     }
   }
 

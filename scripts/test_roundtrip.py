@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from datetime import datetime, timedelta
 
 from playwright.async_api import async_playwright
 
@@ -121,7 +122,8 @@ async def main():
         await pg.click("#memoryBtn")
         await pg.wait_for_selector("#reminderText", timeout=5000)
         await pg.fill("#reminderText", "round-trip 喝水")
-        at_local = "2026-11-07T08:00"
+        # 提醒时刻取"明天 08:00"，避免写死日期后一过点就成了过去时间（既有时间炸弹）
+        at_local = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%dT08:00")
         await pg.fill("#reminderAt", at_local)
         await pg.click("#reminderSave")
         await pg.wait_for_timeout(400)
