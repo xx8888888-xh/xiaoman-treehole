@@ -335,6 +335,134 @@ PowerShell 在用户桌面弹出「可能会运行网页中的脚本代码…是
 4. 不要留"每隔几秒探活一次"的循环；它会反复触发上述确认框并导致进程被终止。
    需要等待时用一次性 `sleep` + 有限次数轮询，并在同一次调用内完成。
 
+---
+
+## 17. 12:13 `Failed to fetch` 归因与修复（2026-11-07 22:5x）
+
+**结论先说**：不是明文 HTTP 被拦，不是 localStorage，不是混合内容策略，也不是 `adb reverse`。
+**失败在响应阶段**：服务端已经把 `200` 和 `Content-Length` 写出去了，body 传到一半连接中断，
+Chromium 判 `net::ERR_CONTENT_LENGTH_MISMATCH`，`fetch` 于是抛 `TypeError: Failed to fetch`。
+
+**排除过程（逐项实测）**：
+
+| 假设 | 实测 | 结论 |
+|---|---|---|
+| 明文 HTTP 被拦 | `network_security_config.xml` 已放行 `10.0.2.2`；同一 APK 打 `POST /tts` 得 `200`，Network 事件 0 失败 | 排除 |
+| 混合内容（https 页取 http） | `WebShell` 已 `MIXED_CONTENT_ALWAYS_ALLOW`；logcat 只有 warning，请求照发 | 排除（warning 不拦） |
+| `localStorage` 读不到配置 | 请求确实带着 `voice=zh-CN-XiaoyiNeural rate=normal` 到达服务端 | 排除 |
+| `adb reverse` 那一刻断了 | 走的是 `10.0.2.2`（QEMU 转宿主回环），不走 reverse；请求已到服务端 | 排除 |
+| 前端 10s 超时主动 abort | 主动 abort 的报错是 `AbortError: The user aborted a request.`，与历史日志不符 | 排除 |
+
+**为什么日志里的 `200` 不能自证成功**：`BaseHTTPRequestHandler.send_response()` 会先记
+`"POST /tts" 200`，再写 body。历史日志 `20:13:24 TTS generating text_len=9`、
+`20:13:25 POST /tts 200`（9 字正对应截图里的"然后呢…"）只证明**请求到达并开始回**，
+不证明 body 送达。
+
+**可复现步骤**（`temp_20261107_03` 实验室）：
+1. `flaky_proxy.py` 起在 `127.0.0.1:8918`，转发到真 edge 服务 `127.0.0.1:8903`；
+   对**第一个** `/tts` 先取得完整响应（`32112` 字节）再只回 `100` 字节，
+   `flush + shutdown(SHUT_WR)` 后关连接。
+2. 静音 AVD（`-no-audio`，`hw.audioInput/Output=no`）里把 `ttsServer` 设为 `http://10.0.2.2:8918`，
+   调 `TTS.speakSafe("嗨，我是小满。今天过得怎么样，想聊聊吗？")`。
+3. 期望：请求 #1 `200` → `Network.loadingFailed.errorText=net::ERR_CONTENT_LENGTH_MISMATCH`；
+   控制台 `server tts 网络层失败，重试一次: Failed to fetch`；300ms 后请求 #2 `200` 成功。
+
+**修复**（`web/js/tts.js`）：服务端 fetch 单独一套预算，不再复用 10s 的开播超时——
+
+```js
+const AUDIO_START_TIMEOUT = 10000;   // 音频 10s 没开播就降级（保留）
+const SERVER_FETCH_TIMEOUT = 20000;  // edge 最坏 12s×2 + 余量
+const SERVER_FETCH_ATTEMPTS = 2;     // 只在网络层 TypeError 重试一次
+const SERVER_RETRY_BACKOFF = 300;
+```
+
+每次尝试新建 `AbortController` 并在 `finally` 清 timer；`AbortError` **不**重试
+（那是我们自己的预算到了），`TypeError`（截断/拒绝/明文被拦）才重试。
+
+**修复前后对比（同一条 flaky 链路，静音 AVD）**：
+
+| | 请求 #1 | 请求 #2 | 结果 |
+|---|---|---|---|
+| 修复前 | 200 + body 断 | 无 | `Failed to fetch`，界面落到兜底提示 |
+| 修复后 | 200 → `ERR_CONTENT_LENGTH_MISMATCH` | 200，`upstream_bytes=32112` | 音频拿到；控制台明确记录"重试一次" |
+
+后端仍打一条 Mixed Content warning（Chromium 的提示，不拦），属预期噪声。
+
+**回归**：`web/tests/tts_provider.test.js` 新增"200 后 body 中断重试一次不降级"
+（断言 `attempts==2`、`{spoke:true,provider:'server'}`）与"503 不重试"（`attempts==1`）。
+`node --test web/tests/*.test.js` → **298 pass / 0 fail**。
+
+---
+
+## 18. 首选音色 B4 落地 + E1/Kokoro 无网降级（2026-11-07 23:0x）
+
+### 18.1 B4 为首选（唯一默认，不再靠用户"记得选"）
+
+| 项 | 值 | 位置 |
+|---|---|---|
+| 音色 | `zh-CN-XiaoyiNeural`（晓伊） | `server/tts_server.py` `DEFAULT_VOICE`；`web/js/config.js` `DEFAULTS.voice` |
+| 语速 | `-5%`（`TTS_RATES.normal=0.95` 给 sherpa/cmd，`EDGE_RATES.normal="-5%"` 给 edge） | 同上 |
+| 音高 | `+2Hz`（`_edge_pitch()`，可用 `XIAOMAN_TTS_EDGE_PITCH` 覆盖） | `server/tts_server.py` |
+
+**证据（真机请求体，不是纸面参数）**：静音 AVD 里 `TTS.speakSafe` 打出的请求，
+flaky 代理原文打印 `voice=zh-CN-XiaoyiNeural rate=normal text_len=20`
+（默认配置、未手填任何语音项）；服务端 `TTS generating: ... voice=zh-CN-XiaoyiNeural`。
+
+**单测固化**：`server/tests/test_tts_post.py` 断言 `TTS_RATES["normal"]==0.95`、
+默认 voice 为 Xiaoyi、`_edge_pitch()` 默认 `+2Hz`。
+
+### 18.2 无网降级：edge 挂了自动落到 E1（sherpa-onnx + Kokoro int8）
+
+配置：`XIAOMAN_TTS_FALLBACK=sherpa` + `XIAOMAN_TTS_SHERPA_KIND=kokoro`
+（模型 `voicelab/models/kokoro2/`：`model.int8.onnx` 108.9MB、`voices.bin` 26.9MB）。
+
+**实测 A：只用离线 provider**
+
+| 项 | 数字 |
+|---|---|
+| HTTP | `200`，`Content-Type: audio/wav` |
+| 字节 / 时长 | `249,196` / `5.191s`（24kHz mono s16） |
+| 电平 | `mean −22.8dB`，`max −9.2dB` |
+| 服务端日志 | `TTS generating: provider=sherpa fallback=- voice=zh-CN-XiaoyiNeural text_len=20` |
+
+**实测 B：edge 主 + sherpa 降级（把 edge 超时压到 0.001s 强制失败）**
+
+| 项 | 数字 |
+|---|---|
+| `/health` | `{"provider":"edge","fallback":"sherpa","available":true}` |
+| 触发日志 | `WARNING TTS provider edge failed, trying fallback: edge-tts failed: TimeoutError` |
+| HTTP | `200`，`Content-Type: audio/wav` |
+| 字节 / 时长 | `249,280` / `5.192s` |
+| 电平 | `mean −22.8dB`，`max −8.7dB` |
+
+**如实报告的代价**：本地 Kokoro 是 CPU int8，RTF **2.7458**
+（`14.26s` 合成出 `5.19s` 音频，加载 2.60s），整条 `/tts` 请求 A=22.47s、B=21.24s。
+它是"无网时还能出声"的保命档，不是日常档；日常仍是 edge（同句请求 0.5s 级）。
+`/health` 的 `fallback` 字段让运维一眼看出降级是否挂好，不靠猜。
+
+### 18.3 设置页"实际发声"与真实 provider 同源（`db78e0f` 验证）
+
+**条件**：只填对话后端 `apiBase=http://192.168.0.100:8902`，语音地址（`ttsServer`）**留空**。
+
+**真机（静音 AVD）实测输出**：
+
+```
+ttsServer  = ""
+apiBase    = "http://192.168.0.100:8902"
+ttsBase    = "http://127.0.0.1:8903"   （默认回环，不当作可用）
+resolved   = "http://192.168.0.100:8903"   ← 同机推导
+provider   = "server"
+hintText   = "实际发声：服务端语音"
+hintEl     = "实际发声：服务端语音"     ← 打开设置页后 DOM 里的真实文本
+voiceEl    = "音色会按下面的设置生效（服务端语音已连通）。"
+```
+
+`hintEl` 是真点了 `#settingsBtn`、由 `updateTtsHint()` 写进 DOM 后读出来的，
+不是只调纯函数比对——设置页文案与实际链路读的是同一个 `TTS.resolveServer`。
+
+**回归**：`server/tests` → **219 passed, 2 skipped, 22 subtests passed**（9.72s）；
+`web/tests` → **298 pass / 0 fail**。
+
 
 
 
