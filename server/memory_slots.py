@@ -55,7 +55,9 @@ EXTRACT_PATTERNS = [
     ("昵称", "pin", re.compile(r"(?:我叫|叫我|你可以叫我)\s*([一-龥A-Za-z]{1,6})"), 1),
     # 宠物：只认“养/有”或“名字叫”，避免把“看到一只特别胖的橘猫”这种描述当记忆
     ("宠物", "pin", re.compile(
-        r"(?:猫|狗|兔子?)\s*(?:叫|名字叫|取名叫|取名)\s*([一-龥A-Za-z]{1,4})"), 1),
+        r"(?:猫|狗|兔子?)\s*(?:其实|原来|现在)?\s*(?:叫|名字叫|取名叫|取名)\s*"
+        r"([一-龥A-Za-z]{1,4}?)"
+        r"(?=不是|才|已经|今年|三岁|啦|啊|呀|呢|吧|[，。、！？,.!?\s]|$)"), 1),
     ("宠物", "pin", re.compile(
         r"(?:养了|养|有一只|有只|我家有?)\s*(?:[一两]?[只条个]?)?\s*"
         r"(橘猫|英短|美短|布偶|金毛|萨摩|边牧|猫|狗|兔子?)"), 1),
@@ -92,6 +94,13 @@ _DELETE_PREFIX_RE = re.compile(
     r"把\s*([一-龥A-Za-z0-9]{1,12})\s*(?:删掉|删了|忘了|去掉|别记)")
 _DELETE_DEMO_RE = re.compile(r"(?:删掉|删了|别记|忘了)(?:这个|那个|刚才说的|刚刚说的|上面那个)")
 _DELETE_SAFE_RE = re.compile(r"别忘(?:了|记)")
+
+# 同一只宠物改口：只认代词“它/这只/那只”，避免把“我家狗叫煤球”
+# 误当成把已有的猫改名（不同物种要走共存分支）。
+_PET_RENAME_RE = re.compile(
+    r"(?:它|这只|那只)\s*(?:其实|原来|现在)?\s*(?:的名字)?\s*(?:叫|名叫)\s*"
+    r"(?!得|的|着|了|很|起)([一-龥A-Za-z]{1,4}?)"
+    r"(?=不是|才|已经|啦|啊|呀|呢|吧|[，。、！？,.!?\s]|$)")
 
 _NEG_WORDS = ("难受", "难过", "累", "哭", "焦虑", "失眠", "吵架", "分手", "离职",
               "失业", "没钱", "生病", "去世", "崩溃", "压力", "烦", "委屈", "孤独",
@@ -134,6 +143,94 @@ def _pet_generic(v: str) -> bool:
         return True
     core = "".join(c for c in v if c not in _PET_GENERIC_STRIP)
     return core in ("猫", "狗", "兔", "兔子")
+
+
+# 多宠物：一个 宠物 槽里用「物种：名字」存多条，全角分号隔开。
+# 例：猫：年糕；狗：煤球。老数据里的「年糕」「橘猫」仍按单条解析。
+_PET_SEP = "；"
+_PET_KV = "："
+_PET_SPECIES_WORDS = ("兔子", "猫", "狗", "兔")
+
+
+def _pet_entries(value: str) -> list:
+    out = []
+    for part in str(value or "").split(_PET_SEP):
+        part = part.strip()
+        if not part:
+            continue
+        species, name = "", part
+        if _PET_KV in part:
+            species, name = [x.strip() for x in part.split(_PET_KV, 1)]
+        if species or name:
+            out.append({"species": species, "name": name})
+    return out
+
+
+def _pet_value(entries: list) -> str:
+    parts = []
+    for e in entries:
+        if e.get("species") and e.get("name"):
+            parts.append("%s%s%s" % (e["species"], _PET_KV, e["name"]))
+        elif e.get("name") or e.get("species"):
+            parts.append(e.get("name") or e.get("species"))
+    return _PET_SEP.join(parts)
+
+
+def _pet_specific(entry: dict) -> bool:
+    name = (entry or {}).get("name") or ""
+    return bool(name) and not _pet_generic(name)
+
+
+def _pet_display(value: str) -> str:
+    """注入用：猫叫年糕、狗叫煤球（物种和名字都在）。"""
+    parts = []
+    for e in _pet_entries(value):
+        sp, name = e["species"], e["name"]
+        if sp and name and name != sp:
+            parts.append("%s叫%s" % (sp, name))
+        else:
+            parts.append(name or sp)
+    return "、".join(p for p in parts if p)
+
+
+def _merge_pet_value(existing: dict, value: str, source: str) -> str:
+    """多宠物合并：不同物种共存；同物种/单只改名=纠正；模型不许覆盖 ta 明说的名字。"""
+    old = [dict(e) for e in _pet_entries(existing.get("value", ""))]
+    merged = old
+    for ne in _pet_entries(value):
+        sp, name = ne["species"], ne["name"]
+        if not _pet_specific(ne):
+            # 泛指（猫/狗/橘猫这类没名字的）：同物种已有记录就不动，避免糊掉具体名
+            if sp and any(e["species"] == sp for e in merged):
+                continue
+            if not sp and merged:
+                continue
+            merged.append(ne)
+            continue
+        same_name = next((e for e in merged if e["name"] == name), None)
+        if same_name:
+            if sp:
+                same_name["species"] = sp
+            continue
+        same_sp = next((e for e in merged if sp and e["species"] == sp), None)
+        if same_sp:
+            if (source == "model" and existing.get("source") == "rule"
+                    and _pet_specific(same_sp)):
+                continue
+            same_sp["name"] = name
+            continue
+        if not sp and len(merged) == 1:
+            # 只有一只、且新说法没带物种：当成同一只改名（纠正）
+            if (source == "model" and existing.get("source") == "rule"
+                    and _pet_specific(merged[0])):
+                continue
+            merged[0]["name"] = name
+            continue
+        if not sp:
+            # 多只且没带物种：不猜是哪只，宁可不记也不乱覆盖
+            continue
+        merged.append(ne)
+    return _pet_value(merged)
 
 
 # 小满自己的猫名（见 prompt_core.PERSONA_RULES）。ta 的宠物有具体名字时，
@@ -228,6 +325,11 @@ def extract_slots(text: str) -> dict:
         if key == "宠物" and _pet_generic(val) and any(
                 k == "宠物" and not _pet_generic(v) for k, v in out.items()):
             continue
+        if key == "宠物" and not _pet_generic(val) and "叫" in m.group(0):
+            # “我家猫叫年糕”→“猫：年糕”；物种留着，多只共存时才能分清谁是谁
+            sp = next((x for x in _PET_SPECIES_WORDS if m.group(0).startswith(x)), "")
+            if sp:
+                val = sp + _PET_KV + val
         out[key] = val
     return out
 
@@ -434,9 +536,16 @@ class SlotStore:
         return None
 
     def pet_names(self, sid: str) -> list:
-        """ta 宠物的具体名字（“橘猫”“年糕”算，泛称“猫/狗”不算）。"""
-        return [s["value"] for s in self.all(sid)
-                if s["key"] == "宠物" and not _pet_generic(s["value"])]
+        """ta 宠物的具体名字（“橘猫”“年糕”算，泛称“猫/狗”不算）；多只都返回。"""
+        names = []
+        for s in self.all(sid):
+            if s["key"] != "宠物":
+                continue
+            for e in _pet_entries(s["value"]):
+                name = e["name"] or e["species"]
+                if name and not _pet_generic(name):
+                    names.append(name)
+        return names
 
     # ---- 写 ----
     def upsert(self, sid: str, key: str, value: str, kind: str | None = None,
@@ -450,19 +559,15 @@ class SlotStore:
         with _LOCK:
             slots = self._load(sid)
             existing = next((s for s in slots if s["key"] == key), None)
-            # 泛指不覆盖具体（宠物）：旧值具体时忽略“猫/狗”
-            if existing and key == "宠物" and _pet_generic(value) and not _pet_generic(existing["value"]):
-                return dict(existing)
-            # 模型回写不许改写 ta 已明说的宠物名（防“年糕”被写成小满自己的“团子”）；
-            # 用户自己纠正（source=rule）仍然以新说法为准。
-            if (existing and key == "宠物" and source == "model"
-                    and existing.get("source") == "rule"
-                    and not _pet_generic(value) and not _pet_generic(existing["value"])
-                    and value != existing["value"]):
-                return dict(existing)
+            # 宠物多只共存：不同物种追加；同物种/单只改名按纠正处理；
+            # 泛指不覆盖具体，模型不许覆盖 ta 明说的名字（见 _merge_pet_value）。
+            if existing and key == "宠物":
+                merged = _merge_pet_value(existing, value, source)
+                if merged == existing["value"]:
+                    return dict(existing)
+                value = merged
             now = _now()
             if existing:
-                old_value = existing["value"]
                 existing.update({
                     "value": value, "kind": kind, "source": source,
                     "emotion": int(emotion if emotion is not None
@@ -495,6 +600,21 @@ class SlotStore:
             slots = self._load(sid)
             keep = []
             for s in slots:
+                # 宠物多只时按条目删：'把年糕删了'只删年糕，不动煤球
+                if value and s["key"] == "宠物" and not ids and not key:
+                    entries = _pet_entries(s["value"])
+                    matched = [e for e in entries
+                               if value in e["name"] or value in e["species"]]
+                    if matched:
+                        for e in matched:
+                            removed.append({"key": "宠物",
+                                            "value": e["name"] or e["species"]})
+                        left = [e for e in entries if e not in matched]
+                        if left:
+                            s["value"] = _pet_value(left)
+                            s["updated"] = _now()
+                            keep.append(s)
+                        continue
                 hit = False
                 if ids and s["id"] in ids:
                     hit = True
@@ -526,18 +646,47 @@ class SlotStore:
                         removed.extend(self.delete(sid, ids=[newest["id"]]))
                 continue
             removed.extend(self.delete(sid, value=t))
-        # 去重（同一条可能被多个指代命中）
+        # 去重（同一条可能被多个指代命中；宠物条目没有 id，用 key+value）
         seen, uniq = set(), []
         for s in removed:
-            if s["id"] not in seen:
-                seen.add(s["id"])
+            sig = s.get("id") or (s.get("key"), s.get("value"))
+            if sig not in seen:
+                seen.add(sig)
                 uniq.append(s)
         return uniq
 
+    def rename_pet(self, sid: str, name: str, text: str = "") -> dict | None:
+        """同一只改口：'其实它叫年糕不是团子'。保留物种，只换名字。
+        多只时只改文本里提到的旧名字；找不到旧名字就不猜（避免把别的宠物改名）。"""
+        name = _clean_value(name)
+        if not name:
+            return None
+        with _LOCK:
+            slots = self._load(sid)
+            slot = next((s for s in slots if s["key"] == "宠物"), None)
+            if not slot:
+                return None
+            entries = _pet_entries(slot["value"])
+            target = next((e for e in entries
+                           if e["name"] and e["name"] in (text or "")), None)
+            if target is None and len(entries) == 1:
+                target = entries[0]
+            if target is None or target["name"] == name:
+                return None
+            target["name"] = name
+            slot["value"] = _pet_value(entries)
+            slot["source"] = "rule"
+            slot["updated"] = _now()
+            slot["emotion"] = infer_emotion("宠物", slot["value"])
+            self._save(sid, slots)
+            return dict(slot)
+
     def ingest(self, sid: str, text: str) -> dict:
-        """一轮用户文本：先处理删除，再提取入库；返回给调用方的契约结果。"""
+        """一轮用户文本：先处理删除，再处理“它叫…”改口，最后提取入库。"""
         deleted = self.delete_from_text(sid, text)
-        updates = {}
+        m = _PET_RENAME_RE.search(text)
+        renamed = self.rename_pet(sid, m.group(1), text) if m else None
+        updates = {"宠物": renamed["value"]} if renamed else {}
         for key, value in extract_slots(text).items():
             slot = self.upsert(sid, key, value, source="rule", confidence=1.0)
             if slot:
@@ -590,7 +739,8 @@ class SlotStore:
         lines = []
         for s in slots:
             age = _age_label(s.get("last_used") or s.get("updated"), now)
-            lines.append("- %s：%s（%s）" % (s["key"], s["value"], age))
+            shown = _pet_display(s["value"]) if s["key"] == "宠物" else s["value"]
+            lines.append("- %s：%s（%s）" % (s["key"], shown, age))
         return "\n".join(lines)
 
     def inject_block(self, sid: str, query: str = "", limit: int = MAX_INJECT) -> str:

@@ -24,7 +24,8 @@ import prompt_core as pc  # noqa: E402
 class ExtractTest(unittest.TestCase):
     def test_core_fields(self):
         self.assertEqual(ms.extract_slots("你可以叫我阿秋就行")["昵称"], "阿秋")
-        self.assertEqual(ms.extract_slots("我家猫叫年糕，三岁")["宠物"], "年糕")
+        self.assertEqual(ms.extract_slots("我家猫叫年糕，三岁")["宠物"], "猫：年糕")
+        self.assertEqual(ms.extract_slots("我家狗叫煤球")["宠物"], "狗：煤球")
         self.assertEqual(ms.extract_slots("我养了一只橘猫")["宠物"], "橘猫")
         self.assertEqual(ms.extract_slots("我们老板叫张三")["老板"], "张三")
         self.assertEqual(ms.extract_slots("我下周要考试了")["大事"], "下周要考试")
@@ -66,6 +67,47 @@ class StoreTest(unittest.TestCase):
         self.store.upsert(self.sid, "宠物", "年糕")
         self.store.upsert(self.sid, "宠物", "猫")
         self.assertEqual(self.store.get(self.sid, "宠物")["value"], "年糕")
+
+    def test_multi_pet_coexist_with_species(self):
+        """R10：猫叫年糕 + 狗叫煤球 两条并存，注入时都标明物种。"""
+        self.store.ingest(self.sid, "我家猫叫年糕")
+        self.store.ingest(self.sid, "我家狗叫煤球")
+        self.assertEqual(sorted(self.store.pet_names(self.sid)), sorted(["年糕", "煤球"]))
+        block = self.store.render(self.sid, "我家猫和狗今天都在闹")
+        self.assertIn("猫叫年糕", block)
+        self.assertIn("狗叫煤球", block)
+
+    def test_multi_pet_correction_stays_separate(self):
+        """纠正同一只（同物种）以新说法为准，但不影响另一只。"""
+        self.store.ingest(self.sid, "我家猫叫团子")
+        self.store.ingest(self.sid, "我家狗叫煤球")
+        self.store.ingest(self.sid, "我家猫其实叫年糕不是团子")
+        names = sorted(self.store.pet_names(self.sid))
+        self.assertEqual(names, sorted(["年糕", "煤球"]))
+        value = self.store.get(self.sid, "宠物")["value"]
+        self.assertIn("猫：年糕", value)
+        self.assertIn("狗：煤球", value)
+
+    def test_pronoun_pet_correction(self):
+        """'其实它叫年糕不是团子'：保留物种，只换名字。"""
+        self.store.ingest(self.sid, "我家猫叫团子")
+        self.store.ingest(self.sid, "其实它叫年糕不是团子")
+        self.assertEqual(self.store.pet_names(self.sid), ["年糕"])
+        self.assertEqual(self.store.get(self.sid, "宠物")["value"], "猫：年糕")
+
+    def test_model_cannot_overwrite_multi_pet(self):
+        self.store.ingest(self.sid, "我家猫叫年糕")
+        self.store.ingest(self.sid, "我家狗叫煤球")
+        self.store.apply_updates(self.sid, {"宠物": "团子"}, source="model")
+        self.assertEqual(sorted(self.store.pet_names(self.sid)), sorted(["年糕", "煤球"]))
+
+    def test_delete_one_of_two_pets(self):
+        self.store.ingest(self.sid, "我家猫叫年糕")
+        self.store.ingest(self.sid, "我家狗叫煤球")
+        removed = self.store.delete_from_text(self.sid, "把煤球删了")
+        self.assertEqual([s["value"] for s in removed], ["煤球"])
+        self.assertEqual(self.store.pet_names(self.sid), ["年糕"])
+        self.assertNotIn("煤球", self.store.render(self.sid, "我家猫和狗"))
 
     def test_recall_is_topic_related(self):
         self.store.upsert(self.sid, "大事", "下周要考试")

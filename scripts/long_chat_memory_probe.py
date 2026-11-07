@@ -164,7 +164,7 @@ def slot_view(store, sid, user):
     return {"total": len(rows), "eligible": eligible, "all": rows}
 
 
-def run_scenario(name, seed_text, model_updates, facts, overwrite=None):
+def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=None):
     """跑 30 轮，返回每个检查轮的事实存活、原因与 system 体积。"""
     users = list(NEUTRAL_30)
     users[1] = seed_text
@@ -202,12 +202,14 @@ def run_scenario(name, seed_text, model_updates, facts, overwrite=None):
     for fact in facts:
         label, key, value = fact[0], fact[1], fact[2]
         introduced = fact[3] if len(fact) > 3 else 3
-        rec = {"key": key, "value": value, "stored": value in slot_values,
-               "key_value": slots_by_key.get(key, ""), "check": {},
+        key_value = slots_by_key.get(key, "")
+        stored = value in slot_values or (key == "宠物" and value in key_value)
+        rec = {"key": key, "value": value, "stored": stored,
+               "key_value": key_value, "check": {},
                "introduced_turn": introduced,
                "first_missing_turn": None, "revived_turns": []}
-        if rec["key_value"] and rec["key_value"] != value:
-            rec["overwritten_by"] = rec["key_value"]
+        if key_value and value not in key_value:
+            rec["overwritten_by"] = key_value
         present = {t: (value in mem_block(systems[t]))
                    for t in range(introduced, 31)}
         for t in range(introduced, 31):
@@ -244,6 +246,11 @@ def run_scenario(name, seed_text, model_updates, facts, overwrite=None):
             "chars": len(systems[t]), "mem_chars": len(mem_block(systems[t])),
             "mem_lines": [x for x in mem_block(systems[t]).splitlines() if x.strip()],
             "history_msgs": rows[t]["history_msgs"],
+        }
+    if labels:
+        report["labels"] = {
+            str(t): {lb: (lb in mem_block(systems[t])) for lb in labels}
+            for t in CHECK_TURNS
         }
     report["final_slots"] = slots
     report["static_core_chars"] = len(pc.CORE_PROMPT)
@@ -333,13 +340,21 @@ def main():
          ("爱好", "爱好", "拼乐高")],
     )
     s3 = run_scenario(
-        "S3_overwrite", "我叫阿秋，我家猫叫年糕，我在医院做护士，住杭州拱墅区，我很喜欢吃辣。",
+        "S3_coexist", "我叫阿秋，我家猫叫年糕，我在医院做护士，住杭州拱墅区，我很喜欢吃辣。",
         {"职业": "医院护士", "住址": "杭州拱墅区"},
-        [("宠物", "宠物", "年糕"), ("新宠物", "宠物", "煤球", 13)],
+        [("年糕", "宠物", "年糕"), ("煤球", "宠物", "煤球", 13)],
         overwrite=(12, "对了，我家狗叫煤球。"),
+        labels=["猫叫年糕", "狗叫煤球"],
+    )
+    s4 = run_scenario(
+        "S4_correct", "我叫阿秋，我家猫叫团子，我很喜欢吃辣。",
+        {},
+        [("年糕", "宠物", "年糕", 13), ("团子", "宠物", "团子")],
+        overwrite=(12, "其实它叫年糕不是团子。"),
+        labels=["猫叫年糕"],
     )
     out = {
-        "scenarios": {r["scenario"]: r for r in (s1, s2, s3)},
+        "scenarios": {r["scenario"]: r for r in (s1, s2, s3, s4)},
         "limit_probe": limit_probe(),
         "eviction_probe": eviction_probe(),
         "reflow": reflow_probe(),
@@ -363,8 +378,13 @@ def main():
                 t, rep["system"][str(t)]["chars"], rep["system"][str(t)]["mem_chars"],
                 len(rep["system"][str(t)]["mem_lines"]),
                 rep["system"][str(t)]["history_msgs"]))
+        if rep.get("labels"):
+            for t in CHECK_TURNS:
+                hit = rep["labels"][str(t)]
+                print("  T%d 记忆段带标签：%s" % (
+                    t, "、".join("%s=%s" % (k, "有" if v else "无") for k, v in hit.items())))
 
-    for rep in (s1, s2, s3):
+    for rep in (s1, s2, s3, s4):
         show(rep)
 
     lp = out["limit_probe"]
