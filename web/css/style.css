@@ -1080,7 +1080,10 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
 @media (min-width: 900px), (orientation: landscape) and (min-width: 560px) and (max-height: 480px) {
   #app {
     display: grid;
-    grid-template-columns: minmax(320px, 40%) minmax(0, 1fr);
+    /* 左列不再写死 320px 下限：667/568 宽的横屏键盘态里，320px 会把右列压到 281/182，
+     * 提示条文字被迫竖排换行涨到 242px 高，输入栏被顶到 b=456.2/519.5（硬线 312）。
+     * 改成按比例 40% 分配；宽屏（≥900）40% 已 ≥360px，桌面布局不变。 */
+    grid-template-columns: minmax(0, 40%) minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     column-gap: 0;
     max-width: 1080px;
@@ -1188,17 +1191,37 @@ html[data-preset="minimal"] .solid-btn:hover { filter: none; background: var(--s
   .topbar { display: none; }
 }
 
-/* 竖屏软键盘弹起：可视高压到 ≤480px 时舞台让出高度。
+/* 横屏极窄（≤640 宽）键盘态：40% 左列只剩 ~200px，右列 301px 宽，
+ * 提示条被迫换行到 157.7px 高，输入栏 b=371.8（硬线 312，超 59.8）。
+ * 这一档舞台已挤成窄条、不再是操作面，让位给对话：单列后聊天 504px 宽，
+ * 提示条回到 52.2px，输入栏 b≈232（余 80）。键盘收起（>480px）自动恢复分栏。 */
+@media (orientation: landscape) and (max-width: 640px) and (max-height: 480px) {
+  #app { grid-template-columns: minmax(0, 1fr); }
+  #app #stage { display: none; }
+  #app:has(#emptyState.hidden) #stage { display: none; }
+  #chatArea { grid-column: 1 / -1; }
+}
+
+/* 竖屏软键盘弹起：可视高压到 ≤520px 时舞台让出高度。
  * 浏览器实测（414 宽，失败提示条 52.2 + 语音提示 32 + 排队条 52 + 输入栏 79，
  * 舞台 min-height 158）：h=364 时输入栏 b=406.2，超出硬线 ih-8=356 达 50.2px；
  * h=284 时超出 130.2px。舞台原为 flex:0 0 auto，不让位，溢出一律转嫁给输入栏。
  * 这里在键盘期把舞台压到 72~158 并允许收缩：h=364 实测 b=352（硬线 356，余 4）。
- * 键盘收起（>480px）恢复原设计。 */
+ * 阈值 520 而非 480：系统字体放大 1.3× 时提示条/语音条会变高，
+ * 414×484 实测 b=499.9（硬线 476，超 23.9）；520 是"未压缩也能自然放下"的边界
+ *（b=499.9 需 ih≥507.9）。键盘收起（>520px）恢复原设计。 */
 /* 注意：软键盘把高度压到小于宽度后，CSS `orientation` 会翻成 landscape
  *（414×364 判为 landscape），所以这里按"窄 + 矮"匹配，而不是 orientation: portrait。 */
-@media (max-width: 560px) and (max-height: 480px) {
+@media (max-width: 560px) and (max-height: 520px) {
   #app #stage { flex: 0 1 auto; height: clamp(72px, 20vh, 158px); min-height: 72px; }
   #app:has(#emptyState.hidden) #stage { flex: 0 1 auto; height: clamp(72px, 20vh, 158px); min-height: 72px; }
+}
+/* 窄屏键盘期（≤480px）与横屏同理：提示条已经提供「再发一次」，排队条语义重复。
+ * 360×364（窄屏竖版键盘态，CSS 判 portrait，横屏 ≤420 的规则不命中）实测：
+ * 排队条 52.2 把输入栏顶到 b=398.3（硬线 356，超 42.3）；收起后 b≈346.1。
+ * 只在提示条出现时收起；无提示条的日常键入仍显示排队条。 */
+@media (max-width: 560px) and (max-height: 480px) {
+  #chatArea.has-notice #pendingBar { display: none; }
 }
 /* 更矮（≤340px，键盘占掉大半屏）：舞台整体让位，聊天与输入栏才是当时的操作面。
  * 实测 h=284：舞台隐藏后 b=272（硬线 276，余 4）；h=340 时 b=328（硬线 332）。 */
