@@ -453,7 +453,7 @@ def filter_persona(reply, user_text="") -> str:
     return txt
 
 
-_SENT_END = "。！？!?…"
+_SENT_END = "。！？!?"
 _OPEN_QUOTE = "“‘「『"
 _CLOSE_QUOTE = "”’」』"
 _NO_REFLOW_RE = re.compile(r"```|`|https?://|www\.")

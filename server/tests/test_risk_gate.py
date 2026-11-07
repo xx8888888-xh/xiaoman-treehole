@@ -156,6 +156,19 @@ class ReflowMessagesTest(unittest.TestCase):
         hard = "这" * 41
         self.assertEqual(risk_guard.reflow_messages(hard), hard)
 
+    def test_numbers_and_single_sentence_untouched(self):
+        text = "版本 1.2.3 已经发了，你看看还有没有问题，有的话直接说，别客气，我这边好改。"
+        self.assertNotIn("||", risk_guard.reflow_messages(text))
+
+    def test_ellipsis_pause_is_not_a_cut_point(self):
+        # 省略号常是半句停顿，不能当句末切；真正的句号才切
+        text = ("我也不知道该怎么说……你先别急着给建议。"
+                "我就想有个人听我说完这一整段话，不用急着回应。")
+        parts = [p for p in risk_guard.reflow_messages(text).split("||") if p]
+        self.assertGreaterEqual(len(parts), 2)
+        self.assertIn("……你先别急着给建议。", parts[0])
+        self.assertNotIn("我也不知道该怎么说……||", risk_guard.reflow_messages(text))
+
 
 if __name__ == "__main__":
     unittest.main()

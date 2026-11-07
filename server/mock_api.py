@@ -1524,14 +1524,8 @@ def _guard_pet_name(result, session_id):
     return result
 
 
-def _guard_pet_delta(text, session_id):
-    """增量帧只做名字兜底（分条归一要整段才知道切点，留到收尾）。"""
-    if not session_id or not _SLOTS or not isinstance(text, str):
-        return text
-    return memory_slots.guard_own_pet_name(text, _SLOTS.pet_names(session_id))
-
-
 def _guard_pet_text(text, session_id):
+    """名字兜底 + 分条归一；增量帧与收尾帧用同一个函数，保证两头形状一致。"""
     if not isinstance(text, str):
         return text
     if session_id and _SLOTS:
@@ -2263,9 +2257,9 @@ class Handler(BaseHTTPRequestHandler):
                         model, "crisis", body_messages, level_out, user_text, degraded=0,
                         already_emitted=clean_prefix, skip_text=True)
                     return
-                # 名字兜底也下沉到增量帧：猫名不会等到收尾才改口。
-                # 它只改称呼、不触发危机路径，由下面的常规 delta/replace 分支处理。
-                safe_prefix = _guard_pet_delta(clean_prefix, session_id)
+                # 名字兜底 + 分条归一都下沉到增量帧：句末一到就切，不等收尾整段重排。
+                # 只改称呼/分隔、不触发危机路径，由下面的常规 delta/replace 分支处理。
+                safe_prefix = _guard_pet_text(clean_prefix, session_id)
                 # 留 2 字缓冲，避免把刚成形的危险词先露出去
                 target = safe_prefix[:-2] if len(safe_prefix) > 2 else ""
                 if target and target.startswith(emitted):
