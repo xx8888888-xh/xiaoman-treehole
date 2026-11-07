@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.speech.tts.Voice;
 import android.util.Log;
 import android.webkit.WebView;
 
@@ -63,7 +64,7 @@ final class TtsController {
     private volatile boolean ttsReady = false;
     private boolean initStarted = false;
     private String pendingText;
-    private float pendingRate = 1.02f;
+    private float pendingRate = 0.96f;
 
     /** 当前这一句的 utteranceId：只有它的完成回调才算"这一轮读完了" */
     private String currentId;
@@ -163,6 +164,7 @@ final class TtsController {
                     if (!ttsReady) {
                         Log.w(TAG, "TTS: SIMPLIFIED_CHINESE not supported, result=" + result);
                     } else {
+                        applyCuteVoice();  // 设备自带多套中文音色时优先挑女声
                         flushPending();   // 补播"点了但引擎还在初始化"的那一次
                     }
                 } else {
@@ -197,6 +199,42 @@ final class TtsController {
         }
     }
 
+    /**
+     * 「可爱」取向的音色选择：设备自带多套中文音色时优先挑女声，挑不到就保持默认。
+     * 只在引擎初始化成功后调一次；网络音色（isNetworkConnectionRequired）一律跳过，
+     * 否则断网会直接哑掉。
+     */
+    private void applyCuteVoice() {
+        if (tts == null) return;
+        try {
+            List<Voice> all = tts.getVoices();
+            if (all == null || all.isEmpty()) return;
+            Voice best = null;
+            int bestScore = 0;
+            for (Voice v : all) {
+                Locale loc = v.getLocale();
+                if (loc == null || !"zh".equals(loc.getLanguage())) continue;
+                if (v.isNetworkConnectionRequired()) continue;
+                String n = v.getName() == null ? "" : v.getName().toLowerCase(Locale.ROOT);
+                boolean female = n.contains("female") || n.contains("woman")
+                        || n.contains("女") || n.contains("xiaoxiao")
+                        || n.contains("xiaoyi") || n.contains("xiaoni");
+                boolean male = !female && (n.contains("male") || n.contains(" man")
+                        || n.contains("男"));
+                int score = (female ? 3 : 0) + (n.contains("local") ? 1 : 0) - (male ? 4 : 0);
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = v;
+                }
+            }
+            if (best != null && tts.setVoice(best) == TextToSpeech.SUCCESS) {
+                Log.i(TAG, "TTS voice picked: " + best.getName());
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "TTS voice pick skipped: " + e.getMessage());
+        }
+    }
+
     private synchronized void flushPending() {
         String text = pendingText;
         float rate = pendingRate;
@@ -215,7 +253,8 @@ final class TtsController {
         float r = rate < 0.5f ? 0.5f : Math.min(rate, 2.0f);
         String id = "xiaoman_" + System.currentTimeMillis();
         try {
-            tts.setPitch(1.15f);
+            // 旧值 1.15 会把系统合成音抬成"播报/电子"腔；1.06 只留一点点甜，别尖
+            tts.setPitch(1.06f);
             tts.setSpeechRate(r);
             currentId = id;
             policy.onSpeakStarted();

@@ -11,7 +11,8 @@ x-common-env: &common-env
   TTS_BASE: ${TTS_BASE:-http://127.0.0.1:8903}
   TTS_VOICE: ${TTS_VOICE:-zh-CN-XiaoyiNeural}
   # 默认不启用服务端合成（不内置云 TTS / 模型）；/tts 回 503，前端走系统 TTS。
-  # 可选：cmd（外部本地 TTS 命令，见 XIAOMAN_TTS_CMD）或 sherpa（自备模型）
+  # 可选：cmd（外部本地 TTS 命令，见 XIAOMAN_TTS_CMD）、sherpa（自备模型）、
+  # edge（在线免费女声，需用 --build-arg TTS_EDGE=1 重建镜像）
   XIAOMAN_TTS_PROVIDER: ${XIAOMAN_TTS_PROVIDER:-none}
   # 安卓壳：file:// 页面 Origin 是字面量 "null"；WebViewAssetLoader 域是
   # https://appassets.androidplatform.net。三者都必须在白名单里，否则 APK 内

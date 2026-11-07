@@ -24,16 +24,20 @@
 
 const TTS = (() => {
   // 语速档位（与设置页同值）：服务端 / 浏览器 / 安卓桥三路共用同一映射
-  const RATE = { slow: 0.86, normal: 1.02, fast: 1.18 };
+  // 「小满」语气：整体略慢半拍（normal 1.02 → 0.96），句尾不赶
+  const RATE = { slow: 0.84, normal: 0.96, fast: 1.12 };
   // 音色白名单：与服务端 ALLOWED_VOICES 对齐（至少 2 个）；非法值一律回默认音色
+  // 2026-11-07：zh-CN-XiaoyuanNeural 在 edge-tts 里并不存在（实测 NoAudioReceived），
+  // 换成同样年轻女声的陕西方言音色 XiaoniNeural（普通话为主，仅个别字带腔）
   const VOICES = Object.freeze([
-    "zh-CN-XiaoyiNeural",     // 默认：女性，自然
-    "zh-CN-XiaoxiaoNeural",   // 女性，温柔
-    "zh-CN-XiaoyuanNeural",   // 女性，甜妹
-    "zh-CN-YunjianNeural"     // 男性，沉稳
+    "zh-CN-XiaoyiNeural",     // 默认：年轻女声，元气
+    "zh-CN-XiaoxiaoNeural",   // 女声，温柔
+    "zh-CN-shaanxi-XiaoniNeural", // 女声，软糯
+    "zh-CN-YunjianNeural"     // 男声，沉稳
   ]);
   const DEFAULT_VOICE = "zh-CN-XiaoyiNeural";
-  const AUDIO_START_TIMEOUT = 7000;   // 弱网：音频 7s 还没真正开播就降级，先保住文字
+  const AUDIO_START_TIMEOUT = 10000;  // 弱网/长句：音频 10s 还没真正开播就降级，先保住文字
+                                      // （edge 一句 60 字实测 ~4.9s，7s 会把长句误杀成系统音）
   const ENVELOPE_FRAME_MS = 50;       // 口型包络关键帧间隔（20Hz，足够 15/30fps 舞台）
 
   /** 纯函数：PCM 通道 → 归一化 RMS 包络（可单测，不依赖 WebAudio） */
@@ -417,7 +421,8 @@ const TTS = (() => {
           const u = new W.SpeechSynthesisUtterance(text);
           u.lang = "zh-CN";
           u.rate = RATE[cfg && cfg.ttsRate] || RATE.normal;
-          u.pitch = 1.15;
+          // 1.15 会让系统音听起来更尖、更像播报；1.06 只抬一点点
+          u.pitch = 1.06;
           const finish = settleOnce(onFrame, onEnd);
           u.onend = finish;
           u.onerror = finish;

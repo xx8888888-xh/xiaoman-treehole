@@ -90,7 +90,7 @@ test("native provider：真桥可用时传入文本 + 语速档（不播放真�
     const played = calls.filter((c) => c.text);
     assert.equal(played.length, 1);
     assert.equal(played[0].text, "你好呀");
-    assert.equal(played[0].rate, 1.18, "fast 档映射 1.18");
+    assert.equal(played[0].rate, 1.12, "fast 档映射 1.12（整体略慢）");
     // 原生完成回调穿透：多次回调只结算一次
     win.__ttsEnded();
     win.__ttsEnded();
@@ -140,6 +140,26 @@ test("远程 provider：POST body 参数正确、文本不进 URL、503 只降�
   assert.equal(body.rate, "slow");
 });
 
+test("音色白名单：不存在的 XiaoyuanNeural 回默认，XiaoniNeural 可用", async () => {
+  const seen = [];
+  const win = fakeWin({
+    fetch: async (url, opts) => {
+      seen.push({ url, opts });
+      return { ok: false, status: 503, json: async () => ({}) };
+    }
+  });
+  const base = { tts: "server", ttsServer: "https://tts.example.com/", ttsRate: "normal" };
+  // 1) 配了已下线的 XiaoyuanNeural → 请求体里必须回落到默认 Xiaoyi
+  const e1 = makeEngine(win, Object.assign({}, base, { voice: "zh-CN-XiaoyuanNeural" }));
+  await e1.speak("测试一", () => {}, () => {});
+  assert.equal(JSON.parse(seen[0].opts.body).voice, "zh-CN-XiaoyiNeural");
+  // 2) 新增的陕西方言女声 XiaoniNeural 原样透传
+  const e2 = makeEngine(win, Object.assign({}, base, { voice: "zh-CN-shaanxi-XiaoniNeural" }));
+  await e2.speak("测试二", () => {}, () => {});
+  assert.equal(JSON.parse(seen[1].opts.body).voice, "zh-CN-shaanxi-XiaoniNeural");
+  assert.equal(JSON.parse(seen[1].opts.body).rate, "normal");
+});
+
 test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰真实语音）", async () => {
   const spoken = [];
   let canceled = 0;
@@ -156,7 +176,8 @@ test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰
     assert.deepEqual(res, { spoke: true, provider: "browser" });
     assert.equal(spoken.length, 1);
     assert.equal(spoken[0].lang, "zh-CN");
-    assert.equal(spoken[0].rate, 0.86);
+    assert.equal(spoken[0].rate, 0.84);
+    assert.equal(spoken[0].pitch, 1.06, "音高只抬 6%（旧值 1.15 太尖）");
     assert.equal(spoken[0].text, "晚安");
     spoken[0].onend();
     spoken[0].onerror();          // 只结算一次

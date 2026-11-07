@@ -18,6 +18,9 @@ tts_server.py · 语音回复服务（可插拔 TTS provider）
                                XIAOMAN_TTS_SHERPA_TOKENS  tokens.txt 路径
                                可选 XIAOMAN_TTS_SHERPA_LEXICON / _DATA_DIR / _DICT_DIR / _SID
                                模型文件必须已存在本地，服务不会联网下载。
+  XIAOMAN_TTS_PROVIDER=edge   进程内调用 edge-tts（pip install edge-tts；运行时需联网）：
+                               音色/音高可调，产出 mp3；断网时合成失败 → 503 → 前端降级系统 TTS。
+                               可选 XIAOMAN_TTS_EDGE_PITCH（默认 +2Hz，略高但不过分）
 
 接口：
 POST /tts  {"text": "你好", "voice": "zh-CN-XiaoyiNeural", "rate": "normal"} → audio/*
@@ -25,6 +28,7 @@ GET  /tts?text=你好&voice=… → audio/*（保留兼容旧客户端，新客�
 GET  /health → {"ok": true, "provider": ..., "available": ...}
 安全约定：对话原文只走 POST body；日志只记「方法 + path」，查询串/body 均不落盘。
 """
+import asyncio
 import hashlib
 import io
 import json
@@ -56,7 +60,7 @@ logger = logging.getLogger("xiaoman-tts")
 BIND_HOST = xm_config.BIND_HOST
 PORT = xm_config.TTS_PORT
 
-SUPPORTED_PROVIDERS = ("none", "cmd", "sherpa")
+SUPPORTED_PROVIDERS = ("none", "cmd", "sherpa", "edge")
 
 
 def _provider_name():
@@ -68,23 +72,32 @@ def _provider_name():
 PROVIDER = _provider_name()
 
 # ---------------- Voice 白名单 ----------------
-# 包含默认 zh-CN-XiaoyiNeural 与常用 zh-CN 音色（前端音色白名单与之对齐）
+# 与 edge-tts 实际提供的 zh-CN 音色逐一核对过（2026-11-07 实测）：
+# 不存在 zh-CN-XiaoyuanNeural（旧版误配，请求会 NoAudioReceived），已移除。
 ALLOWED_VOICES = frozenset({
-    "zh-CN-XiaoyiNeural",      # 默认：女性，自然
+    "zh-CN-XiaoyiNeural",      # 默认：年轻女性，元气，最贴「可爱」
+    "zh-CN-XiaoxiaoNeural",    # 女性，温柔
     "zh-CN-YunjianNeural",     # 男性，沉稳
     "zh-CN-YunxiNeural",       # 男性，阳光
-    "zh-CN-XiaoxiaoNeural",    # 女性，温柔
-    "zh-CN-XiaoyuanNeural",    # 女性，甜妹（设置页可选音色）
-    "zh-CN-YunxiaNeural",      # 女性，知性
-    "zh-CN-liaoning-XiaobeiNeural",  # 东北方言
-    "zh-CN-shaanxi-XiaoniNeural",    # 陕西方言
+    "zh-CN-YunxiaNeural",      # 男性，少年感（旧注释误标女性）
+    "zh-CN-YunyangNeural",     # 男性，播报
+    "zh-CN-liaoning-XiaobeiNeural",  # 女声，东北方言
+    "zh-CN-shaanxi-XiaoniNeural",    # 女声，陕西方言
 })
 
 # 语速档位 → 数值倍率（与前端 slow/normal/fast 对齐；cmd/sherpa 都吃这个倍率）
+# 「小满」设定：语速略慢，normal 从 1.02 降到 0.96
 TTS_RATES = {
-    "slow": 0.86,
-    "normal": 1.02,
-    "fast": 1.18,
+    "slow": 0.84,
+    "normal": 0.96,
+    "fast": 1.12,
+}
+
+# edge-tts 的 rate 是相对模型自然语速的百分比，另配一套；pitch 略抬但不尖
+EDGE_RATES = {
+    "slow": "-12%",
+    "normal": "-5%",
+    "fast": "+5%",
 }
 
 DEFAULT_VOICE = "zh-CN-XiaoyiNeural"
@@ -197,6 +210,13 @@ def provider_available(name=None):
         return bool(_cmd_argv())
     if name == "sherpa":
         return _sherpa_files_ok()
+    if name == "edge":
+        # 只判断包是否装了；网络可用性在合成时才知道（失败即 503 降级）
+        try:
+            import edge_tts  # noqa: F401
+        except ImportError:
+            return False
+        return True
     return False
 
 
@@ -205,6 +225,8 @@ def audio_content_type():
     if PROVIDER == "cmd":
         raw = (os.environ.get("XIAOMAN_TTS_CMD_TYPE") or "audio/wav").strip().lower()
         return raw if raw in ("audio/wav", "audio/mpeg", "audio/ogg") else "audio/wav"
+    if PROVIDER == "edge":
+        return "audio/mpeg"
     return "audio/wav"
 
 
@@ -277,12 +299,59 @@ def _sherpa_synthesize(text, voice, rate_key):
     return buf.getvalue()
 
 
+# ---------------- edge-tts（在线，免费，无需 key） ----------------
+EDGE_TIMEOUT = 12  # 单次合成上限（秒）；一句 60 字实测约 4.9s，12s 足够且能兜住挂死
+
+
+def _edge_pitch():
+    """默认 +2Hz：音高略高于客服女声，但不做「儿童音」式夸张上抬。"""
+    return (os.environ.get("XIAOMAN_TTS_EDGE_PITCH") or "+2Hz").strip()
+
+
+async def _edge_collect(text, voice, rate, pitch):
+    import edge_tts
+    comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+    buf = bytearray()
+    async for chunk in comm.stream():
+        if chunk.get("type") == "audio":
+            buf.extend(chunk.get("data") or b"")
+    return bytes(buf)
+
+
+def _edge_synthesize(text, voice, rate_key):
+    """返回 mp3 字节。断网/微软侧抖动时重试一次，仍失败则抛 TtsProviderUnavailable，
+    由 Handler 统一回 503，前端静默降级到系统 TTS（不影响文字输出）。"""
+    try:
+        import edge_tts  # noqa: F401
+    except ImportError:
+        raise TtsProviderUnavailable("edge-tts not installed")
+
+    rate = EDGE_RATES.get(rate_key, EDGE_RATES["normal"])
+    pitch = _edge_pitch()
+    last_err = None
+    for attempt in range(2):
+        try:
+            audio = asyncio.run(asyncio.wait_for(
+                _edge_collect(text, voice, rate, pitch), timeout=EDGE_TIMEOUT))
+        except Exception as e:  # 网络错误 / 无音频 / 超时
+            last_err = e
+            time.sleep(0.4 * (attempt + 1))
+            continue
+        if audio:
+            return audio
+        last_err = RuntimeError("empty audio")
+    raise TtsProviderUnavailable(
+        "edge-tts failed: %s" % type(last_err).__name__ if last_err else "edge-tts failed")
+
+
 def synthesize(text, voice, rate_key="normal"):
     """按当前 provider 合成音频；不可用时抛 TtsProviderUnavailable。"""
     if PROVIDER == "cmd":
         return _cmd_synthesize(text, voice, rate_key)
     if PROVIDER == "sherpa":
         return _sherpa_synthesize(text, voice, rate_key)
+    if PROVIDER == "edge":
+        return _edge_synthesize(text, voice, rate_key)
     raise TtsProviderUnavailable("provider=none")
 
 

@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import unittest
 import urllib.error
 import urllib.parse
@@ -129,7 +130,7 @@ class ProviderTest(unittest.TestCase):
             self.assertEqual(tts_server._provider_name(), "none")
 
     def test_supported_providers(self):
-        for name in ("cmd", "sherpa"):
+        for name in ("cmd", "sherpa", "edge"):
             with mock.patch.dict(os.environ, {"XIAOMAN_TTS_PROVIDER": name}, clear=False):
                 self.assertEqual(tts_server._provider_name(), name)
 
@@ -149,7 +150,23 @@ class ProviderTest(unittest.TestCase):
 
     def test_rate_table_matches_frontend(self):
         self.assertEqual(tts_server.TTS_RATES,
-                         {"slow": 0.86, "normal": 1.02, "fast": 1.18})
+                         {"slow": 0.84, "normal": 0.96, "fast": 1.12})
+
+    def test_edge_rate_table_is_percentage(self):
+        self.assertEqual(tts_server.EDGE_RATES,
+                         {"slow": "-12%", "normal": "-5%", "fast": "+5%"})
+
+    def test_voice_whitelist_drops_nonexistent_xiaoyuan(self):
+        """zh-CN-XiaoyuanNeural 在 edge-tts 里不存在（实测 NoAudioReceived），必须拒绝"""
+        with self.assertRaises(ValueError):
+            tts_server.parse_tts_payload(
+                json.dumps({"text": "你好", "voice": "zh-CN-XiaoyuanNeural"}).encode())
+        for ok in ("zh-CN-XiaoyiNeural", "zh-CN-shaanxi-XiaoniNeural",
+                   "zh-CN-YunxiaNeural"):
+            with self.subTest(ok=ok):
+                p = tts_server.parse_tts_payload(
+                    json.dumps({"text": "你好", "voice": ok}).encode())
+                self.assertEqual(p["voice"], ok)
 
 
 class CmdProviderTest(unittest.TestCase):
@@ -173,6 +190,50 @@ class CmdProviderTest(unittest.TestCase):
     def test_empty_output_raises(self):
         with self.assertRaises(tts_server.TtsProviderUnavailable):
             self._run(0, [sys.executable, "-c", "pass"])
+
+
+class EdgeProviderTest(unittest.TestCase):
+    """edge provider：只验证拼包、参数映射与失败语义（用假模块，不触网）"""
+
+    def _fake(self, audio=b"ID3edge", seen=None):
+        class FakeComm:
+            def __init__(self, text, voice, rate=None, pitch=None):
+                if seen is not None:
+                    seen.update(text=text, voice=voice, rate=rate, pitch=pitch)
+
+            async def stream(self):
+                yield {"type": "WordBoundary", "offset": 0}
+                yield {"type": "audio", "data": audio}
+
+        return types.SimpleNamespace(Communicate=FakeComm)
+
+    def test_joins_audio_chunks_and_maps_rate_pitch(self):
+        seen = {}
+        with mock.patch.dict(sys.modules, {"edge_tts": self._fake(seen=seen)}), \
+                mock.patch.dict(os.environ, {"XIAOMAN_TTS_EDGE_PITCH": "+3Hz"}):
+            out = tts_server._edge_synthesize("你好", "zh-CN-XiaoyiNeural", "slow")
+        self.assertEqual(out, b"ID3edge")
+        self.assertEqual(seen["rate"], "-12%")
+        self.assertEqual(seen["pitch"], "+3Hz")
+
+    def test_missing_package_raises(self):
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *a, **kw):
+            if name == "edge_tts":
+                raise ImportError("no edge_tts")
+            return real_import(name, *a, **kw)
+
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(tts_server.TtsProviderUnavailable) as cm:
+                tts_server._edge_synthesize("机密原文", "zh-CN-XiaoyiNeural", "normal")
+        self.assertNotIn("机密原文", str(cm.exception))
+
+    def test_empty_audio_raises_without_echo(self):
+        with mock.patch.dict(sys.modules, {"edge_tts": self._fake(audio=b"")}):
+            with self.assertRaises(tts_server.TtsProviderUnavailable):
+                tts_server._edge_synthesize("机密原文", "zh-CN-XiaoyiNeural", "normal")
 
 
 class HandlerHTTPTest(unittest.TestCase):
@@ -326,7 +387,7 @@ class HandlerHTTPTest(unittest.TestCase):
         self.assertEqual(calls["text"], SECRET)
         self.assertEqual(calls["voice"], tts_server.DEFAULT_VOICE)
         self.assertEqual(calls["rate"], "fast")
-        self.assertEqual(tts_server.TTS_RATES[calls["rate"]], 1.18)
+        self.assertEqual(tts_server.TTS_RATES[calls["rate"]], 1.12)
         self.assertNotIn(SECRET, "\n".join(cm.output))
 
 
