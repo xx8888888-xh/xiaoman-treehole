@@ -5,7 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -91,6 +94,8 @@ public class FloatWindowService extends Service {
     private int screenW;
     private int screenH;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private BroadcastReceiver screenReceiver;
+    private boolean screenOff = false;
     private Runnable destroyTask;
     private final Runnable fallbackTask = () -> {
         if (!petReady) fallbackToBall("timeout", true);
@@ -114,6 +119,7 @@ public class FloatWindowService extends Service {
             stopSelf();
             return;
         }
+        registerScreenState();
         showPet();
     }
 
@@ -178,6 +184,85 @@ public class FloatWindowService extends Service {
             Log.w("FloatWindowService", "startForeground rejected: " + e);
             stopSelf();
             return false;
+        }
+    }
+
+    // ---------------- 灭屏冻结 ----------------
+
+    /**
+     * 浮窗 WebView 不在 Activity 生命周期里：灭屏后系统不会通知它"你已经不可见了"。
+     * 结果桌宠页仍按可见状态跑 1.5s 看门狗 / 20s 兜底补帧 / 15s、30s 轮询 ——
+     * 云端 30 分钟实测后台 CPU 26.7s（单核约 1.5%）。灭屏即冻结、亮屏再恢复，
+     * 这是"后台偷偷耗电"的直接修复；灭屏期间提醒由 AlarmManager 通知通道负责。
+     */
+    private void registerScreenState() {
+        if (screenReceiver != null) return;
+        screenReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String action = intent != null ? intent.getAction() : null;
+                if (Intent.ACTION_SCREEN_OFF.equals(action)) onScreenOff();
+                else if (Intent.ACTION_SCREEN_ON.equals(action)) onScreenOn();
+            }
+        };
+        IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(screenReceiver, filter);
+            }
+            Log.d("XiaoManFloat", "screen-state receiver on");
+        } catch (Exception e) {
+            Log.w("FloatWindowService", "register screen-state failed: " + e);
+            screenReceiver = null;
+        }
+    }
+
+    private void unregisterScreenState() {
+        if (screenReceiver == null) return;
+        try { unregisterReceiver(screenReceiver); } catch (Exception ignored) { }
+        screenReceiver = null;
+    }
+
+    /** 灭屏：JS 定时器 + 渲染一起停（pauseTimers 对进程内所有 WebView 生效） */
+    private void onScreenOff() {
+        if (screenOff) return;
+        screenOff = true;
+        Log.d("XiaoManFloat", "screen off → pause float webviews");
+        PageLifecycle.onHostPause(petWeb);
+        PageLifecycle.onHostPause(panelWeb);
+        WebView any = petWeb != null ? petWeb : panelWeb;
+        if (any != null) {
+            try { any.pauseTimers(); } catch (Exception ignored) { }
+        }
+    }
+
+    /** 亮屏：恢复定时器与渲染，并强制补一帧（overlay 表面可能已被系统收回） */
+    private void onScreenOn() {
+        if (!screenOff) return;
+        screenOff = false;
+        Log.d("XiaoManFloat", "screen on → resume float webviews");
+        WebView any = petWeb != null ? petWeb : panelWeb;
+        if (any != null) {
+            try { any.resumeTimers(); } catch (Exception ignored) { }
+        }
+        if (panelShown) {
+            PageLifecycle.onHostResume(panelWeb);
+        } else {
+            PageLifecycle.onHostResume(petWeb);
+            if (petWeb != null && petWeb.getVisibility() == View.VISIBLE) nudgePet("screen-on");
+        }
+    }
+
+    /** 服务销毁时若还处于灭屏冻结，必须解除全局 pauseTimers，避免主界面页定时器被遗留暂停 */
+    private void resumeTimersIfPaused() {
+        if (!screenOff) return;
+        screenOff = false;
+        WebView any = petWeb != null ? petWeb : panelWeb;
+        if (any != null) {
+            try { any.resumeTimers(); } catch (Exception ignored) { }
         }
     }
 
@@ -919,6 +1004,8 @@ public class FloatWindowService extends Service {
     @Override
     public void onDestroy() {
         cancelDestroy();
+        unregisterScreenState();
+        resumeTimersIfPaused();
         panelVisible = false;
         handler.removeCallbacksAndMessages(null);
         hideBubble();

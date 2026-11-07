@@ -106,6 +106,9 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         activityVisible = true;
+        // 浮窗服务灭屏时会 pauseTimers（对进程内所有 WebView 生效）；主界面回到前台时兜底解除，
+        // 避免服务被系统回收后页面定时器被遗留暂停
+        try { if (webView != null) webView.resumeTimers(); } catch (Exception ignored) { }
         PageLifecycle.onHostResume(webView);   // 恢复页面定时器（按剩余时长重新武装）
     }
 
