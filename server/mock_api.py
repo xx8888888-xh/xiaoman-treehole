@@ -542,6 +542,10 @@ def _pick_recall(memories, mem_updates, topic, user_text, sess, turn):
         ext = extracted.get(k)
         if ext is not None and turn - ext < RECALL_EXTRACT_GAP:
             continue  # 闸门0：提取后不足 2 轮，"你上次说"指向太近
+        # 敏感门控：用户本轮没主动提这一领域（如只说"考试好难"）就不回带，
+        # 与 memory_slots.is_invited 同一判据（产品侧一处口径）
+        if not memory_slots.is_invited(k, memories.get(k) or "", user_text):
+            continue
         hit = hits.get(k)
         if hit is None or turn - hit >= RECALL_COOLDOWN:
             return _recall_line(k, memories[k]), k

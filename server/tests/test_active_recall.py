@@ -93,3 +93,36 @@ def test_one_recall_per_turn_cap():
     nxt = mock_api.make_reply([{"role": "user", "content": "今天上班又被客户催了"}], sid)
     assert "阿秋" in nxt["reply"], "名字应顺延到下一轮：%r" % nxt
     assert "张三" not in (nxt.get("hook") or ""), "冷却内的老板不应再提：%r" % nxt
+
+
+def test_sensitive_state_only_when_invited():
+    """W22 敏感门控：状态=失眠默认不回带。"考试好难"没点名这一领域 -> 绝不出现；
+    用户本轮自己提到累/困等 -> 正常回带（同一会话同一状态槽）。"""
+    sid = "w22-sensitive-gate"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("最近总是失眠")
+    say("今天工作好多")
+    say("开了三个会")
+    uninvited = say("考试好难")
+    blob = (uninvited.get("hook") or "") + uninvited["reply"]
+    assert "失眠" not in blob, "未受邀却回带敏感状态：%r" % uninvited
+
+    invited = say("最近总觉得累")
+    assert "失眠" in (invited.get("hook") or ""), "受邀后应回带：%r" % invited
+
+
+def test_non_sensitive_recall_not_gated():
+    """W22：门控只针对敏感槽，老板等普通记忆照常回带，不能一刀切。"""
+    sid = "w22-nonsensitive"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("我们老板叫张三")
+    say("今天工作好多")
+    say("开了三个会")
+    out = say("今天上班被领导怼了")
+    assert "张三" in (out.get("hook") or ""), "非敏感记忆不应被门控砍掉：%r" % out

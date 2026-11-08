@@ -380,5 +380,42 @@ class TombstoneTest(unittest.TestCase):
             self.assertEqual(s.tomb_buffer("u"), 6)  # 上限 6
 
 
+class SensitiveGateTest(unittest.TestCase):
+    """W22 敏感槽门控：状态类默认不回带，本轮受邀才提；非敏感槽不受影响。"""
+
+    def setUp(self):
+        self.store = ms.SlotStore()
+        self.sid = "s-sensitive-unit"
+
+    def _keys(self, query=""):
+        return [s["key"] for s in self.store.recall(self.sid, query)]
+
+    def test_uninvited_sensitive_not_recalled(self):
+        self.store.ingest(self.sid, "最近总是失眠")
+        # 不点名但语义触及（考试压力）不是邀请：门控必须挡住
+        self.assertNotIn("状态", self._keys("考试好难"))
+        self.assertNotIn("失眠", self.store.render(self.sid, "考试好难"))
+        # 无 query 的兜底注入同样不许漏出敏感槽
+        self.assertNotIn("状态", self._keys())
+
+    def test_invited_sensitive_recalled(self):
+        self.store.ingest(self.sid, "最近总是失眠")
+        self.assertIn("状态", self._keys("最近总觉得累"))
+        self.assertIn("失眠", self.store.render(self.sid, "最近总觉得累"))
+
+    def test_non_sensitive_recalled_as_before(self):
+        self.store.ingest(self.sid, "我们老板叫张三")
+        self.store.ingest(self.sid, "我家猫叫年糕")
+        self.assertIn("老板", self._keys("今天上班被领导怼了"))
+        self.assertIn("宠物", self._keys("年糕又在拆家"))
+
+    def test_predicate_is_shared(self):
+        self.assertTrue(ms.is_sensitive("状态", "失眠"))
+        self.assertFalse(ms.is_sensitive("老板", "张三"))
+        self.assertTrue(ms.is_invited("状态", "失眠", "最近总是失眠"))
+        self.assertFalse(ms.is_invited("状态", "失眠", "考试好难"))
+        self.assertTrue(ms.is_invited("老板", "张三", "考试好难"))
+
+
 if __name__ == "__main__":
     unittest.main()

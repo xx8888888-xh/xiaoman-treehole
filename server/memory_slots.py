@@ -127,6 +127,35 @@ TOPIC_ALIASES = {
     "昵称": ("叫我", "称呼", "名字"),
 }
 
+# 敏感槽门控（W22）：身体/睡眠这类状态默认不回带，只有用户本轮自己把这一领域
+# 摆到桌面上（点名失眠/熬夜/累/困等）才允许提。判据看「本轮受邀」，不是会话级解禁：
+# 会话级解禁会让 S04 在 T1 提过"失眠"后，T6 的"考试好难"也变成已解禁。
+SENSITIVE_KEYS = ("状态",)
+_SENSITIVE_INVITE = {
+    "状态": re.compile(
+        r"(失眠|睡不着|睡不好|睡不踏实|没睡好|熬夜|整宿|睁着眼|做梦|焦虑|"
+        r"头疼|头痛|感冒|低烧|发烧|胃疼|胃病|身体|生病|不舒服|难受|医院|体检|"
+        r"吃药|精力|犯困|疲惫|疲|累|困|睡|健康)"),
+}
+
+
+def is_sensitive(key: str, value: str = "") -> bool:
+    """该槽是否属敏感类（默认不回带）。"""
+    return key in SENSITIVE_KEYS
+
+
+def is_invited(key: str, value: str, text: str) -> bool:
+    """用户本轮是否主动提及了该敏感话题；非敏感槽恒为 True。"""
+    if not is_sensitive(key, value):
+        return True
+    text = text or ""
+    if not text:
+        return False
+    if value and str(value) in text:
+        return True
+    pat = _SENSITIVE_INVITE.get(key)
+    return bool(pat and pat.search(text))
+
 
 def _clean_name(v: str) -> str:
     for suf in _NAME_SUFFIX:
@@ -948,6 +977,9 @@ class SlotStore:
                 picks = sorted(slots, key=lambda s: (_is_pin(s),
                                                      s.get("last_used") or s.get("updated")),
                                reverse=True)[:limit]
+            # 敏感槽门控：用户本轮没主动提这一领域（如只说"考试好难"）就整条跳过
+            picks = [s for s in picks
+                     if is_invited(s["key"], s.get("value") or "", query)]
             if touch:
                 ids = {s["id"] for s in picks}
                 for s in slots:
