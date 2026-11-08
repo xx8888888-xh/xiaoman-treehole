@@ -19,6 +19,7 @@
 """
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -502,6 +503,13 @@ def main():
     ap.add_argument("--turns", type=int, default=35, help="每套轮数（默认 35）")
     ap.add_argument("--repeat", type=int, default=10, help="跑几套（默认 10）")
     args = ap.parse_args()
+
+    # 本地只在 21:00 后跑；云端（GitHub Actions）不受限，避免本机 CPU 被打满。
+    if (os.environ.get("GITHUB_ACTIONS") != "true"
+            and os.environ.get("XM_ALLOW_DAYTIME") != "1"
+            and time.localtime().tm_hour < 21):
+        print("[probe] 本地仅在 21:00 后运行长对话探针；云端请走 GitHub Actions。已退出。")
+        return 0
 
     runs, digests = [], []
     first_reps = []
