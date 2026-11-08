@@ -1,5 +1,5 @@
 ﻿param(
-  [ValidateSet('start','stop','status','guard','test-window')]
+  [ValidateSet('start','stop','status','guard','test-window','dryrun')]
   [string]$Action = 'status',
   [string]$Avd = 'treehole_api34',
   [string]$Gpu = 'swiftshader_indirect',
@@ -18,6 +18,7 @@ $env:ANDROID_AVD_HOME = 'D:\android-avd'
 $env:ANDROID_USER_HOME = 'D:\android-avd\user-home'
 $env:ANDROID_EMULATOR_HOME = 'D:\android-avd\user-home'
 $emu = 'D:\android-sdk\emulator\emulator.exe'
+$ps = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
 $adb = 'D:\android-sdk\platform-tools\adb.exe'
 $watchdog = 'D:\android-avd\emulator_watchdog.ps1'
 $log = 'D:\android-avd\avd_local.log'
@@ -32,11 +33,16 @@ if (-not $repoRoot -or -not (Test-Path (Join-Path $repoRoot '.git'))) {
 }
 $protectedDirs = @('docs\shots', 'docs\ui-shots-r2', 'docs\android-battery\shots')
 
-# 限流时间窗（21:00-06:00 解除）：与看门狗共用同一判定
+# 启动时段 21:00-06:00（其余时段本地不开）；30% 硬线始终生效
 $timeMod = 'D:\android-avd\emu_timewindow.ps1'
 if (-not (Test-Path -LiteralPath $timeMod)) { $timeMod = Join-Path $PSScriptRoot 'emu_timewindow.ps1' }
 . $timeMod
-function Get-LimitLine { "$(Get-LimitLabel (Get-Date)) window=21:00-06:00 now=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" }
+$limitPercent = 30
+$graceSeconds = 120
+$intervalSeconds = 2
+function Get-LimitLine { "LIMIT=on threshold=${limitPercent}% grace=${graceSeconds}s interval=${intervalSeconds}s start_window=21:00-06:00 now=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" }
+function Get-StartGate { if (Test-QuietWindow (Get-Date)) { return 'START=allowed' } else { return 'START=blocked outside=21:00-06:00' } }
+function Get-LaunchArgs { @('-avd', $Avd, '-no-audio', '-no-boot-anim', '-gpu', $Gpu, '-no-metrics', '-cores', "$Cores", '-memory', "$MemoryMb", '-no-snapshot-load', '-no-snapshot-save') }
 
 function Get-AvdLcd([string]$avdName) {
   $ini = Join-Path 'D:\android-avd' "$avdName.avd\config.ini"
@@ -70,7 +76,7 @@ function Get-ModeLine {
   $mode = if ($viewOnly) { 'viewonly' } else { 'baseline' }
   $writes = if ($viewOnly) { 'REFUSED' } else { 'allowed' }
   $lcdText = if ($lcd.width -gt 0) { "$($lcd.width)x$($lcd.height)@$($lcd.density)" } else { 'unknown' }
-  return "MODE=$mode avd=$Avd lcd=$lcdText cores=$Cores gpu=$Gpu baseline_writes=$writes reason=$viewReason"
+  return "MODE=$mode avd=$Avd lcd=$lcdText cores=$Cores gpu=$Gpu snapshot=none baseline_writes=$writes reason=$viewReason"
 }
 
 function Test-ProtectedPath([string]$p) {
@@ -116,8 +122,12 @@ function Start-Watchdog {
   Remove-Item -LiteralPath 'D:\android-avd\watchdog.stop' -Force -ErrorAction SilentlyContinue
   $cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdog`""
   Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } | Out-Null
-  Start-Sleep -Seconds 2
-  Write-Log "watchdog started: $(Test-Watchdog)"
+  $ok = $false
+  for ($i = 0; $i -lt 15; $i++) {
+    Start-Sleep -Seconds 1
+    if (Test-Watchdog) { $ok = $true; break }
+  }
+  Write-Log "watchdog started: $ok"
 }
 
 function Stop-Watchdog {
@@ -178,6 +188,17 @@ if ($Action -eq 'test-window') {
   exit 0
 }
 
+if ($Action -eq 'dryrun') {
+  # 不启动模拟器：打印模式、启动闸门、完整启动命令与看门狗阈值
+  Get-ModeLine
+  Get-LimitLine
+  Get-StartGate
+  "CMD=$emu $((Get-LaunchArgs) -join ' ')"
+  "WATCHDOG=$ps -NoProfile -ExecutionPolicy Bypass -File D:\android-avd\emulator_watchdog.ps1 -LimitPercent $limitPercent -GraceSeconds $graceSeconds -IntervalSeconds $intervalSeconds"
+  "LOGS=D:\android-avd\watchdog.log,D:\android-avd\avd_local.log,D:\android-avd\avd_local.out.log"
+  exit 0
+}
+
 if ($Action -eq 'guard') {
   # 供走查脚本在写截图前调用：viewonly 下拒绝任何落到基线目录的路径
   Get-ModeLine
@@ -196,6 +217,7 @@ if ($Action -eq 'guard') {
 if ($Action -eq 'status') {
   Get-ModeLine
   Get-LimitLine
+  Get-StartGate
   $g = Get-Group
   $g | Select-Object ProcessId,Name,CreationDate,CommandLine | Format-List
   "watchdog: $(Test-Watchdog)"
@@ -220,6 +242,11 @@ if ($Action -eq 'stop') {
 }
 
 # start
+if (-not (Test-QuietWindow (Get-Date))) {
+  Write-Log "start refused: outside 21:00-06:00 (now=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))"
+  "START REFUSED: outside 21:00-06:00 (now=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')); local emulator may start only in 21:00-06:00"
+  exit 3
+}
 Assert-BaselineGuard
 Get-ModeLine
 Get-LimitLine
@@ -231,8 +258,8 @@ if ($left) {
 }
 & $adb start-server 2>&1 | Out-Null
 
-$args = @('-avd', $Avd, '-no-audio', '-no-boot-anim', '-gpu', $Gpu, '-no-metrics', '-cores', "$Cores", '-memory', "$MemoryMb")
-Write-Log "launch avd=$Avd gpu=$Gpu cores=$Cores mem=$MemoryMb"
+$args = Get-LaunchArgs
+Write-Log "launch avd=$Avd gpu=$Gpu cores=$Cores mem=$MemoryMb snapshot=none"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $proc = Start-Process -FilePath $emu -ArgumentList $args -RedirectStandardOutput 'D:\android-avd\avd_local.out.log' -RedirectStandardError 'D:\android-avd\avd_local.err.log' -PassThru
 
