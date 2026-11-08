@@ -50,7 +50,8 @@ def _float_data(rounds=None):
 
 def _power_data(px_tail=None, probes=None, minimal_cpu=0.67, default_raf=5.19,
                 bg_frames=0, bg_cpu=0.01):
-    px = [0] + list(px_tail if px_tail is not None else [0] * 44 + [151655] + [0] * 14)
+    # 基线夹具对应 run 42438495329 的重测结果：60s 窗口零重绘、0px
+    px = [0] + list(px_tail if px_tail is not None else [0] * 59)
     return {"segments": [
         {"name": "idle_minimal", "pxPerSecond": px, "rafPerSecond": [0] * 60,
          "cpuPct": minimal_cpu,

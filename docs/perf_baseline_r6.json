@@ -134,18 +134,18 @@
     {
       "id": "power.idle_minimal_repaints_60s",
       "section": "power",
-      "rule": {"type": "max", "value": 1.0},
-      "r6": 1,
+      "rule": {"type": "max", "value": 0.0},
+      "r6": 0,
       "unit": "count",
-      "note": "R6 可解释例外：60s 内最多 1 次内容变化重绘"
+      "note": "零容差：60s 内不允许任何内容变化重绘；与 probe 零渲染判据同源（run 42438495329 实测 0 次）"
     },
     {
       "id": "power.idle_minimal_px_60s",
       "section": "power",
-      "rule": {"type": "max", "value": 160000.0},
-      "r6": 151655,
+      "rule": {"type": "max", "value": 20000.0},
+      "r6": 0,
       "unit": "px",
-      "note": "R6 例外上限 160,000px；R5 为 303,309px（2 帧），退回即红"
+      "note": "与 probe PX_ZERO_MAX=20000 同源；原 160,000px 例外汇总已撤销（冻结帧对齐问候表情后实测 0px，run 42438495329）"
     },
     {
       "id": "power.repaint_attribution_present",
