@@ -1,8 +1,8 @@
 # R11 实时复测账本（第三层证据：改后的真实输出）
 
 - 模型：`dots-studio/dots-3-note-preview:free`
-- 生成时间：2026-11-08 09:39:40
-- 请求 18 / 错误 1 / 停手：无
+- 生成时间：2026-11-08 10:20:45
+- 请求 22 / 错误 3 / 停手：timeout_or_empty（重试已用尽，停手）
 - 有效 9/10，无效 1，待跑 0
 
 ## 三类计数（全账本合计）
@@ -18,7 +18,7 @@
 
 ### 缺失案例（缺第三层证据，不用离线复算冒充）
 
-- `followup-04`（追问）：status=invalid，缺真实输出；原因 backend_error
+- `followup-04`（追问）：status=invalid，缺真实输出；原因 timeout_or_empty
 
 ### followup-01（追问）
 
@@ -272,7 +272,7 @@
 
 **评测器失败项**
 
-- T1：后端不可用：模型把 max_tokens 用在 reasoning，content 为空
+- T1：后端不可用：TimeoutError: The read operation timed out
 
 ### detail-food-01（具体细节）
 

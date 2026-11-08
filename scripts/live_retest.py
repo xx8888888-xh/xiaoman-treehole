@@ -56,7 +56,8 @@ def load_ledger(path: Path) -> dict:
 
 
 def write_ledger(path: Path, cases: list, expected: int, stop_reason: str,
-                 model: str, requests: int, errors: int) -> dict:
+                 model: str, requests: int, errors: int,
+                 run_note: str = "", record_run: bool = True) -> dict:
     valid = sum(1 for c in cases if c.get("status") == "valid")
     invalid = sum(1 for c in cases if c.get("status") == "invalid")
     counters = {"over30_msgs": 0, "over40_msgs": 0, "name_replaced_turns": 0,
@@ -73,11 +74,24 @@ def write_ledger(path: Path, cases: list, expected: int, stop_reason: str,
         counters["cases_with_over30"] += 1 if cc.get("over30_msgs") else 0
         counters["cases_with_name_replaced"] += 1 if cc.get("name_replaced_turns") else 0
         counters["cases_with_pet_generic"] += 1 if cc.get("pet_generic_turns") else 0
+    # 断点续跑会只发少数请求；把每次进程的计数留档，顶层的 requests/errors 用累计值。
+    runs = []
+    try:
+        old = json.loads(path.read_text(encoding="utf-8"))
+        runs = list(old.get("runs") or [])
+    except Exception:
+        runs = []
+    if record_run and (requests or errors):
+        runs.append({"note": run_note, "requests": requests, "errors": errors,
+                     "stop_reason": stop_reason})
     payload = {
         "model": model,
         "cases": cases,
         "stop_reason": stop_reason,
-        "requests": requests, "errors": errors,
+        "requests": sum(r.get("requests", 0) for r in runs) if runs else requests,
+        "errors": sum(r.get("errors", 0) for r in runs) if runs else errors,
+        "last_run": {"requests": requests, "errors": errors},
+        "runs": runs,
         "summary": {"expected": expected, "valid": valid,
                     "invalid": invalid, "pending": expected - valid - invalid},
         "counters": counters,
@@ -495,12 +509,16 @@ def main() -> int:
             print("  …退避 %.0fs 后重试同一条" % wait, flush=True)
             time.sleep(wait)
         write_ledger(out_path, [records[i] for i in args.ids], len(cases),
-                     stop_reason, args.model, backend.calls, backend.errors)
+                     stop_reason, args.model, backend.calls, backend.errors,
+                     record_run=False)
         if stop_reason:
             break
 
     payload = write_ledger(out_path, [records[i] for i in args.ids], len(cases),
-                          stop_reason, args.model, backend.calls, backend.errors)
+                          stop_reason, args.model, backend.calls, backend.errors,
+                          run_note="ids=%s max_tokens=%s stop=%s" % (
+                              ",".join(args.ids), args.max_tokens,
+                              stop_reason or "none"))
     if args.report:
         write_report(Path(args.report), payload)
     s = payload["summary"]

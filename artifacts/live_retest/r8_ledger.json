@@ -1049,12 +1049,12 @@
      "case": "followup-04",
      "category": "追问",
      "turn": 1,
-     "reason": "后端不可用：模型把 max_tokens 用在 reasoning，content 为空"
+     "reason": "后端不可用：TimeoutError: The read operation timed out"
     }
    ],
    "turns": [],
    "attempts": 1,
-   "error": "backend_error"
+   "error": "timeout_or_empty"
   },
   {
    "id": "detail-food-01",
@@ -1173,9 +1173,9 @@
    }
   }
  ],
- "stop_reason": "",
- "requests": 18,
- "errors": 1,
+ "stop_reason": "timeout_or_empty（重试已用尽，停手）",
+ "requests": 22,
+ "errors": 3,
  "summary": {
   "expected": 10,
   "valid": 9,
@@ -1190,5 +1190,29 @@
   "cases_with_over30": 0,
   "cases_with_name_replaced": 0,
   "cases_with_pet_generic": 2
+ },
+ "runs": [
+  {
+   "note": "9 例原始批次（提交 e4f19d7/80ffa56）",
+   "requests": 18,
+   "errors": 1,
+   "stop_reason": ""
+  },
+  {
+   "note": "followup-04 单独重跑 max_tokens=3000",
+   "requests": 3,
+   "errors": 1,
+   "stop_reason": "backend_error（T3 finish_reason=length）"
+  },
+  {
+   "note": "followup-04 单独重跑 max_tokens=5000",
+   "requests": 1,
+   "errors": 1,
+   "stop_reason": "timeout_or_empty（重试已用尽，停手）"
+  }
+ ],
+ "last_run": {
+  "requests": 1,
+  "errors": 1
  }
 }
