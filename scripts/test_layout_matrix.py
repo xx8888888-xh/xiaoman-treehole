@@ -961,6 +961,86 @@ async def main():
                       {k: jm.get(k) for k in ("visible", "hit", "rect", "overlapInputbar")},
                       guard="防止窄屏浮钮被挤成小块或被输入栏盖住")
 
+        # ---------- 14) 软键盘弹起后的视口变化：最后一条可见、上翻不被拽回 ----------
+        await pg.set_viewport_size({"width": 414, "height": 484})   # 竖屏 + 键盘
+        await pg.wait_for_timeout(240)
+        await pg.click("#textInput")
+        await pg.evaluate("() => window.ChatPager.jumpLatest()")
+        for _ in range(20):
+            await pg.wait_for_timeout(50)
+            if await pg.evaluate("""() => { const s = document.getElementById('chatScroll');
+                return s.scrollHeight - s.scrollTop - s.clientHeight <= 2; }"""):
+                break
+        KB_TXT = "键盘测试" + "键盘弹起后列表会变矮，这条消息落屏时最后一行必须仍然完整可见。" * 2
+        await pg.evaluate("(t) => window.ChatPager.push({text: t})", KB_TXT)
+        await pg.wait_for_timeout(320)
+        km = await pg.evaluate("""() => {
+          const s = document.getElementById('chatScroll');
+          const sr = s.getBoundingClientRect();
+          const last = [...document.querySelectorAll('#messages .bubble:not(.typing)')]
+            .find(b => b.textContent.startsWith('键盘测试')).getBoundingClientRect();
+          return { bottom: +last.bottom.toFixed(1), top: +last.top.toFixed(1),
+                   sbottom: +sr.bottom.toFixed(1), stop: +sr.top.toFixed(1),
+                   gap: +(s.scrollHeight - s.scrollTop - s.clientHeight).toFixed(1) };
+        }""")
+        metrics["keyboard_append"] = km
+        check("键盘弹起（414x484）：新消息完整可见（行底 <= 列表底）",
+              km["bottom"] <= km["sbottom"] + 1 and km["top"] >= km["stop"] - 1
+              and km["gap"] <= 2,
+              km, guard="防止键盘占掉半屏后，最后一条只剩半行露在裁切边上")
+        await pg.evaluate("""() => { const s = document.getElementById('chatScroll');
+          s.style.scrollBehavior = 'auto';
+          s.scrollTop = 0; }""")
+        await pg.wait_for_timeout(200)
+        top0 = await pg.evaluate("() => document.getElementById('chatScroll').scrollTop")
+        await pg.evaluate("(t) => window.ChatPager.push({text: t})",
+                          "键盘上翻测试：这条落屏时不该把已经上翻的视口拽回底部。")
+        await pg.wait_for_timeout(320)
+        top1 = await pg.evaluate("() => document.getElementById('chatScroll').scrollTop")
+        jm14 = (await measure(pg))["jump"] or {}
+        check(f"键盘弹起 + 上翻：新增消息不拽回（scrollTop {top0} -> {top1}，±2px）",
+              abs(top1 - top0) <= 2, (top0, top1),
+              guard="防止键盘高度下的 ResizeObserver 把阅读位置强行拉回底部")
+        check("键盘弹起 + 上翻：回底浮钮仍可见",
+              bool(jm14.get("visible")), jm14.get("display"),
+              guard="防止键盘弹起后浮钮被输入栏/提示层盖掉，用户没法一键回底")
+
+        # 极矮横屏（键盘几乎占满）：tinyFocused 路径也不能把输入栏顶出视口
+        await pg.set_viewport_size({"width": 782, "height": 240})
+        await pg.wait_for_timeout(240)
+        await pg.click("#textInput")
+        await pg.evaluate("() => window.ChatPager.jumpLatest()")
+        for _ in range(20):
+            await pg.wait_for_timeout(50)
+            if await pg.evaluate("""() => { const s = document.getElementById('chatScroll');
+                return s.scrollHeight - s.scrollTop - s.clientHeight <= 2; }"""):
+                break
+        await pg.evaluate("(t) => window.ChatPager.push({text: t})",
+                          "极矮横屏测试：键盘几乎占满屏幕时，输入栏和最后一条都要在视口里。")
+        await pg.wait_for_timeout(300)
+        tm = await pg.evaluate("""() => {
+          const s = document.getElementById('chatScroll'); const sr = s.getBoundingClientRect();
+          const last = [...document.querySelectorAll('#messages .bubble:not(.typing)')]
+            .find(b => b.textContent.startsWith('极矮横屏测试')).getBoundingClientRect();
+          const ib = document.querySelector('.inputbar').getBoundingClientRect();
+          return { ih: innerHeight, ib: +ib.bottom.toFixed(1),
+                   lastb: +last.bottom.toFixed(1), sbottom: +sr.bottom.toFixed(1),
+                   gap: +(s.scrollHeight - s.scrollTop - s.clientHeight).toFixed(1) };
+        }""")
+        metrics["keyboard_tiny"] = tm
+        check(f"极矮横屏 782x240：输入栏底边 <= 视口-8（{tm['ib']} <= 232）",
+              tm["ib"] <= tm["ih"] - 8, tm["ib"] - (tm["ih"] - 8),
+              guard="防止极矮视口把输入栏顶出屏幕（软键盘完全展开的真实形态）")
+        check("极矮横屏 782x240：最后一条仍在列表可视底内",
+              tm["lastb"] <= tm["sbottom"] + 1 and tm["gap"] <= 2,
+              tm, guard="防止极矮视口只保输入栏、把最后一句裁掉")
+
+        await pg.set_viewport_size({"width": 414, "height": 860})
+        await pg.wait_for_timeout(220)
+        rm = await measure(pg)
+        check("键盘收起回到 414x860：输入栏底边 <= 视口-8（无残留偏移）",
+              rm["inputbar"]["b"] <= 852, rm["inputbar"]["b"],
+              guard="防止键盘高度写进固定 px，收起后输入栏永久抬高")
 
         await browser.close()
 
