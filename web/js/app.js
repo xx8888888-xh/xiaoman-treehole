@@ -1040,13 +1040,24 @@ const App = (() => {
     // 不用 inset 简写：Android WebView 83 不解析，遮罩会塌成 0×0
     mask.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:70;background:rgba(20,18,16,.32);"
       + "display:flex;align-items:center;justify-content:center;padding:16px;";
+    const close = () => { if (mask.parentElement) mask.parentElement.removeChild(mask); };
     const panel = document.createElement("div");
     panel.className = "msg-edit-panel";
     panel.style.cssText = "width:min(520px,100%);box-sizing:border-box;background:#fff;color:#111;"
       + "border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px;box-shadow:0 18px 48px rgba(0,0,0,.24);";
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
     const title = document.createElement("p");
     title.textContent = "改一下，再发一次";
     title.style.cssText = "margin:0;font-size:15px;font-weight:600;";
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "icon-btn msg-edit-close";
+    x.setAttribute("aria-label", "关闭");
+    x.textContent = "✕";
+    x.onclick = close;
+    head.appendChild(title);
+    head.appendChild(x);
     const area = document.createElement("textarea");
     area.className = "msg-edit-area";
     area.value = old;
@@ -1068,7 +1079,7 @@ const App = (() => {
     ok.style.cssText = "border:0;background:#22201e;color:#fff;border-radius:10px;padding:8px 14px;font-size:14px;cursor:pointer;";
     bar.appendChild(cancel);
     bar.appendChild(ok);
-    panel.appendChild(title);
+    panel.appendChild(head);
     panel.appendChild(area);
     panel.appendChild(hint);
     panel.appendChild(bar);
@@ -1076,7 +1087,6 @@ const App = (() => {
     document.body.appendChild(mask);
     area.focus();
     try { area.setSelectionRange(old.length, old.length); } catch (e) {}
-    const close = () => { if (mask.parentElement) mask.parentElement.removeChild(mask); };
     mask.addEventListener("click", ev => { if (ev.target === mask) close(); });
     mask.addEventListener("keydown", ev => { if (ev.key === "Escape") close(); });
     cancel.onclick = close;
