@@ -73,6 +73,10 @@
         </div>
       </div>
     </div>
+    <!-- 回到底部浮钮：0 高锚点贴在对话区底部，按钮浮在状态条/输入栏上方，不占文档流 -->
+    <div class="jump-anchor">
+      <button class="jump-bottom hidden" id="jumpBottom" type="button" aria-label="回到最新消息">↓</button>
+    </div>
     <div class="hook-bar hidden" id="hookBar"></div>
     <!-- 状态区统一收在一列：可操作的错误在上，环境旁白在下 -->
     <div class="status-stack" id="statusStack">
@@ -287,6 +291,7 @@
 <script src="js/time_divider.js"></script>
 <script src="js/greet_day.js"></script>
 <script src="js/chat_pager.js"></script>
+<script src="js/stream_typer.js"></script>
 <script src="js/voice_tip.js"></script>
 <script src="js/resilience.js"></script>
 <script src="js/app.js"></script>

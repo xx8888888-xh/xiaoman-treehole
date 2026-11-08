@@ -393,11 +393,14 @@ const App = (() => {
       const msgs = await ChatStore.list(SID, MAX_HISTORY);
       if (!msgs.length) return;
       history = msgs.map(m => ({ role: m.role, content: m.content, at: m.at }));
-      for (const m of msgs) {
-        addMsg(m.content, m.role === "user" ? "me" : "them",
-               m.role !== "user" && Risk.isScript(m.content) ? { crisis: true } : {},
-               { id: m.id, at: m.at });
-      }
+      quietInsert += 1;
+      try {
+        for (const m of msgs) {
+          addMsg(m.content, m.role === "user" ? "me" : "them",
+                 m.role !== "user" && Risk.isScript(m.content) ? { crisis: true } : {},
+                 { id: m.id, at: m.at });
+        }
+      } finally { quietInsert -= 1; }
       console.log("[probe] history restored n=" + msgs.length);
     } catch (e) {
       console.warn("[probe] HISTORY_RESTORE_FAIL", e.message);
@@ -479,9 +482,14 @@ const App = (() => {
     retry.textContent = (opts && opts.label) || "重试";
     noticeAction = canRetry ? opts.action : null;
     bar.classList.remove("hidden");
+    // 横屏矮视口（≤420px）据此把聊天区的 88px 兜底高让出来，输入栏才不会被顶出视口
+    const area = $("chatArea");
+    if (area) area.classList.add("has-notice");
   }
   function hideNotice() {
     $("noticeBar").classList.add("hidden");
+    const area = $("chatArea");
+    if (area) area.classList.remove("has-notice");
     noticeAction = null;
   }
   /** R7：发送失败的可感知入口——toast + 常驻提示条（带「再发一次」）。 */
@@ -492,12 +500,27 @@ const App = (() => {
   }
   // 各模块 localStorage 写失败时（配额满/隐私模式）经此统一提示，只提示一次避免刷屏
   let storageWarned = false;
+  // 配置落盘失败时 api.js 用内存兜底（本次会话照常聊天），但必须让用户知道
+  // "这不是真存下了"——只提示一次；计数暴露给 E2E 断言"出现一次且不重复刷屏"。
+  let cfgMemNotices = 0;
+  let cfgMemActive = false;
+  window.__cfgMemFallback = () => {
+    cfgMemNotices++;
+    cfgMemActive = true;
+    if (cfgMemNotices !== 1) return;
+    toast("设置我先记在内存里，重启会丢");
+    showNotice("本机存储满了：设置我先记在内存里，重启会丢。", { retry: false });
+  };
+  window.__cfgMemFallbackCount = () => cfgMemNotices;
   window.__storageFull = (where) => {
     if (!storageWarned) {
       storageWarned = true;
       toast("本机存储满了，这次没存上");
     }
-    showNotice(XMErrors.storageText(where), { retry: false });
+    // 已在内存兜底时，后续存储提示也把"重启会丢"带上，别让最后一条提示变成
+    // 只说"没存上"而漏了配置还在内存里的事实。
+    const memTail = cfgMemActive ? " 设置我先记在内存里，重启会丢。" : "";
+    showNotice(XMErrors.storageText(where) + memTail, { retry: false });
   };
 
   /** 空状态：只在还没有用户消息时出现；第一条发出后自动收起 */
@@ -631,6 +654,32 @@ const App = (() => {
   // E2E 探针：一轮对话是否彻底结束（sendBtn 在输入框清空后天然 disabled，不能作为完成信号）
   window.__isBusy = () => busy;
 
+  // 矩阵/探针：在真实气泡上跑一次流式逐字节奏（不联网，走同一条 createStreamRenderer）
+  let streamProbeRenderer = null;
+  window.__streamProbe = (text) => {
+    streamProbeRenderer = createStreamRenderer();
+    streamProbeRenderer.apply(String(text == null ? "" : text));
+    return true;
+  };
+  window.__streamProbeState = () => {
+    const r = streamProbeRenderer;
+    if (!r) return null;
+    const h = r.last();
+    const node = h && h.el;
+    const bubble = node && node.parentElement && node.querySelector(".bubble");
+    const parts = r.parts();
+    const cs = node && typeof getComputedStyle === "function" ? getComputedStyle(node) : null;
+    return {
+      shown: bubble ? bubble.textContent.length : 0,
+      target: parts.length ? parts.join("").length : 0,
+      fresh: !!(node && node.dataset && node.dataset.fresh === "1"),
+      anim: cs ? cs.animationName : "",
+      rowH: node && node.getBoundingClientRect ? +node.getBoundingClientRect().height.toFixed(1) : 0,
+      cls: node ? node.className : "",
+      scrollTop: $("chatScroll") ? $("chatScroll").scrollTop : 0
+    };
+  };
+
   // ---------- 降级提示（安静、可关闭） ----------
   // 真模型掉到本地规则引擎时，用户有权知道"现在不是真的她在回"，但别用横幅/弹窗打扰。
   function showDegrade(kind) {
@@ -763,6 +812,16 @@ const App = (() => {
     return unit;
   }
 
+  /** 新到达的一行只播放一次入场过渡：标记只打在“此刻 push 出来的节点”上，
+   *  翻页/窗口重建由 buildRow 重新拼节点，不会带这个标记，所以不会重播。
+   *  260ms 后清掉标记；CSS 在 data-motion=off / reduce 下整条动画不生效。 */
+  function markFresh(rowEl) {
+    if (!rowEl || !rowEl.dataset) return;
+    rowEl.dataset.fresh = "1";
+    setTimeout(() => { try { delete rowEl.dataset.fresh; } catch (e) { /* 忽略 */ } }, 260);
+  }
+  let quietInsert = 0;   // 启动恢复历史时静默插入：30 条历史不该排队播入场动画
+
   function addMsg(text, who, opts = {}, meta) {
     // [probe] 渲染探针（logcat tag=XiaoManWeb）：只记方向与长度，不落内容（CI 验证迷你窗聊天链路）
     try { console.log("[probe] msg " + who + " len=" + String(text == null ? "" : text).length); } catch (e) {}
@@ -770,7 +829,9 @@ const App = (() => {
     if (meta && meta.id != null) rec.id = meta.id;
     // 时间戳先落到记录上：时间分隔在该行首次渲染时就要算得出来（pushHistory 随后复用同一个值）
     rec.at = (meta && meta.at != null) ? meta.at : Date.now();
-    return ChatPager.push(rec);
+    const handle = ChatPager.push(rec);
+    if (handle && handle.el && !opts.tip && quietInsert <= 0) markFresh(handle.el);
+    return handle;
   }
 
   // ---------- 单条消息操作（悬停/长按 → 删除 / 编辑后重发；菜单全部动态生成） ----------
@@ -1383,39 +1444,108 @@ const App = (() => {
   // 仅非流式兜底路径使用；比旧版（550+42/字，最长 2800ms）短很多
   const typingDelay = text => Math.min(900, 160 + text.length * 14);
 
-  /** 流式增量渲染器：按 || 分条，逐字更新最后一条气泡 */
+  /** 流式增量渲染器：按 || 分条。
+   *  只有“最后一条、正在长”的气泡走 StreamTyper 的逐字节奏；前面已成形的段落
+   *  一次定稿。rec.text 始终写全量（history/TTS/parts 都不等动画），DOM 只写
+   *  当前应显示的前缀——每个 delta 不再各重排一次，节奏由 rAF 统一。 */
   function createStreamRenderer() {
     const MAX = 5;
     const slots = [];
     let suppressed = false;
+    let typer = null;
+    let growing = null;
 
     function stickBottom() {
       const s = $("chatScroll");
-      if (s && s.scrollHeight - s.scrollTop - s.clientHeight <= 60) s.scrollTop = s.scrollHeight;
+      if (!s) return;
+      if (s.scrollHeight - s.scrollTop - (s.clientHeight || 0) > 60) return;
+      // 绕开 CSS 的 smooth：逐字每帧都要贴底，平滑动画追不上，流式结束会停在离底 200+px
+      if (typeof s.scrollTo === "function") s.scrollTo({ top: s.scrollHeight, behavior: "instant" });
+      else s.scrollTop = s.scrollHeight;
+    }
+    /** 只写气泡文本：用户上翻（滚动距离 > 60px）时绝不抢滚动位置 */
+    function paint(handle, text) {
+      if (!handle || !handle.el || handle.el.parentElement !== $("messages")) return;
+      const bubble = handle.el.querySelector(".bubble");
+      if (!bubble) return;
+      if (bubble.textContent !== text) bubble.textContent = text;
+      if (text) hideTyping();   // 真有字落屏才收起“正在想…”，不留空框
+      stickBottom();
     }
     function updateRow(handle, text) {
       if (!handle || !handle.rec) return;
       handle.rec.text = text;
-      if (handle.el && handle.el.parentElement) {
-        const bubble = handle.el.querySelector(".bubble");
-        if (bubble) bubble.textContent = text;
-      }
-      stickBottom();
+      paint(handle, text);
+    }
+    /** 上一条定稿：把逐字节奏的欠账一次补齐并停表 */
+    function settleGrowing() {
+      if (typer) typer.flush();
+      typer = null;
+      growing = null;
+    }
+    function ensureTyper(handle) {
+      if (growing === handle && typer) return typer;
+      settleGrowing();
+      growing = handle;
+      // 短句前缀已经整段上屏，交接时从“已显示的字数”续着走，避免跨过 28 字时文本回缩
+      const bubble = handle.el && handle.el.parentElement && handle.el.querySelector(".bubble");
+      typer = StreamTyper.create({
+        initial: bubble ? bubble.textContent.length : 0,
+        onChange: (shownText) => paint(handle, shownText)
+      });
+      return typer;
     }
     function apply(full) {
       if (suppressed) return;
-      hideTyping();
       const raw = String(full == null ? "" : full).split("||").slice(0, MAX);
       for (let i = 0; i < raw.length; i++) {
         const seg = raw[i].trim();
-        if (slots[i]) updateRow(slots[i], seg);
-        else if (seg) slots[i] = addMsg(seg, "them");
+        const last = i === raw.length - 1;
+        if (slots[i]) {
+          if (last && seg !== String(slots[i].rec.text || "")) {
+            slots[i].rec.text = seg;           // 记录先写全量
+            ensureTyper(slots[i]).push(seg);   // 屏幕按自适应节奏追
+          } else if (!last) {
+            updateRow(slots[i], seg);
+          }
+          continue;
+        }
+        if (!seg) continue;
+        // 长文本：先落一条空壳，下一帧起逐字填充（避免先整段闪一下再回退）
+        const long = seg.length > StreamTyper.SHORT_CHARS;
+        const handle = addMsg(long ? "" : seg, "them");
+        slots[i] = handle;
+        if (long) {
+          handle.rec.text = seg;
+          ensureTyper(handle).push(seg);
+        }
       }
+      // 段数变少（replace 前的前瞻）：多余槽位立即清空
+      for (let i = raw.length; i < slots.length; i++) updateRow(slots[i], "");
     }
     function replace(full) {
       if (suppressed) return;
       const raw = String(full == null ? "" : full).split("||").slice(0, MAX);
+      // 收尾文本通常只是逐字目标的“延长”（服务端最后 2 字缓冲：屏上 95 → 最终 97）。
+      // 这种欠账让 typer 用 ~160ms 补齐尾巴；直接 flush 会变成一次几十字的瞬移。
+      // 变短/改写（人格复检、降级文案）不满足前缀关系，仍然立刻定稿，保证屏幕=最终文本。
+      let smooth = -1;
+      if (typer && growing) {
+        for (let i = 0; i < slots.length; i++) if (slots[i] === growing) smooth = i;
+        const next = smooth >= 0 ? String(raw[smooth] || "").trim() : "";
+        if (next && next.startsWith(typer.target())) {
+          if (next !== typer.target()) {
+            growing.rec.text = next;        // 记录先写全量（history/TTS 不等动画）
+            typer.push(next);
+          }
+          typer.finishSoon(160);
+        } else {
+          smooth = -1;
+        }
+      }
+      if (smooth < 0) settleGrowing();
       for (let i = 0; i < raw.length; i++) {
+        if (i === smooth) continue;
         const seg = raw[i].trim();
         if (slots[i]) updateRow(slots[i], seg);
         else if (seg) slots[i] = addMsg(seg, "them");
@@ -1425,7 +1555,8 @@ const App = (() => {
     return {
       apply,
       replace,
-      suppress() { suppressed = true; },
+      flush: settleGrowing,
+      suppress() { suppressed = true; settleGrowing(); },
       parts() { return slots.map(h => (h && h.rec && h.rec.text) || "").filter(Boolean); },
       handles() { return slots; },
       last() { for (let i = slots.length - 1; i >= 0; i--) if (slots[i]) return slots[i]; return null; }
@@ -2391,6 +2522,7 @@ const App = (() => {
         typing: $("typingRow"),
         scroll: $("chatScroll"),
         build: buildRow,
+        jump: $("jumpBottom"),   // 上翻历史时浮在输入栏上方的「回到最新」圆钮
         loader: loadOlderPage   // IndexedDB：首屏 30 条 → 上翻可回看全部 300 条
       });
       // 状态区（错误卡/旁白行）出现或收起会改变可视高度：只在"跟随最新"时贴底，
@@ -2450,13 +2582,17 @@ const App = (() => {
         // resize 监听因此整个是死代码（scrollTop 仍停在 8）。直接盯容器自身的尺寸变化，
         // 键盘弹起（304→82）一定会命中；且不依赖任何系统事件。
         if (typeof ResizeObserver !== "undefined") {
-          let w = s.clientHeight;
+          let w = s.clientHeight, vh = window.innerHeight;
           const ro = new ResizeObserver(() => {
-            const next = s.clientHeight;
-            if (next === w) return;
+            const next = s.clientHeight, nextVh = window.innerHeight;
+            if (next === w && nextVh === vh) return;
             const shrunk = next < w;
-            w = next;
-            if (lastGap <= 60 || shrunk) { stick(); lastGap = gap(); }
+            // 只有"键盘弹起"（视口本身变矮）才无条件贴底；
+            // 键盘收起时顶栏/状态条回归会让聊天容器反而变矮（300→363 实测 59→54），
+            // 那不是键盘弹起，不能把用户正在翻看的历史一把拽到底部（scrollTop 120→1599）。
+            const keyboardOpening = nextVh < vh;
+            w = next; vh = nextVh;
+            if (lastGap <= 60 || (shrunk && keyboardOpening)) { stick(); lastGap = gap(); }
           });
           ro.observe(s);
         }
@@ -2465,7 +2601,10 @@ const App = (() => {
         // 兜住所有追加/流式更新，仅在用户原本贴底时才跟随，不打断翻看历史。
         if (typeof MutationObserver !== "undefined") {
           const mo = new MutationObserver(() => {
-            if (lastGap > 60 && !tinyFocused()) return;
+            // 当场算 gap，不用缓存：程序化上翻后 scroll 事件可能还没派发，而流式每帧都在改 DOM。
+            // 缓存会把"刚上翻"误判成"仍贴底"，一次 scrollIntoView 就把视口往下拽近 200px。
+            const now = gap();
+            if (now > 60 && !tinyFocused()) { lastGap = now; return; }
             const row = lastVisibleRow();
             if (row) row.scrollIntoView({ block: "nearest" });
             lastGap = gap();
