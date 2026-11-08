@@ -36,11 +36,153 @@ SHOTS = os.environ.get("XIAOMAN_LAYOUT_SHOTS") or os.path.join(
 
 results = []
 metrics = {}
+guards = []   # 新增用例的「它防止什么回归」一句话，收尾统一打印
 
 
-def check(name, ok, detail=""):
+def check(name, ok, detail="", guard=""):
     results.append((name, bool(ok), detail))
+    if guard:
+        guards.append((name, guard))
     print(("PASS " if ok else "FAIL ") + name + ((" · " + str(detail)) if detail else ""))
+
+
+def _rgb(hexs):
+    h = str(hexs).strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _lum(hexs):
+    def ch(v):
+        v /= 255.0
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = _rgb(hexs)
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def _contrast(a, b):
+    la, lb = _lum(a), _lum(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+class TruncServer:
+    """直连通道（8913）的中断/重连剧本服务器。
+
+    - trunc：先吐半截 JSON 增量，然后不回 chunked 终止块直接断开 socket
+      → 浏览器 fetch 报网络错误，走 api.js 的"partial 保留"路径；
+    - ok：正常吐完整 JSON 增量并以 0 长度块收尾，模拟重连成功。
+    只服务 /v1/chat/completions，其它路径 404；CORS 预检也在这里应答
+    （Authorization 头会触发 OPTIONS 预检，不能省）。
+    """
+
+    TRUNC = "trunc"
+    OK = "ok"
+
+    def __init__(self, port=8913):
+        self.port = port
+        self.mode = self.TRUNC
+        self.hits = 0
+        self._server = None
+
+    @staticmethod
+    def _chunk(writer, payload):
+        writer.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n")
+
+    async def start(self):
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", self.port)
+
+    async def close(self):
+        if self._server:
+            self._server.close()
+            try:
+                await self._server.wait_closed()
+            except Exception:
+                pass
+            self._server = None
+
+    @staticmethod
+    async def _read_request(reader):
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = await reader.read(4096)
+            if not chunk:
+                break
+            data += chunk
+        head, _, rest = data.partition(b"\r\n\r\n")
+        lines = head.split(b"\r\n")
+        headers = {}
+        for line in lines[1:]:
+            k, _, v = line.partition(b":")
+            headers[k.strip().lower().decode("latin-1")] = v.strip().decode("latin-1")
+        return (lines[0] if lines else b""), headers, rest
+
+    async def _handle(self, reader, writer):
+        try:
+            reqline, headers, rest = await self._read_request(reader)
+            method = (reqline.split(b" ")[0] if reqline else b"").upper()
+            need = int(headers.get("content-length") or 0)
+            body = rest
+            while len(body) < need:
+                chunk = await reader.read(need - len(body))
+                if not chunk:
+                    break
+                body += chunk
+            origin = headers.get("origin") or "*"
+            cors = (f"Access-Control-Allow-Origin: {origin}\r\n"
+                    "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+                    "Access-Control-Allow-Headers: Authorization, Content-Type\r\n"
+                    "Access-Control-Max-Age: 600\r\n")
+            if method == "OPTIONS":
+                writer.write(b"HTTP/1.1 204 No Content\r\n" + cors.encode()
+                             + b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+                await writer.drain()
+                return
+            if reqline.split(b" ")[1:2] != [b"/v1/chat/completions"]:
+                writer.write(b"HTTP/1.1 404 Not Found\r\n" + cors.encode()
+                             + b"Content-Type: application/json\r\n"
+                             + b"Content-Length: 2\r\nConnection: close\r\n\r\n{}")
+                await writer.drain()
+                return
+            self.hits += 1
+            if self.mode == self.TRUNC:
+                # 半截 JSON：没有结束引号，收不到 done；0.35s 后硬断，模拟"说到一半断线"
+                pieces = ['{"reply":"我先听', "你说，不着急"]
+                writer.write(b"HTTP/1.1 200 OK\r\n" + cors.encode()
+                             + b"Content-Type: text/event-stream\r\n"
+                             + b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+                for piece in pieces:
+                    payload = json.dumps(
+                        {"choices": [{"delta": {"content": piece}}]},
+                        ensure_ascii=False).encode()
+                    self._chunk(writer, b"data: " + payload + b"\n\n")
+                    await writer.drain()
+                    await asyncio.sleep(0.35)
+                # 故意不写 0\r\n\r\n：客户端读到 ERR_INCOMPLETE_CHUNKED_ENCODING
+                return
+            full = ('{"reply":"我回来了，刚才说到哪了？慢点说也行。",'
+                    '"emotion":"gentle","motion":null}')
+            writer.write(b"HTTP/1.1 200 OK\r\n" + cors.encode()
+                         + b"Content-Type: text/event-stream\r\n"
+                         + b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+            for i in range(0, len(full), 9):
+                payload = json.dumps(
+                    {"choices": [{"delta": {"content": full[i:i + 9]}}]},
+                    ensure_ascii=False).encode()
+                self._chunk(writer, b"data: " + payload + b"\n\n")
+                await writer.drain()
+                await asyncio.sleep(0.03)
+            self._chunk(writer, b"data: [DONE]\n\n")
+            writer.write(b"0\r\n\r\n")
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
 
 
 MEASURE = """() => {
@@ -176,6 +318,8 @@ def probe_stats(r):
 
 async def main():
     os.makedirs(SHOTS, exist_ok=True)
+    trunc = TruncServer()   # 8913：直连通道的中断/重连剧本
+    await trunc.start()
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--mute-audio"])
         ctx = await browser.new_context(viewport={"width": 414, "height": 860})
@@ -195,6 +339,90 @@ async def main():
         metrics["landscape_before"] = base
         check("横屏基线 782x363：输入栏底边 <= 355", base["inputbar"]["b"] <= 355,
               base["inputbar"]["b"])
+
+        # ---------- 10) 流式被中断 / 重连：半截保留、不露协议 JSON、重连只追加 ----------
+        # 防回归：半截流在收尾时把原始 JSON 片段当正文写进气泡（用户看到 {"reply": …）。
+        await pg.set_viewport_size({"width": 414, "height": 860})
+        await pg.wait_for_timeout(250)
+        for _ in range(30):
+            if not await pg.evaluate("() => !!(window.__isBusy && window.__isBusy())"):
+                break
+            await pg.wait_for_timeout(100)
+        await pg.evaluate(
+            """() => { window.ChatPager.jumpLatest();
+                       document.getElementById('noticeBar').classList.add('hidden');
+                       document.getElementById('pendingBar').classList.add('hidden'); }""")
+        await pg.wait_for_timeout(140)
+        base10 = await pg.evaluate("""() => ({
+          them: [...document.querySelectorAll('#messages .bubble.them:not(.typing)')].length,
+          rows: [...document.querySelectorAll('#messages .msg-row:not(#typingRow)')].length,
+          scroll: document.getElementById('chatScroll').scrollTop
+        })""")
+        trunc.mode = TruncServer.TRUNC
+        await pg.fill("#textInput", "在吗，我说个事")
+        await pg.click("#sendBtn")
+        for _ in range(40):
+            await pg.wait_for_timeout(100)
+            if not await pg.evaluate("() => !!(window.__isBusy && window.__isBusy())"):
+                break
+        a10 = await pg.evaluate("""() => {
+          const bubbles = [...document.querySelectorAll('#messages .bubble.them:not(.typing)')];
+          const last = bubbles[bubbles.length - 1];
+          const s = document.getElementById('chatScroll');
+          return { text: last ? last.textContent : '', count: bubbles.length,
+                   typing: !document.getElementById('typingRow').classList.contains('hidden'),
+                   notice: !document.getElementById('noticeBar').classList.contains('hidden'),
+                   pending: !document.getElementById('pendingBar').classList.contains('hidden'),
+                   seq: bubbles.slice(-2).map(b => b.textContent.slice(0, 6)),
+                   gap: s.scrollHeight - s.scrollTop - s.clientHeight };
+        }""")
+        metrics["stream_interrupt"] = a10
+        PART = "我先听你说，不着急"   # 半截流能完整解析出的正文（2 字安全缓冲之后）
+        check("中断：半截正文保留，且不把 {\"reply\" 之类的协议 JSON 写进气泡",
+              a10["text"] == PART and '{"' not in a10["text"],
+              (a10["text"], a10["count"]), guard="防止断线收尾把原始 JSON 片段当正文露给用户")
+        check("中断：这一轮只多一条气泡（不重复、不盖旧行）",
+              a10["count"] == base10["them"] + 1,
+              (base10["them"], a10["count"]),
+              guard="防止 partial 收尾既 replace 又 addMsg，屏幕上出现两条半截回复")
+        check("中断：不误报「没送到」（提示条/排队条都不出现）",
+              not a10["notice"] and not a10["pending"], (a10["notice"], a10["pending"]),
+              guard="防止已经收到半截回复还弹失败重试，用户点重发把同一句说两遍")
+        check("中断：「正在想…」已收起（不留空打字框）", not a10["typing"], a10["typing"],
+              guard="防止断线后 typing 行卡在屏幕上，看起来像永远在等")
+        check("中断：仍然贴底（gap <= 2）", a10["gap"] <= 2, a10["gap"],
+              guard="防止半截收尾走 replace 时把已贴底的视口弹开")
+
+        # 重连：同一通道恢复正常，再发一条只追加，不覆盖上一条半截
+        trunc.mode = TruncServer.OK
+        await pg.fill("#textInput", "刚才断了？")
+        await pg.click("#sendBtn")
+        for _ in range(50):
+            await pg.wait_for_timeout(100)
+            if not await pg.evaluate("() => !!(window.__isBusy && window.__isBusy())"):
+                break
+        b10 = await pg.evaluate("""() => {
+          const bubbles = [...document.querySelectorAll('#messages .bubble.them:not(.typing)')];
+          const s = document.getElementById('chatScroll');
+          return { count: bubbles.length,
+                   last: bubbles[bubbles.length - 1] ? bubbles[bubbles.length - 1].textContent : '',
+                   prev: bubbles[bubbles.length - 2] ? bubbles[bubbles.length - 2].textContent : '',
+                   gap: s.scrollHeight - s.scrollTop - s.clientHeight };
+        }""")
+        metrics["stream_reconnect"] = b10
+        check("重连：恢复正常回复且只追加一条气泡",
+              b10["count"] == a10["count"] + 1
+              and b10["last"] == "我回来了，刚才说到哪了？慢点说也行。",
+              (a10["count"], b10["count"], b10["last"]),
+              guard="防止重连后把上一条半截当成新回复就地覆盖，历史少一句")
+        check("重连：上一条半截原文一字不变（顺序也保持在前面）",
+              b10["prev"] == PART, b10["prev"],
+              guard="防止重连的整窗重建动到已完成的半截气泡，出现回退/串行")
+        check("重连：回到底部，新回复完整可见（gap <= 2）", b10["gap"] <= 2, b10["gap"],
+              guard="防止重连回复到达后不跟随，最后一句停在视口外")
+        check(f"中断/重连：两次发送都真实打到直连通道（hits={trunc.hits} >= 2）",
+              trunc.hits >= 2, trunc.hits,
+              guard="防止用例被路由拦截架空，实际没走真实 partial 路径")
 
         # ---------- 1) 造出最坏叠层：失败提示条 + 语音提示 + 排队条 ----------
         for pat in ("**/v1/chat/completions", "**/api/chat/stream", "**/api/chat"):
@@ -546,12 +774,18 @@ async def main():
 
         await browser.close()
 
+    await trunc.close()
+
     failed = [r for r in results if not r[1]]
     json_path = os.path.join(SHOTS, "layout_matrix_metrics.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     print(f"\nRESULT {'PASS' if not failed else 'FAIL'} {len(results) - len(failed)}/{len(results)}")
     print(f"metrics: {json_path}")
+    if guards:
+        print(f"\n新增用例防回归说明（{len(guards)} 条）：")
+        for n, g in guards:
+            print(f"  - {n}：{g}")
     if failed:
         for n, _, d in failed:
             print("  FAIL", n, d)

@@ -251,6 +251,40 @@ test("流中途断连：保留已收到的部分，标记 partial", async () => 
   assert.ok(got.error.length >= 1);
 });
 
+test("直连流中途断连：半截 JSON 只取 reply 文本，不把协议片段当正文（R8）", async () => {
+  setCfg({ mode: "openai", apiKey: "k", apiBase: "http://direct.test" });
+  API.setApiKey("k");
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: { get: () => "text/event-stream" },
+    body: {
+      getReader: () => {
+        let step = 0;
+        return {
+          read: async () => {
+            step += 1;
+            if (step === 1) {
+              return { done: false, value: new TextEncoder().encode(
+                "data: " + JSON.stringify({ choices: [{ delta: { content: '{"reply":"我先听' } }] }) + "\n\n") };
+            }
+            throw new Error("network reset");
+          }
+        };
+      }
+    }
+  });
+  const { handlers, got } = collectors();
+  try {
+    const r = await API.chatStream(HISTORY, {}, handlers);
+    assert.equal(r.partial, true);
+    assert.equal(r.reply, "我先听", "断流收尾必须只保留 reply 正文");
+    assert.ok(!r.reply.includes('{"'), "不得把原始 JSON 片段写进气泡");
+    assert.ok(got.delta.length >= 1, "断流前已经逐字落屏的增量不能丢");
+  } finally {
+    API.setApiKey("");
+  }
+});
+
 test("连续失败触发熔断：第三次不再干等", async () => {
   setCfg({ mode: "mock" });
   let calls = 0;

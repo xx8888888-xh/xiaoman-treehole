@@ -329,6 +329,14 @@ const API = (() => {
     return out;
   }
 
+  /** 断流收尾时决定气泡正文：JSON 协议流只取 reply 文本，别把 {"reply":… 原样露给用户 */
+  function plainFromRaw(raw, emitted) {
+    const text = String(raw || "");
+    const looksJson = text.trimStart().startsWith("{") || /"reply"\s*:/.test(text);
+    if (!looksJson) return text || emitted || "";
+    return extractReplyPrefix(text) || emitted || "";
+  }
+
   /** SSE fetch：首字超时 + 事件间空闲超时 + 总时长超时 */
   async function streamFetch(url, options, timing, onEvent) {
     const controller = new AbortController();
@@ -586,7 +594,8 @@ const API = (() => {
         if (raw) {
           out.partial = true;
           if (handlers.onError) handlers.onError(e);
-          return tagResult({ reply: raw, emotion: "neutral", motion: null }, out);
+          return tagResult({ reply: plainFromRaw(raw, emitted) || FALLBACK_REPLY,
+                             emotion: "neutral", motion: null }, out);
         }
         throw e;
       }
@@ -615,7 +624,8 @@ const API = (() => {
     notifyMode("openai");
     let r = null;
     try { r = parseStructured(raw); } catch {}
-    if (!r || !r.reply) r = { reply: emitted || raw || FALLBACK_REPLY, emotion: "neutral", motion: null };
+    if (!r || !r.reply) r = { reply: plainFromRaw(raw, emitted) || FALLBACK_REPLY,
+                               emotion: "neutral", motion: null };
     return tagResult(r, out);
   }
 
