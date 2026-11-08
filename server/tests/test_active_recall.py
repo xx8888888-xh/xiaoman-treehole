@@ -73,3 +73,23 @@ def test_negative_reply_without_name_is_flagged():
     """反例对照：同一判定器必须把“完全没提名字”的回复判红。"""
     assert _name_recalled("今天上班被骂了，真烦。", "阿秋") is False
     assert _name_recalled("阿秋，今天上班被骂了？", "阿秋") is True
+
+
+def test_one_recall_per_turn_cap():
+    """每轮最多 1 条主动回带（prompt_core.MEMORY_RULES / MEMORY_CONTRACT §6.2）：
+    hook 已回带一条记忆时，本轮不再叠名字回带；名字顺延到下一轮，不被永久吞掉。"""
+    sid = "w21-per-turn-cap"
+    mock_api._STATE.update_memories(sid, {"昵称": "阿秋", "老板": "张三"})
+    sess = mock_api._STATE.get_session(sid)
+    # 第 10 轮末：名字与老板的冷却同时到期（都是第 5 轮用过）
+    sess["turns"] = 10
+    sess["mem_extracted"] = {"昵称": 1, "老板": 1}
+    sess["memory_hits"] = {"昵称": 5, "老板": 5}
+
+    out = mock_api.make_reply([{"role": "user", "content": "今天上班又被客户催了"}], sid)
+    assert "张三" in (out.get("hook") or ""), "老板回提应命中：%r" % out
+    assert "阿秋" not in out["reply"], "同轮已有 hook 回带，不应再叠名字：%r" % out
+
+    nxt = mock_api.make_reply([{"role": "user", "content": "今天上班又被客户催了"}], sid)
+    assert "阿秋" in nxt["reply"], "名字应顺延到下一轮：%r" % nxt
+    assert "张三" not in (nxt.get("hook") or ""), "冷却内的老板不应再提：%r" % nxt

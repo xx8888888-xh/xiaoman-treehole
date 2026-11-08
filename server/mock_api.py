@@ -1788,7 +1788,11 @@ def make_reply(messages, session_id=None):
     else:
         hook = HOOKS.get(topic) if random.random() < 0.55 else None
     # W21 名字主动回带（与提示词 MEMORY_SLOT_RULES 同一条：隔 1-2 轮叫一声）
-    name = None if blocked else _name_recall_text(memories, user_text, sess, turn, topic)
+    # 每轮上限：hook 已回带一条记忆时，本轮不再叠名字回带——prompt_core.MEMORY_RULES
+    # 「只在相关时用，最多 1 条」与 docs/MEMORY_CONTRACT.md §6.2 是同一口径；
+    # 非回带的常规 hook 不占名额（名字仍照常由冷却控制）。
+    name = None if (blocked or hit_key is not None) else _name_recall_text(
+        memories, user_text, sess, turn, topic)
     if name:
         if name not in reply:
             reply = "%s，%s" % (name, reply)
