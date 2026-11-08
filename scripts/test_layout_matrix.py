@@ -854,6 +854,54 @@ async def main():
         await pg.evaluate("""() => { const bar = document.getElementById('hookBar');
           bar.innerHTML = ''; bar.classList.add('hidden'); }""")
 
+        # ---------- 12) 深色模式：颜色换、对比度够、布局不位移 ----------
+        await pg.set_viewport_size({"width": 414, "height": 860})
+        await pg.wait_for_timeout(200)
+        COLLECT = """() => {
+          const cs = getComputedStyle(document.body);
+          const v = n => cs.getPropertyValue(n).trim();
+          const bb = [...document.querySelectorAll('#messages .bubble.them')];
+          const last = bb[bb.length - 1];
+          const R = el => { const r = el.getBoundingClientRect();
+            return [+r.left.toFixed(1), +r.top.toFixed(1),
+                    +r.width.toFixed(1), +r.height.toFixed(1)]; };
+          return { cls: document.body.className, bg: v('--bg'), text: v('--text'),
+                   text2: v('--text-2'), bubble: v('--bubble-them'),
+                   inputbar: R(document.querySelector('.inputbar')),
+                   chat: R(document.getElementById('chatScroll')),
+                   last: last ? R(last) : null };
+        }"""
+        light12 = await pg.evaluate(COLLECT)
+        await pg.evaluate("""() => { document.body.classList.remove('theme-light');
+          document.body.classList.add('theme-dark'); }""")
+        await pg.wait_for_timeout(140)
+        dark12 = await pg.evaluate(COLLECT)
+        metrics["theme"] = {"light": light12, "dark": dark12}
+        check("深色模式：背景确实换深色（--bg 变化且亮度下降）",
+              dark12["bg"] != light12["bg"] and _lum(dark12["bg"]) < _lum(light12["bg"]) * 0.5,
+              (light12["bg"], dark12["bg"]),
+              guard="防止主题切换只改文字不改底色，出现白底浅字")
+        ct = _contrast(dark12["text"], dark12["bubble"])
+        ct2 = _contrast(dark12["text2"], dark12["bubble"])
+        check(f"深色模式：正文与气泡对比度 >= 4.5（{ct:.2f}:1）", ct >= 4.5, round(ct, 2),
+              guard="防止深色下的正文色没有跟着令牌换，变成看不见的深灰")
+        check(f"深色模式：次要文字与气泡对比度 >= 4.5（{ct2:.2f}:1）", ct2 >= 4.5, round(ct2, 2),
+              guard="防止时间戳/旁白在深色里糊成一片")
+        dlt = max(abs(a - b) for a, b in zip(light12["inputbar"], dark12["inputbar"])) \
+            + max(abs(a - b) for a, b in zip(light12["chat"], dark12["chat"])) \
+            + (max(abs(a - b) for a, b in zip(light12["last"], dark12["last"]))
+               if light12["last"] and dark12["last"] else 0)
+        check(f"深色模式：输入栏/列表/气泡几何零位移（最大偏差 {dlt:.1f}px <= 3）",
+              dlt <= 3, round(dlt, 1),
+              guard="防止主题令牌里混进 margin/padding，切色后整页跳一格")
+        await pg.evaluate("(cls) => { document.body.className = cls; }", light12["cls"])
+        await pg.wait_for_timeout(120)
+        back12 = await pg.evaluate(COLLECT)
+        check("深色模式：切回浅色令牌恢复（主题不粘连）",
+              back12["bg"] == light12["bg"] and back12["text"] == light12["text"],
+              (back12["bg"], back12["text"]),
+              guard="防止深色类被遗留在 body 上，后续用例/会话被串色")
+
 
         await browser.close()
 
