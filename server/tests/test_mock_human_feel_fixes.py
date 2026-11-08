@@ -111,6 +111,31 @@ class MemoryAwareCooldownTest(unittest.TestCase):
             self.assertNotIn("年糕", payloads[i]["reply"],
                              "没点名就不该连提（轮 %d）" % i)
 
+    def test_five_unnamed_turns_never_proactively_name(self):
+        """(a) 的守卫：冷却/指代轮不主动报名字，点名轮则必须报。
+
+        连续 5 轮用户只用"它"指代、不提"年糕"：回复里不许主动出现实体名
+        （冷却只管"用户没点名时要不要主动提"，不管"被点名时怎么接"）。
+        末轮用户点名 → 回复必须出现该值（证明点名轮不受这条约束，
+        followup-01 T4 不会因此复红）。
+        """
+        payloads = say("aware-unnamed-five", [
+            "我家猫叫年糕",          # 轮0 写入：当场接住
+            "你猜它在干嘛",          # 轮1 指代
+            "它今天拆家了",          # 轮2 指代
+            "它是不是欠揍",          # 轮3 指代（记忆感知冷却已解除，仍不该主动提）
+            "它最近乖不乖",          # 轮4 指代
+            "它有时候还挺可爱",      # 轮5 指代
+            "年糕今天怎么样",        # 轮6 点名：不受抑制
+        ])
+        self.assertIn("年糕", payloads[0]["reply"], "写入轮必须当场接住")
+        for i in (1, 2, 3, 4, 5):
+            self.assertNotIn("年糕", payloads[i]["reply"],
+                             "指代轮不许主动报名字（轮 %d）：%r"
+                             % (i, payloads[i]["reply"]))
+        self.assertIn("年糕", payloads[6]["reply"],
+                      "点名轮必须出现该值：%r" % payloads[6]["reply"])
+
     def test_greet_turn_skips_awareness(self):
         """开场引用不是用户主动提，不应烧冷却（既有守卫保持）。"""
         payload = mock_api.make_reply(
@@ -140,8 +165,9 @@ class NamedEchoGuardTest(unittest.TestCase):
         """连续 5 轮都点名同一实体：名字每轮出现，且句式不机械重复。
 
         接替原「接住 ≠ 复读」断言在新路径上的职责：整句不重 + 同头 4 字不重。
-        边界（实测，见本轮报告）：宠物池 5 条，前 5 轮 5/5 不重；
-        第 6 轮起 recent 已用尽整池，退回整池随机 → 开始重复。
+        边界（实测，见本轮报告）：宠物池 8 条；同实体连喂 9 轮时 unique 为 6-8，
+        最早第 6 轮就复用（recent 窗口 8 条里混有非点名回复，去重地平线≈4 轮
+        点名；且 9 轮 > 8 条模板，9/9 不重在当前池容量下无解）。
         """
         payloads = say("named-diversity", [
             "我家猫叫年糕",         # 写入轮
@@ -229,6 +255,13 @@ class InsomniaStateSlotTest(unittest.TestCase):
         self.assertIn("状态", mock_api.RECALL_MAP["insomnia"])
         self.assertIn("状态", mock_api.RECALL_TEMPLATES)
         self.assertIn("状态", mock_api.MEM_AWARE_POOL)
+
+    def test_mem_aware_pool_size_matches_window(self):
+        """模板池 8 条，与 recent_replies 去重窗口（8）对齐；每条都必须能嵌入 {v}。"""
+        for key, pool in mock_api.MEM_AWARE_POOL.items():
+            self.assertEqual(len(pool), 8, "%s 池应为 8 条：%d" % (key, len(pool)))
+            self.assertTrue(all("{v}" in t for t in pool),
+                            "%s 池有模板缺 {v}：%r" % (key, pool))
 
 
 if __name__ == "__main__":
