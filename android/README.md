@@ -17,6 +17,13 @@
 
 （若仓库补上了 Gradle Wrapper，也可 `cd android && ./gradlew assembleDebug`，产物名为 `app-debug.apk`。）
 
+> ⚠ **已知缺口（2026-11-08 登记）**：`./gradlew assembleDebug` / Android Studio 直接打包**不会**同步 `assets/www`
+> （`build.gradle.kts` 里没有任何 assets 任务），会把目录里现成的旧副本打进 APK —— 这就是「APK 行为落后于 web/」的来源。
+> 要保证 APK 与 `web/` 一致，必须走 `build_apk.sh`（打包前强制 `build_assets.sh`，打包后按清单校验 APK 内 assets）。
+> 只跑 Gradle 的话，请先手动执行 `bash scripts/build_assets.sh`。
+> 补法（等 JDK/Android SDK 可用后再做）：给 `preBuild` 挂一个 Exec 任务跑 `python3 scripts/verify_assets.py`，
+> 漂移即 fail-fast、拒绝出包；方案记在 [docs/DEVLOG.md](../docs/DEVLOG.md) 的 2026-11-08 条目，**不要**只靠 CI 兜。
+
 ## 真机安装
 adb install <上一步产物路径>
 或直接传 APK 到手机点击安装（设置允许未知来源）。

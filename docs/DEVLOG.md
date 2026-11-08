@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-11-08 · assets 漂移收口 + 构建可溯源守卫 + 登记 Gradle 打包缺口
+
+[2026-11-08 12:47] 动作 → 结果 → 触及文件
+
+### 事实（只读核对）
+- `android/app/src/main/assets/www` 是 `build_assets.sh` 生成物、**不入库**（`.gitignore` 第 47 行）；`45ca286`（11-04）是「把这份副本移出仓库」的提交，不是「最后同步时间」。
+- 本地副本 `ASSET_MANIFEST.json` 记 `generated_at 2026-11-07T17:11:11Z`（本地 11-08 01:11）、`source_commit: null`（→ 那次是在 git 解析不了的 shell 里建的），之后 18 个动 `web/` 的提交没再重建。
+- 漂移实测 `verify_assets.py`：`missing=2 extra=0 mismatch=9` —— 缺 `js/stream_typer.js`、`js/trunc_log.js`（分别由 `4dc7f32`、`8c747e4` 新增）；内容不符 9 个：`app.js` +10,987B、`style.css` +8,023B、`chat_pager.js` +4,327B、`tts.js` +3,669B、`backup.js` +2,939B、`index.html` +656B、`risk.js` +249B、`reminders.js` +168B、`api.js` +115B（仅 `5035364` 的 `__storageFull` → `__cfgMemFallback` 5 行）。**不是「只差 5 行」，是 11-05→11-08 的累积漂移。**
+
+### 动作与实测
+1. 用 `bash scripts/build_assets.sh`（Git Bash）重建：76 files / 1,443,082 B，`ASSET_VERIFY PASS`；重建前后清单比对 75→77，仅新增上表 2 个文件、删除 0；`test_persona_single_source.py` 4/4、`test_verify_assets.py` 10/10 全绿。
+2. `scripts/build_assets.sh` 加可溯源守卫：`git rev-parse HEAD` 拿不到时**报错退出**，不再写 `source_commit=null`。实测三种场景：坏 `.git`（`gitdir:` 指向不存在路径）→ 退出非零 + 中文报错且**不生成 manifest**；无 `.git` 目录 → 同样非零；本仓库在 WSL 下跑（正是 01:11 那次的真实成因）→ `RESULT=NONZERO`；正常仓库 Git Bash → `RESULT=EXIT0`，76 files / verify PASS（不误伤）。
+3. `android/README.md` 登记 Gradle 缺口：`./gradlew assembleDebug` / Android Studio 直接打包**不会**同步 `assets/www`，会把旧副本打进 APK；必须走 `build_apk.sh`。
+
+### 待办（**JDK / Android SDK 回来后**，本机已归档，故未改 Gradle、未测不写）
+- 在 `android/app/build.gradle.kts` 给 `preBuild` 挂一个 `Exec` 任务跑 `python3 scripts/verify_assets.py`（fail-fast：漂移即拒绝出包）；**方案即本条目 + `android/README.md` 的 ⚠ 段**，不要只依赖 CI。
+- 已确认不改 CI（`ci.yml`/`android-ci.yml` 等已各自先跑 `build_assets.sh` 再校验，CI 侧不缺这一环）。
+
+### 提醒
+- 本次重建只是**当前快照**（manifest `source_commit` 记录的是构建时 HEAD，期间被其他会话推过多次），任何后续 `web/` 提交都会让它立刻再漂；**不构成「漂移已修复」**。真正的修复是打包期重算（`build_apk.sh` 已具备）+ 上面的 Gradle 校验缺口补上。
+
+触及：scripts/build_assets.sh、android/README.md、docs/DEVLOG.md（生成物 `android/app/src/main/assets/www/` 不入库、未提交）
+
+---
+
 ## 2026-11-05 · 第五轮合并 r5（w16 → w15 → w17 → feat/containerize-and-config）
 
 > 背景：三个并行分支回报完毕，主干处于 r4（`86c2d11`，tag `r4-20261105`），其上另有 6 条 CI 提交（HEAD `d882d99`）。先建 `backup/pre-r5-20261105` 分支 + `backup-pre-r5-20261105` tag。**顺序敏感**：w15 依赖 w16 的 `sid` 契约，必须先合 w16。不合并 `feat/android-battery`（已并入 r4）。

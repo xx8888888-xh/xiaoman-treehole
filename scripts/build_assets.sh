@@ -23,10 +23,19 @@ mkdir -p "$DST"
 find "$DST" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 ( cd "$SRC" && tar cf - "${ASSET_TAR_EXCLUDES[@]}" . ) | ( cd "$DST" && tar xf - )
 
-# 源 commit：能拿到就写；web/ 有未提交改动时标记 dirty（发布物不完全等于任一提交）
+# 源 commit：必须可溯源。git 拿不到 HEAD 时直接失败，不再静默写 source_commit=null——
+# 否则发布物等于「不知道从哪份代码来的」，事后无法判断 APK 里是哪版行为。
 COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+if [ -z "$COMMIT" ]; then
+  echo "❌ 无法解析 git HEAD：$ROOT" >&2
+  echo "   发布物必须带可溯源的 commit，拒绝生成 source_commit=null 的 ASSET_MANIFEST.json。" >&2
+  echo "   常见原因：在 WSL 里执行本脚本，而 worktree 的 .git 指向 Windows 绝对路径，WSL 的 git 解析不了。" >&2
+  echo "   解决：用 Git Bash 执行（\"C:\\Program Files\\Git\\bin\\bash.exe\"）；CI（ubuntu runner）的 .git 正常，不受影响。" >&2
+  exit 1
+fi
+# web/ 有未提交改动时标记 dirty（发布物不完全等于任一提交）
 DIRTY=false
-if [ -n "$COMMIT" ] && [ -n "$(git -C "$ROOT" status --porcelain -- web 2>/dev/null || true)" ]; then
+if [ -n "$(git -C "$ROOT" status --porcelain -- web 2>/dev/null || true)" ]; then
   DIRTY=true
 fi
 
