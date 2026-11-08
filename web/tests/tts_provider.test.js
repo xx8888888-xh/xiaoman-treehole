@@ -90,7 +90,7 @@ test("native provider：真桥可用时传入文本 + 语速档（不播放真�
     const played = calls.filter((c) => c.text);
     assert.equal(played.length, 1);
     assert.equal(played[0].text, "你好呀");
-    assert.equal(played[0].rate, 1.18, "fast 档映射 1.18");
+    assert.equal(played[0].rate, 1.12, "fast 档映射 1.12（整体略慢）");
     // 原生完成回调穿透：多次回调只结算一次
     win.__ttsEnded();
     win.__ttsEnded();
@@ -117,6 +117,32 @@ test("静音开关：muted 时不出声、available=false、onEnd 仍回调（�
   assert.equal(ended, 1);
 });
 
+test("开箱即用：对话后端是内网地址时，语音服务自动推导到同机 8903", async () => {
+  const seen = [];
+  const win = fakeWin({
+    fetch: async (url) => {
+      seen.push(url);
+      return { ok: false, status: 503, json: async () => ({}) };
+    }
+  });
+  const lan = { tts: "server", apiBase: "http://192.168.1.5:8902/v1", ttsServer: "" };
+  const engine = makeEngine(win, lan);
+  assert.equal(engine.providerObjects.server.available(lan), true);
+  assert.equal(engine.provider(lan), "server");
+  await engine.speak("只配了后端也能出声", () => {}, () => {});
+  assert.equal(seen[0], "http://192.168.1.5:8903/tts");
+  // 公网 API 域名不猜语音端口（否则每句白等 10s 才降级）
+  assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "https://openrouter.ai/api/v1" }), false);
+  // 手机上的 127.0.0.1 是手机自己，不推导
+  assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "http://127.0.0.1:8902" }), false);
+  // AVD 的 10.0.2.2 映射宿主机，属于可推导的局域网地址
+  assert.equal(engine.providerObjects.server.available({ tts: "server", apiBase: "http://10.0.2.2:8902" }), true);
+  // 设置页提示必须与 provider 判定同源：否则界面写"安卓系统语音"，实际却在走服务端
+  assert.equal(TTS.resolveServer(win, lan), "http://192.168.1.5:8903");
+  assert.equal(TTS.resolveServer(win, { tts: "server", apiBase: "https://openrouter.ai/api/v1" }), "");
+  assert.equal(TTS.resolveServer(win, { tts: "server", apiBase: "http://10.0.2.2:8902" }), "http://10.0.2.2:8903");
+});
+
 test("远程 provider：POST body 参数正确、文本不进 URL、503 只降级", async () => {
   const seen = [];
   const win = fakeWin({
@@ -140,6 +166,26 @@ test("远程 provider：POST body 参数正确、文本不进 URL、503 只降�
   assert.equal(body.rate, "slow");
 });
 
+test("音色白名单：不存在的 XiaoyuanNeural 回默认，XiaoniNeural 可用", async () => {
+  const seen = [];
+  const win = fakeWin({
+    fetch: async (url, opts) => {
+      seen.push({ url, opts });
+      return { ok: false, status: 503, json: async () => ({}) };
+    }
+  });
+  const base = { tts: "server", ttsServer: "https://tts.example.com/", ttsRate: "normal" };
+  // 1) 配了已下线的 XiaoyuanNeural → 请求体里必须回落到默认 Xiaoyi
+  const e1 = makeEngine(win, Object.assign({}, base, { voice: "zh-CN-XiaoyuanNeural" }));
+  await e1.speak("测试一", () => {}, () => {});
+  assert.equal(JSON.parse(seen[0].opts.body).voice, "zh-CN-XiaoyiNeural");
+  // 2) 新增的陕西方言女声 XiaoniNeural 原样透传
+  const e2 = makeEngine(win, Object.assign({}, base, { voice: "zh-CN-shaanxi-XiaoniNeural" }));
+  await e2.speak("测试二", () => {}, () => {});
+  assert.equal(JSON.parse(seen[1].opts.body).voice, "zh-CN-shaanxi-XiaoniNeural");
+  assert.equal(JSON.parse(seen[1].opts.body).rate, "normal");
+});
+
 test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰真实语音）", async () => {
   const spoken = [];
   let canceled = 0;
@@ -156,7 +202,8 @@ test("browser provider：语速/语言参数正确，stop 会 cancel（不触碰
     assert.deepEqual(res, { spoke: true, provider: "browser" });
     assert.equal(spoken.length, 1);
     assert.equal(spoken[0].lang, "zh-CN");
-    assert.equal(spoken[0].rate, 0.86);
+    assert.equal(spoken[0].rate, 0.84);
+    assert.equal(spoken[0].pitch, 1.06, "音高只抬 6%（旧值 1.15 太尖）");
     assert.equal(spoken[0].text, "晚安");
     spoken[0].onend();
     spoken[0].onerror();          // 只结算一次
@@ -234,6 +281,44 @@ test("服务端音频拿到了但设备播不出来：onEnd(false) 且只一次�
   await new Promise((r) => setTimeout(r, 30));   // 等两段播放降级链走完
   assert.deepEqual(calls, [false], "只结算一次，且明确 ok=false");
   assert.equal(calls.includes(true), false, "没出声绝不能报成功");
+});
+
+test("服务端 200 后 body 中断（TypeError: Failed to fetch）：重试一次，不降级系统音", async () => {
+  // 2026-11-07 AVD 实测：服务端已回 200、响应体中途 RST → 浏览器只给
+  // TypeError: Failed to fetch（net::ERR_CONTENT_LENGTH_MISMATCH）。
+  // 单发请求会让这条音频直接降级成系统音；重试一次即可救回。
+  let attempts = 0;
+  const win = fakeWin({
+    fetch: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError("Failed to fetch");
+      return { ok: true, blob: async () => ({ type: "audio/mpeg" }) };
+    },
+    URL: { createObjectURL: () => "blob:fake", revokeObjectURL: () => {} },
+    Audio: function FakeAudio() {
+      this.currentTime = 0; this.readyState = 0;
+      this.play = () => Promise.reject(new Error("no audio device"));
+      this.pause = () => {};
+    }
+  });
+  const engine = makeEngine(win, { tts: "server", ttsServer: "http://127.0.0.1:8903" });
+  const res = await engine.speak("今天有点累", () => {}, () => {});
+  assert.deepEqual(res, { spoke: true, provider: "server" });
+  assert.equal(attempts, 2, "网络层失败恰好重试一次");
+});
+
+test("服务端 503 不重试（HTTP 错误体已读到，重试只会拖慢降级）", async () => {
+  let attempts = 0;
+  const win = fakeWin({
+    fetch: async () => {
+      attempts += 1;
+      return { ok: false, status: 503, json: async () => ({ error: "tts_provider_unavailable" }) };
+    }
+  });
+  const engine = makeEngine(win, { tts: "server", ttsServer: "http://127.0.0.1:8903" });
+  const res = await engine.speakSafe("你好", () => {});
+  assert.equal(attempts, 1);
+  assert.deepEqual(res, { spoke: false, provider: "none" });
 });
 
 test("包络帧下标：越界钳制在 [0, len-1]", () => {

@@ -632,7 +632,11 @@ const App = (() => {
   function ttsAvail() {
     const cfg = API.loadCfg();
     return {
-      server: !!(cfg.ttsServer || "").trim(),
+      // 与 provider 判定同一套规则：显式地址 / 注入 / 内网后端同机推导，
+      // 否则"只填了内网后端"的用户会被提示成"安卓系统语音"，与实际发声相反
+      server: !!(window.TTS && typeof window.TTS.resolveServer === "function"
+        ? window.TTS.resolveServer(window, cfg)
+        : (cfg.ttsServer || "").trim()),
       native: !!(window.AndroidTTS && typeof window.AndroidTTS.speak === "function"),
       browser: typeof window.speechSynthesis !== "undefined",
     };

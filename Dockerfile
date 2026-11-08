@@ -21,6 +21,12 @@ COPY android/app/src/main/assets/www/ ./web/
 COPY scripts/verify_manifest.py ./scripts/verify_manifest.py
 COPY scripts/verify_assets.py ./scripts/verify_assets.py
 
+# 可选：把 edge-tts 打进镜像（provider=edge，在线免费多音色）。默认关闭保持镜像精简：
+#   docker build -t treehole-tts:local --build-arg TTS_EDGE=1 .
+# 开启后运行时仍需能访问微软语音端点；断网时 /tts 回 503，前端自动降级系统 TTS。
+ARG TTS_EDGE=0
+RUN if [ "$TTS_EDGE" = "1" ]; then pip install --no-cache-dir "edge-tts>=7,<8"; fi
+
 # 静态站 / mock API / TTS 三个端口
 EXPOSE 8901 8902 8903
 
