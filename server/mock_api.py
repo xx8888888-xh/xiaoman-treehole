@@ -539,6 +539,10 @@ def _pick_recall(memories, mem_updates, topic, user_text, sess, turn):
     for k in cands:
         if k in mem_updates:
             continue  # 当轮刚提取：用户正聊这个，回提=复读
+        # 同轮复述抑制：用户本轮已经自己说了这个值（"失眠好难受"），再回
+        # "你上次说失眠"就是复读，且白占 RECALL_MAX 名额。
+        if memory_slots.mentioned_in_text(k, memories.get(k) or "", user_text):
+            continue
         ext = extracted.get(k)
         if ext is not None and turn - ext < RECALL_EXTRACT_GAP:
             continue  # 闸门0：提取后不足 2 轮，"你上次说"指向太近

@@ -126,3 +126,48 @@ def test_non_sensitive_recall_not_gated():
     say("开了三个会")
     out = say("今天上班被领导怼了")
     assert "张三" in (out.get("hook") or ""), "非敏感记忆不应被门控砍掉：%r" % out
+
+
+def test_same_turn_repeat_suppressed():
+    """W23 同轮复述抑制：本轮用户已说"张三"，就不再回"你上次说张三…"，
+    且这一轮不占 RECALL_MAX 名额（recall_count 不增）。"""
+    sid = "w23-same-turn"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("我们老板叫张三")
+    say("今天工作好多")
+    say("开了三个会")
+    out = say("老板张三今天又发火了")
+    assert "张三" not in (out.get("hook") or ""), "同轮复述应被抑制：%r" % out
+    sess = mock_api._STATE.get_session(sid)
+    assert sess.get("recall_count", 0) == 0, "被抑制的一轮不应消耗回带名额：%r" % sess
+
+
+def test_same_turn_control_still_recalls():
+    """对照：本轮没提"张三"（只说"老板"）→ 照常回带。"""
+    sid = "w23-same-turn-control"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("我们老板叫张三")
+    say("今天工作好多")
+    say("开了三个会")
+    out = say("老板今天又发火了")
+    assert "张三" in (out.get("hook") or ""), "本轮没提该值应照常回带：%r" % out
+
+
+def test_same_turn_pet_name_suppressed():
+    """W23：宠物槽按名字判同轮复述（值存"猫：年糕"，用户说"年糕"也算已说过）。"""
+    sid = "w23-same-turn-pet"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("我家猫叫年糕")
+    say("今天工作好多")
+    say("开了三个会")
+    out = say("年糕又在拆家了")
+    assert "年糕" not in (out.get("hook") or ""), "宠物名已说过应抑制：%r" % out

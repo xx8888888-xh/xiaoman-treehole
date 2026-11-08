@@ -157,6 +157,23 @@ def is_invited(key: str, value: str, text: str) -> bool:
     return bool(pat and pat.search(text))
 
 
+def mentioned_in_text(key: str, value: str, text: str) -> bool:
+    """本轮用户已经自己说出了这条记忆（原值或宠物名）→ 不该再回带。
+    同轮复述会白占回带名额（RECALL_MAX），也是复读机。"""
+    text = text or ""
+    v = str(value or "").strip()
+    if not text or not v:
+        return False
+    if len(v) >= 2 and v in text:
+        return True
+    if key == "宠物":
+        for e in _pet_entries(v):
+            name = e.get("name") or ""
+            if len(name) >= 2 and name in text:
+                return True
+    return False
+
+
 def _clean_name(v: str) -> str:
     for suf in _NAME_SUFFIX:
         if v.endswith(suf) and len(v) > len(suf):

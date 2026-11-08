@@ -409,6 +409,13 @@ class SensitiveGateTest(unittest.TestCase):
         self.assertIn("老板", self._keys("今天上班被领导怼了"))
         self.assertIn("宠物", self._keys("年糕又在拆家"))
 
+    def test_mentioned_in_text(self):
+        """W23：本轮用户已说过的值不再回带；宠物按名字判，泛指不算。"""
+        self.assertTrue(ms.mentioned_in_text("老板", "张三", "张三今天又发火了"))
+        self.assertFalse(ms.mentioned_in_text("老板", "张三", "老板今天又发火了"))
+        self.assertTrue(ms.mentioned_in_text("宠物", "猫：年糕；狗：煤球", "年糕又在拆家"))
+        self.assertFalse(ms.mentioned_in_text("宠物", "猫：年糕", "猫又拆家了"))
+
     def test_predicate_is_shared(self):
         self.assertTrue(ms.is_sensitive("状态", "失眠"))
         self.assertFalse(ms.is_sensitive("老板", "张三"))
