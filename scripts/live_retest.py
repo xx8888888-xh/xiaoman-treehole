@@ -322,6 +322,9 @@ def write_report(path: Path, payload: dict) -> None:
     """把账本渲染成可读账（每例原始输出全文 + 逐项判据 + 三类计数）。"""
     s = payload.get("summary", {})
     c = payload.get("counters", {})
+    cases = payload.get("cases", [])
+    n_pass = sum(1 for x in cases if x.get("status") == "valid" and x.get("passed"))
+    n_fail = sum(1 for x in cases if x.get("status") == "valid" and not x.get("passed"))
     lines = [
         "# R11 实时复测账本（第三层证据：改后的真实输出）",
         "",
@@ -330,9 +333,11 @@ def write_report(path: Path, payload: dict) -> None:
         "- 请求 %s / 错误 %s / 停手：%s" % (
             payload.get("requests", 0), payload.get("errors", 0),
             payload.get("stop_reason") or "无"),
-        "- 可评 %d/%d（有效 %d、无效 %d、待跑 %d），另有不可评 %d 例（后端上限，与产品无关）" % (
+        "- 可评样本 %d/%d（有效 %d、无效 %d、待跑 %d），另有不可评 %d 例（后端上限，与产品无关）" % (
             s.get("valid", 0), s.get("expected", 0), s.get("valid", 0),
             s.get("invalid", 0), s.get("pending", 0), s.get("unratable", 0)),
+        "- 判定（新判据）：PASS %d / FAIL %d；上面的“可评 %d/%d”是样本覆盖，"
+        "不是通过率" % (n_pass, n_fail, s.get("valid", 0), s.get("expected", 0)),
         "",
         "## 三类计数（全账本合计）",
         "",
@@ -372,11 +377,15 @@ def write_report(path: Path, payload: dict) -> None:
     for x in payload.get("cases", []):
         if x.get("status") == "unratable":
             continue
+        verdict = ("PASS" if x.get("passed") else "FAIL")
+        if x.get("verdict") == "rubric_flip" or x.get("rubric_flip"):
+            verdict = "FAIL（rubric_flip：判据补齐，非产品退化）"
+        if x.get("passed_legacy"):
+            verdict += "；旧判据 PASS"
         lines += ["### %s（%s）" % (x.get("id"), x.get("category")),
                   "",
                   "- status：%s；评测器结论：%s；尝试次数 %s" % (
-                      x.get("status"), "PASS" if x.get("passed") else "FAIL",
-                      x.get("attempts", 0)),
+                      x.get("status"), verdict, x.get("attempts", 0)),
                   ""]
         a = x.get("audit") or {}
         if a.get("criteria"):

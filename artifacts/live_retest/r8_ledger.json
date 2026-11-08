@@ -167,7 +167,8 @@
       ]
      }
     ]
-   }
+   },
+   "verdict": "fail"
   },
   {
    "id": "detail-pet-01",
@@ -293,7 +294,8 @@
       ]
      }
     ]
-   }
+   },
+   "verdict": "pass"
   },
   {
    "id": "detail-pet-02",
@@ -424,7 +426,8 @@
       "species_words": []
      }
     ]
-   }
+   },
+   "verdict": "fail"
   },
   {
    "id": "detail-time-01",
@@ -553,7 +556,8 @@
       "species_words": []
      }
     ]
-   }
+   },
+   "verdict": "fail"
   },
   {
    "id": "name-pet-01",
@@ -679,7 +683,8 @@
       "species_words": []
      }
     ]
-   }
+   },
+   "verdict": "pass"
   },
   {
    "id": "name-pet-02",
@@ -828,7 +833,8 @@
       ]
      }
     ]
-   }
+   },
+   "verdict": "pass"
   },
   {
    "id": "name-boss-01",
@@ -957,7 +963,8 @@
       "species_words": []
      }
     ]
-   }
+   },
+   "verdict": "fail"
   },
   {
    "id": "detail-pet-03",
@@ -1085,7 +1092,8 @@
       ]
      }
     ]
-   }
+   },
+   "verdict": "pass"
   },
   {
    "id": "followup-04",
@@ -1103,7 +1111,8 @@
    "turns": [],
    "attempts": 1,
    "error": "timeout_or_empty",
-   "note": "后端上限，不可评（finish_reason=length/读超时，与产品无关）"
+   "note": "后端上限，不可评（finish_reason=length/读超时，与产品无关）",
+   "verdict": "unratable"
   },
   {
    "id": "detail-food-01",
@@ -1225,7 +1234,8 @@
       "species_words": []
      }
     ]
-   }
+   },
+   "verdict": "pass"
   },
   {
    "id": "followup-04-backfill",
@@ -1372,7 +1382,8 @@
    },
    "replaces": "followup-04",
    "passed_legacy": true,
-   "rubric_flip": "旧判据 PASS，新判据（跨轮重复追问）判红；原文未改动，未为转绿放宽判据"
+   "rubric_flip": "旧判据 PASS，新判据（跨轮重复追问）判红；原文未改动，未为转绿放宽判据",
+   "verdict": "rubric_flip"
   }
  ],
  "stop_reason": "",
