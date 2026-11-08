@@ -12,6 +12,7 @@
 """
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,7 @@ for p in (SERVER_DIR, SCRIPTS_DIR):
 
 import memory_slots as ms  # noqa: E402
 import eval_human_feel as ev  # noqa: E402
+import live_retest as lr  # noqa: E402
 
 CASES_FILE = SERVER_DIR / "tests" / "human_feel_cases.json"
 
@@ -280,6 +282,57 @@ class HumanFeelEvalTest(unittest.TestCase):
         self.assertIsNotNone(ev.advice_hits(case, "你也早点睡吧。"))
         self.assertIsNotNone(ev.advice_hits(case, "我劝你也早睡。"))
         self.assertIsNotNone(ev.advice_hits(case, "我昨天也熬夜了，你还是早点睡吧。"))
+
+    def test_ids_backfill_keeps_prior_seven(self):
+        """先跑 7 例、再用 --ids 补 3 例：写新 run 目录，前 7 条必须仍在。"""
+        by_id = {"c%d" % i: {"id": "c%d" % i, "category": "具体细节", "turns": []}
+                 for i in range(10)}
+        first_ids = ["c%d" % i for i in range(7)]
+        backfill_ids = ["c7", "c8", "c9"]
+
+        def fake_manifest(run_dir, ids, rr):
+            lr.write_manifest(run_dir / "manifest.json",
+                              {"run_id": run_dir.name, "ids": list(ids),
+                               "model": "mock", "mode": "first",
+                               "rerun_index": rr})
+
+        with tempfile.TemporaryDirectory() as td:
+            old_runs = lr.RUNS_DIR
+            lr.RUNS_DIR = Path(td) / "runs"
+            try:
+                run1 = lr.new_run_dir(first_ids)
+                fake_manifest(run1, first_ids, 1)
+                ledger1 = run1 / "ledger.json"
+                recs7 = lr.merge_records([], first_ids, by_id)
+                for r in recs7.values():
+                    r.update({"status": "valid", "passed": True, "attempts": 1})
+                lr.write_ledger(ledger1, list(recs7.values()), 7, "", "mock", 0, 0,
+                                record_run=False)
+                before = ledger1.read_bytes()
+
+                # 补跑 3 例：落到新目录，来源是 run1
+                run2 = lr.new_run_dir(backfill_ids)
+                self.assertNotEqual(run1, run2)
+                fake_manifest(run2, backfill_ids, 1)
+                prior = lr.load_ledger(ledger1)["cases"]
+                recs10 = lr.merge_records(prior, backfill_ids, by_id)
+                lr.write_ledger(run2 / "ledger.json", list(recs10.values()), 10,
+                                "", "mock", 0, 0, record_run=False)
+                after = {c["id"]: c for c in lr.load_ledger(run2 / "ledger.json")["cases"]}
+                merged = {c["id"]: c for c in lr.load_ledger(run1 / "ledger.json")["cases"]}
+            finally:
+                lr.RUNS_DIR = old_runs
+
+            # 旧 run 一个字节都没动
+            self.assertEqual(ledger1.read_bytes(), before)
+            self.assertEqual(len(merged), 7)
+            # 新 run 10 条，且前 7 条原样保留
+            self.assertEqual(len(after), 10)
+            for cid in first_ids:
+                self.assertEqual(after[cid]["status"], "valid")
+                self.assertTrue(after[cid]["passed"])
+            for cid in backfill_ids:
+                self.assertEqual(after[cid]["status"], "pending")
 
     def test_pass_rate_and_regression(self):
         by_cat = {}

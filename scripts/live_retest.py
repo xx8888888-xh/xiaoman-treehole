@@ -37,7 +37,10 @@ import credentials  # noqa: E402
 
 FREE_MODEL = "dots-studio/dots-3-note-preview:free"
 BASE = "https://openrouter.ai/api/v1"
-LEDGER = ROOT / "artifacts" / "live_retest" / "r8_ledger.json"
+LEGACY_LEDGER = ROOT / "artifacts" / "live_retest" / "r8_ledger.json"
+# 兼容旧代码/临时脚本的引用；默认运行不再写这个路径。
+LEDGER = LEGACY_LEDGER
+RUNS_DIR = ROOT / "artifacts" / "live_retest" / "runs"
 # followup-04 两次都因后端输出上限拿不到可评内容，保留记录但不再重跑。
 UNRATABLE_IDS = ("followup-04",)
 # 补例：与 followup-04 同类别（追问）、同判据、同 3 轮结构，只用来补满 10 个可评例。
@@ -64,6 +67,93 @@ def load_ledger(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return {"cases": [], "summary": {}, "stop_reason": ""}
+
+
+def latest_run_ledger() -> Path | None:
+    """最近一次 run 目录的账本；没有 run 目录时返回 None。"""
+    if not RUNS_DIR.exists():
+        return None
+    dirs = sorted((p for p in RUNS_DIR.iterdir() if p.is_dir()),
+                  key=lambda p: p.name, reverse=True)
+    for d in dirs:
+        path = d / "ledger.json"
+        if path.exists():
+            return path
+    return None
+
+
+def source_label(path: Path) -> str:
+    """来源 run 的可读标识：run 目录名，或 legacy:<文件名>。"""
+    try:
+        if path.parent.parent == RUNS_DIR:
+            return path.parent.name
+    except OSError:
+        pass
+    return "legacy:%s" % path.name
+
+
+def new_run_dir(ids: list) -> Path:
+    """独立 run 目录；同一时间戳撞名时加 -2/-3，绝不覆盖已有目录。"""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = RUNS_DIR / ("%s_ids%d" % (stamp, len(ids)))
+    out = base
+    n = 1
+    while out.exists():
+        n += 1
+        out = RUNS_DIR / ("%s_ids%d-%d" % (stamp, len(ids), n))
+    out.mkdir(parents=True, exist_ok=False)
+    return out
+
+
+def rerun_index(ids: list, model: str, source: Path, source_payload: dict) -> int:
+    """同一批（ids 集合+模型）此前跑过几次；legacy 来源不在 runs/ 下，单独计一次。"""
+    key = sorted(ids)
+    n = 0
+    if RUNS_DIR.exists():
+        for mf in RUNS_DIR.glob("*/manifest.json"):
+            try:
+                m = json.loads(mf.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                continue
+            if sorted(m.get("ids") or []) == key and m.get("model") == model:
+                n += 1
+    is_run_source = False
+    try:
+        is_run_source = bool(source) and source.parent.parent == RUNS_DIR
+    except OSError:
+        is_run_source = False
+    if not is_run_source:
+        prior_ids = sorted(c.get("id", "") for c in source_payload.get("cases") or [])
+        if prior_ids == key and source_payload.get("model") == model:
+            n += 1
+    return max(1, n)
+
+
+def merge_records(prior_cases: list, ids: list, by_id: dict) -> dict:
+    """把本次 ids 合并进既有账本：先保留全部旧记录，再补本次缺的。"""
+    prior = {c["id"]: dict(c) for c in prior_cases}
+    order = list(prior)
+    for cid in ids:
+        if cid not in order:
+            order.append(cid)
+    records = {}
+    for cid in order:
+        cfg = by_id.get(cid) or {"id": cid, "category": "未知", "turns": []}
+        rec = prior.get(cid)
+        if rec is None:
+            rec = {"id": cid, "category": cfg["category"],
+                   "replaces": cfg.get("replaces"),
+                   "status": "pending", "passed": False,
+                   "reasons": [], "turns": [], "attempts": 0}
+        if cfg.get("replaces") and not rec.get("replaces"):
+            rec["replaces"] = cfg["replaces"]
+        records[cid] = rec
+    return records
+
+
+def write_manifest(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def write_ledger(path: Path, cases: list, expected: int, stop_reason: str,
@@ -442,7 +532,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="一键断点复测（真实免费模型）")
     ap.add_argument("--cases", default=str(ev.CASES_FILE))
     ap.add_argument("--ids", nargs="*", default=list(DEFAULT_IDS))
-    ap.add_argument("--out", default=str(LEDGER))
+    ap.add_argument("--out", default=None,
+                    help="显式账本路径（兼容/测试用）；缺省写入 runs/<时间戳>_ids<N>/ledger.json")
+    ap.add_argument("--from", dest="source", default=None,
+                    help="来源 run 目录或账本；缺省取最近 run，再退回 legacy r8_ledger.json")
     ap.add_argument("--base", default=BASE)
     ap.add_argument("--model", default=FREE_MODEL)
     ap.add_argument("--delay", type=float, default=1.0)
@@ -472,20 +565,25 @@ def main() -> int:
         print("用例不存在：%s" % ", ".join(missing), file=sys.stderr)
         return 2
     cases = [by_id[i] for i in args.ids]
-    expected = sum(1 for i in args.ids if i not in UNRATABLE_IDS)
 
-    out_path = Path(args.out)
-    old = {"cases": []} if args.reset else load_ledger(out_path)
-    prior = {c["id"]: c for c in old.get("cases", [])}
-    records = {i: prior.get(i, {"id": i, "category": by_id[i]["category"],
-                                "replaces": by_id[i].get("replaces"),
-                                "status": "pending", "passed": False,
-                                "reasons": [], "turns": [], "attempts": 0})
-               for i in args.ids}
-    for cid, rec in records.items():
-        if by_id[cid].get("replaces") and not rec.get("replaces"):
-            rec["replaces"] = by_id[cid]["replaces"]
-    # 续跑时补算旧样本的逐项判据（不重发请求、不动已有全文）
+    # 只追加：默认把本次结果写进独立 run 目录；先读最近一次 run 的账本，
+    # 把旧记录原样带过来，再用本次 ids 补缺。任何一次运行都不写旧 run。
+    # --reset 只清空本 run 的记录，不抹掉来源 run 的溯源信息。
+    if args.source:
+        sp = Path(args.source)
+        source_path = sp / "ledger.json" if sp.is_dir() else sp
+    elif args.out and Path(args.out).exists():
+        # 显式 --out 续跑：沿用该文件既有记录，避免它自己成为新的丢失点。
+        source_path = Path(args.out)
+    else:
+        source_path = latest_run_ledger() or LEGACY_LEDGER
+        if not source_path.exists():
+            source_path = None
+    source_payload = load_ledger(source_path) if source_path else {"cases": []}
+    old = {"cases": []} if args.reset else source_payload
+
+    records = merge_records(old.get("cases") or [], args.ids, by_id)
+    expected = sum(1 for cid in records if cid not in UNRATABLE_IDS)
     for cid, rec in records.items():
         if rec.get("status") == "valid" and rec.get("turns") and not rec.get("audit"):
             rec["audit"] = audit_case(by_id[cid], _record_result(rec), universal)
@@ -496,20 +594,67 @@ def main() -> int:
             rec["status"] = "unratable"
             rec["note"] = "后端上限，不可评（finish_reason=length/读超时，与产品无关）"
 
+    prior_ids = sorted(c["id"] for c in (source_payload.get("cases") or []))
+    if not prior_ids:
+        batch_mode = "first"
+    elif prior_ids == sorted(args.ids):
+        batch_mode = "rerun"
+    else:
+        batch_mode = "backfill"
+    rr_index = (rerun_index(args.ids, args.model, source_path, source_payload)
+                if source_path and batch_mode == "rerun" else 1)
+    source_run = source_label(source_path) if source_path else "none"
+
     if args.dry_run:
         print("== 断点复测计划（dry-run，不发请求） ==")
+        print("  来源：%s；合并后 %d 条，可评目标 %d，本次 ids %d 条"
+              % (source_run, len(records), expected, len(args.ids)))
         for c in cases:
             r = records[c["id"]]
             print("  %-20s %-6s %s" % (c["id"], c["category"],
                                        r.get("status", "pending")))
-        print("  可评目标 %d：已有效 %d，待跑 %d，不可评 %d，模型 %s"
-              % (expected,
-                 sum(1 for r in records.values() if r.get("status") == "valid"),
-                 sum(1 for i, r in records.items()
+        print("  已有效 %d，待跑 %d，不可评 %d，模型 %s"
+              % (sum(1 for r in records.values() if r.get("status") == "valid"),
+                 sum(1 for r in records.values()
                      if r.get("status") not in ("valid", "unratable")),
                  sum(1 for r in records.values() if r.get("status") == "unratable"),
                  args.model))
+        print("  将写新 run 目录；旧账本不覆盖")
         return 0
+
+    if args.out:
+        out_path = Path(args.out)
+        manifest_path = out_path.parent / (out_path.stem + ".manifest.json")
+        report_path = Path(args.report) if args.report else out_path.with_suffix(".md")
+    else:
+        run_dir = new_run_dir(args.ids)
+        out_path = run_dir / "ledger.json"
+        manifest_path = run_dir / "manifest.json"
+        report_path = Path(args.report) if args.report else run_dir / "report.md"
+        # 把来源账本的 runs 历史带进新目录，避免新 run 丢掉累计请求记录。
+        if source_path and source_path.exists() and not args.reset:
+            out_path.write_bytes(source_path.read_bytes())
+
+    write_manifest(manifest_path, {
+        "run_id": out_path.parent.name,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "status": "started",
+        "mode": batch_mode,
+        "rerun_index": rr_index,
+        "source_run": source_run,
+        "source_ledger": str(source_path) if source_path else "",
+        "ids": list(args.ids),
+        "model": args.model,
+        "base": args.base,
+        "max_tokens": args.max_tokens,
+        "ledger": out_path.name,
+        "report": report_path.name,
+        "note": ("第 %d 次重跑同一批" % rr_index if batch_mode == "rerun"
+                 else "补跑 %d 条，保留来源账本旧记录" % len(args.ids)
+                 if batch_mode == "backfill" else "首次运行"),
+    })
+    print("账本目录：%s（来源 %s，%s）"
+          % (out_path.parent, source_run, batch_mode), flush=True)
 
     key = ""
     for i in range(max(1, args.key_retries)):
@@ -580,24 +725,33 @@ def main() -> int:
             wait = min(args.backoff_base * (2 ** (attempt - 1)), args.backoff_max)
             print("  …退避 %.0fs 后重试同一条" % wait, flush=True)
             time.sleep(wait)
-        write_ledger(out_path, [records[i] for i in args.ids], expected,
+        write_ledger(out_path, list(records.values()), expected,
                      stop_reason, args.model, backend.calls, backend.errors,
                      record_run=False)
         if stop_reason:
             break
 
-    payload = write_ledger(out_path, [records[i] for i in args.ids], expected,
+    payload = write_ledger(out_path, list(records.values()), expected,
                           stop_reason, args.model, backend.calls, backend.errors,
                           run_note="ids=%s max_tokens=%s stop=%s" % (
                               ",".join(args.ids), args.max_tokens,
                               stop_reason or "none"))
-    if args.report:
-        write_report(Path(args.report), payload)
+    write_report(report_path, payload)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update({
+        "status": "finished",
+        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "stop_reason": stop_reason,
+        "summary": payload["summary"],
+        "requests": backend.calls,
+        "errors": backend.errors,
+    })
+    write_manifest(manifest_path, manifest)
     s = payload["summary"]
     c = payload["counters"]
     print("\n账本：%s" % out_path)
-    if args.report:
-        print("可读账：%s" % args.report)
+    print("manifest：%s" % manifest_path)
+    print("可读账：%s" % report_path)
     print("有效 %d/%d，无效 %d，待跑 %d，请求 %d，错误 %d，用时 %.0fs%s"
           % (s["valid"], s["expected"], s["invalid"], s["pending"],
              backend.calls, backend.errors, time.time() - started,
