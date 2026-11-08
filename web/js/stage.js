@@ -546,6 +546,9 @@ const Stage = (() => {
     stopSharedTicker();
     if (!puppet) return;
     puppet.setAutoIdle(false);
+    // 零动画：静态脸直接对齐空闲问候用的 gentle，避免问候 setEmotion 时签名变化补一帧。
+    // AVD 实测那一次补帧是 151,655px（idle_minimal 60s 窗口第 44–45 秒），属于可消除的空刷新。
+    if (!motionEnabled) puppet.setEmotion(emotionFor("gentle"));
     renderOnce("freeze");
     if (freezeTimer) clearTimeout(freezeTimer);
     freezeTimer = setTimeout(() => {
