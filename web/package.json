@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test \"tests/*.test.js\"",
-    "lint": "biome check js/config.js js/store.js js/api.js js/backup.js js/risk.js js/appearance.js js/pet_core.js js/errors.js js/app.js js/chat_pager.js js/stream_typer.js js/icons.js js/time_divider.js js/greet_day.js js/voice_tip.js js/resilience.js js/pet.js js/float_mode.js js/friend_card.js js/memory.js js/mock_engine.js js/reminders.js js/stats.js js/tts.js js/widget.js js/stage.js js/heartbeat.js tests/",
+    "lint": "biome check js/config.js js/store.js js/api.js js/backup.js js/risk.js js/appearance.js js/pet_core.js js/errors.js js/app.js js/chat_pager.js js/stream_typer.js js/icons.js js/time_divider.js js/greet_day.js js/voice_tip.js js/trunc_log.js js/resilience.js js/pet.js js/float_mode.js js/friend_card.js js/memory.js js/mock_engine.js js/reminders.js js/stats.js js/tts.js js/widget.js js/stage.js js/heartbeat.js tests/",
     "lint:staged": "biome check js/heartbeat.js js/stage.js --reporter=summary"
   },
   "keywords": [],
