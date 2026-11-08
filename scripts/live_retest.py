@@ -250,13 +250,17 @@ def audit_case(case: dict, res, universal: dict) -> dict:
         {"key": "advice", "label": "建议轮次≤%d" % ev._advice_limit(case, universal),
          "ok": not kinds.get("advice"), "detail": detail("advice") or "无超限"},
         {"key": "name_fidelity", "label": "名字保真（不换成“%s”）" % SELF_PET,
-         "ok": not replaced,
-         "detail": "名字被替换 %d 轮%s" % (
-             len(replaced), "：T%s" % "/T".join(str(r["turn"]) for r in replaced) if replaced else "")},
+         "ok": (None if not known else not replaced),
+         "detail": ("不适用（本轮用户没给宠物名）" if not known else
+                    "名字被替换 %d 轮%s" % (
+                        len(replaced),
+                        "：T%s" % "/T".join(str(r["turn"]) for r in replaced) if replaced else ""))},
         {"key": "pet_generic", "label": "宠物不泛化（用名字而非“猫/狗”）",
-         "ok": not generic,
-         "detail": "泛化 %d 轮%s" % (
-             len(generic), "：T%s" % "/T".join(str(r["turn"]) for r in generic) if generic else "")},
+         "ok": (None if not known else not generic),
+         "detail": ("不适用（本轮用户没给宠物名）" if not known else
+                    "泛化 %d 轮%s" % (
+                        len(generic),
+                        "：T%s" % "/T".join(str(r["turn"]) for r in generic) if generic else ""))},
     ]
     return {
         "criteria": criteria,

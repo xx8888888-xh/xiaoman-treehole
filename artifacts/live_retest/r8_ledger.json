@@ -238,14 +238,14 @@
      {
       "key": "name_fidelity",
       "label": "名字保真（不换成“团子”）",
-      "ok": true,
-      "detail": "名字被替换 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      },
      {
       "key": "pet_generic",
       "label": "宠物不泛化（用名字而非“猫/狗”）",
-      "ok": true,
-      "detail": "泛化 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      }
     ],
     "counters": {
@@ -365,14 +365,14 @@
      {
       "key": "name_fidelity",
       "label": "名字保真（不换成“团子”）",
-      "ok": true,
-      "detail": "名字被替换 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      },
      {
       "key": "pet_generic",
       "label": "宠物不泛化（用名字而非“猫/狗”）",
-      "ok": true,
-      "detail": "泛化 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      }
     ],
     "counters": {
@@ -490,14 +490,14 @@
      {
       "key": "name_fidelity",
       "label": "名字保真（不换成“团子”）",
-      "ok": true,
-      "detail": "名字被替换 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      },
      {
       "key": "pet_generic",
       "label": "宠物不泛化（用名字而非“猫/狗”）",
-      "ok": true,
-      "detail": "泛化 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      }
     ],
     "counters": {
@@ -876,14 +876,14 @@
      {
       "key": "name_fidelity",
       "label": "名字保真（不换成“团子”）",
-      "ok": true,
-      "detail": "名字被替换 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      },
      {
       "key": "pet_generic",
       "label": "宠物不泛化（用名字而非“猫/狗”）",
-      "ok": true,
-      "detail": "泛化 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      }
     ],
     "counters": {
@@ -992,14 +992,14 @@
      {
       "key": "name_fidelity",
       "label": "名字保真（不换成“团子”）",
-      "ok": true,
-      "detail": "名字被替换 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      },
      {
       "key": "pet_generic",
       "label": "宠物不泛化（用名字而非“猫/狗”）",
-      "ok": true,
-      "detail": "泛化 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      }
     ],
     "counters": {
@@ -1131,14 +1131,14 @@
      {
       "key": "name_fidelity",
       "label": "名字保真（不换成“团子”）",
-      "ok": true,
-      "detail": "名字被替换 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      },
      {
       "key": "pet_generic",
       "label": "宠物不泛化（用名字而非“猫/狗”）",
-      "ok": true,
-      "detail": "泛化 0 轮"
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
      }
     ],
     "counters": {
