@@ -181,11 +181,24 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Baseline may only tighten
+        run: |
+          set -uo pipefail
+          PREV=$(mktemp)
+          if git show origin/main:docs/perf_baseline_r6.json > "$PREV" 2>/dev/null; then
+            python scripts/perf_gate.py --baseline docs/perf_baseline_r6.json \
+              --verify-monotonic-against "$PREV"
+          else
+            echo "BASELINE: SKIP (origin/main 尚无该基线文件)"
+          fi
 
       - name: Unit test gate rules
         run: python scripts/test_perf_gate.py

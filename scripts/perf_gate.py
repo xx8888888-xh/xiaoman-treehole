@@ -24,7 +24,7 @@ FAIL = "FAIL"
 EXEMPT = "EXEMPT"
 SKIP = "SKIP"
 
-SECTIONS = ("float", "power", "firstsend")
+SECTIONS = ("float", "power", "firstsend", "battery")
 
 
 def _f(value):
@@ -183,10 +183,81 @@ def _collect_firstsend(data):
     return out
 
 
+def _collect_battery(data):
+    """30 分钟电池三段实测：绝对量 + 与同设备纯待机基线的差值。
+
+    主判据是 CPU 时间 / 唤醒次数 / 网络字节；mAh 是 AVD 软件电源模型估算，
+    只作同一模型下的回归信号（报告里注明 mahReliable=false）。
+    """
+    out = {}
+    segs = {s.get("name"): s for s in (data.get("segments") or [])}
+
+    def seg(name):
+        return segs.get(name) or {}
+
+    def val(name, key):
+        return _f(seg(name).get(key))
+
+    standby = seg("standby")
+    fg = seg("foreground")
+    bg = seg("background")
+
+    def device_mah(name):
+        item = seg(name)
+        return _f(item.get("deviceMah30")) if item.get("deviceMah30") is not None \
+            else _f(item.get("mah30"))
+
+    def delta(name, key, base_key=None):
+        a = _f(seg(name).get(key))
+        b = _f(standby.get(base_key or key))
+        if a is None or b is None:
+            return None
+        return a - b
+
+    # 纯待机对照（整机模型）
+    out.setdefault("battery.standby_mah_30m", []).append(
+        (1, _f(standby.get("mah30")), f"standby {standby.get('mahBasis')}"))
+
+    # 前台绝对量
+    out.setdefault("battery.foreground_uid_mah_30m", []).append(
+        (1, _f(fg.get("mah30")), f"uid {fg.get('mahBasis')}"))
+    out.setdefault("battery.foreground_device_mah_over_standby", []).append(
+        (1, (round(device_mah("foreground") - _f(standby.get("mah30")), 6)
+             if device_mah("foreground") is not None and _f(standby.get("mah30")) is not None
+             else None), "device 模型 - standby"))
+    out.setdefault("battery.foreground_cpu_ms", []).append(
+        (1, val("foreground", "cpuMs"), "App 进程 /proc ticks"))
+    out.setdefault("battery.foreground_wakeups", []).append(
+        (1, val("foreground", "wakeups"), "alarm + job 次数"))
+    out.setdefault("battery.foreground_net_bytes", []).append(
+        (1, val("foreground", "netBytes"), "cell+wifi 收发字节"))
+
+    # 后台绝对量 + 相对纯待机的净成本
+    out.setdefault("battery.background_uid_mah_30m", []).append(
+        (1, _f(bg.get("mah30")), f"uid {bg.get('mahBasis')}"))
+    out.setdefault("battery.background_device_mah_over_standby", []).append(
+        (1, (round(device_mah("background") - _f(standby.get("mah30")), 6)
+             if device_mah("background") is not None and _f(standby.get("mah30")) is not None
+             else None), "device 模型 - standby"))
+    out.setdefault("battery.background_cpu_ms", []).append(
+        (1, val("background", "cpuMs"), "App 进程 /proc ticks"))
+    out.setdefault("battery.background_wakeups", []).append(
+        (1, val("background", "wakeups"), "alarm + job 次数"))
+    out.setdefault("battery.background_wakeups_over_standby", []).append(
+        (1, delta("background", "wakeups"), "后台 - 待机"))
+    out.setdefault("battery.background_net_bytes_over_standby", []).append(
+        (1, delta("background", "netBytes"), "后台 - 待机"))
+    frames = ((bg.get("frames") or {}).get("framesWhileHidden"))
+    out.setdefault("battery.background_frames_30m", []).append(
+        (1, _f(frames), f"source={((bg.get('frames') or {}).get('source'))}"))
+    return out
+
+
 EXTRACTORS = {
     "float": _collect_float,
     "power": _collect_power,
     "firstsend": _collect_firstsend,
+    "battery": _collect_battery,
 }
 
 
@@ -213,8 +284,10 @@ def _judge(rule, value):
 def _fmt(unit, value):
     if value is None:
         return "缺失"
-    if unit == "px" or unit == "count":
+    if unit == "px" or unit == "count" or unit == "bytes":
         return f"{value:,.0f}"
+    if unit == "mAh":
+        return f"{value:.6f}"
     if unit == "ratio":
         return f"{value:.4f}"
     if unit == "pct":
@@ -237,6 +310,79 @@ def _threshold_text(metric):
         return f"{rule['value']} ±{rule.get('tolerance') * 100:.0f}%"
     op = "<=" if kind == "max" else ">="
     return f"{op} {rule.get('value')}"
+
+
+def verify_monotonic(old, new):
+    """基线只准收紧：返回错误列表（空 = 合规）。
+
+    - max 只能变小，min 只能变大，range 只能变窄，near 只能收紧容差；
+    - bool 规则必须保持 true；
+    - 指标不能删除（删掉等于给该项松绑）；
+    - 不能新增豁免；已有豁免的 guard 只能变严。
+    """
+    errors = []
+    old_metrics = {m.get("id"): m for m in (old.get("metrics") or [])}
+    new_metrics = {m.get("id"): m for m in (new.get("metrics") or [])}
+
+    for mid, om in old_metrics.items():
+        nm = new_metrics.get(mid)
+        if nm is None:
+            errors.append(f"指标被删除（等价放宽）：{mid}")
+            continue
+        if (om.get("section") or "") != (nm.get("section") or ""):
+            errors.append(f"指标换段（不可比）：{mid} {om.get('section')} -> {nm.get('section')}")
+            continue
+        if (om.get("unit") or "") != (nm.get("unit") or ""):
+            errors.append(f"指标单位变化（可能掩盖数值）：{mid} {om.get('unit')} -> {nm.get('unit')}")
+            continue
+        orule = om.get("rule") or {}
+        nrule = nm.get("rule") or {}
+        if orule.get("type") != nrule.get("type"):
+            errors.append(f"规则类型变化：{mid} {orule.get('type')} -> {nrule.get('type')}")
+            continue
+        kind = orule.get("type")
+        ov = _f(orule.get("value")) if kind in ("max", "min") else None
+        nv = _f(nrule.get("value")) if kind in ("max", "min") else None
+        if kind == "max":
+            if nv is None or ov is None or nv > ov:
+                errors.append(f"max 阈值被放宽：{mid} {orule.get('value')} -> {nrule.get('value')}")
+        elif kind == "min":
+            if nv is None or ov is None or nv < ov:
+                errors.append(f"min 阈值被放宽：{mid} {orule.get('value')} -> {nrule.get('value')}")
+        elif kind == "range":
+            old_lo, old_hi = (orule.get("value") or [None, None])[:2]
+            new_lo, new_hi = (nrule.get("value") or [None, None])[:2]
+            if _f(new_lo) is None or _f(new_hi) is None \
+                    or _f(old_lo) is None or _f(old_hi) is None \
+                    or _f(new_lo) < _f(old_lo) or _f(new_hi) > _f(old_hi):
+                errors.append(f"range 阈值被放宽：{mid} {orule.get('value')} -> {nrule.get('value')}")
+        elif kind == "near":
+            if _f(nrule.get("tolerance")) is None or _f(orule.get("tolerance")) is None \
+                    or _f(nrule.get("tolerance")) > _f(orule.get("tolerance")):
+                errors.append(f"near 容差被放宽：{mid} {orule.get('tolerance')} -> {nrule.get('tolerance')}")
+        elif kind == "bool":
+            if not bool(nrule.get("value")):
+                errors.append(f"bool 规则被关闭：{mid}")
+        else:
+            errors.append(f"未知规则类型：{mid} {kind}")
+
+    old_ex = {e.get("id"): e for e in (old.get("exemptions") or [])}
+    new_ex = {e.get("id"): e for e in (new.get("exemptions") or [])}
+    for eid in old_ex:
+        if eid not in new_ex:
+            errors.append(f"豁免被删除（数据口径变化需复核）：{eid}")
+    for eid, ex in new_ex.items():
+        if eid not in old_ex:
+            errors.append(f"新增豁免（等于放宽）：{eid}")
+            continue
+        og = old_ex[eid].get("guard") or {}
+        ng = ex.get("guard") or {}
+        for key, label in (("minRafPerSec", "minRafPerSec"),
+                           ("minFramesPerSec", "minFramesPerSec")):
+            if key in og:
+                if key not in ng or _f(ng.get(key)) is None or _f(ng.get(key)) < _f(og.get(key)):
+                    errors.append(f"豁免 guard 被放宽：{eid}.{label} {og.get(key)} -> {ng.get(key)}")
+    return errors
 
 
 def evaluate(baseline, sources):
@@ -369,14 +515,30 @@ def main(argv=None):
     parser.add_argument("--baseline", default="docs/perf_baseline_r6.json")
     parser.add_argument("--float", default=None, help="float_r4.json")
     parser.add_argument("--power", default=None, help="power_r4.json")
+    parser.add_argument("--battery", default=None, help="battery_r4.json")
     parser.add_argument("--perf", default=None, help="perf r6.json")
     parser.add_argument("--require-sections", default="",
-                        help="逗号分隔；这些段缺数据判红。例：float,power")
+                        help="逗号分隔；这些段缺数据判红。例：float,power,battery")
+    parser.add_argument("--verify-monotonic-against", default=None,
+                        help="上一版基线 JSON；校验本次基线只收紧、不放宽")
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args(argv)
 
     with open(args.baseline, encoding="utf-8") as f:
         baseline = json.load(f)
+
+    verified = False
+    if args.verify_monotonic_against:
+        with open(args.verify_monotonic_against, encoding="utf-8") as f:
+            prev = json.load(f)
+        errors = verify_monotonic(prev, baseline)
+        if errors:
+            print("BASELINE: FAIL（阈值/豁免被放宽）")
+            for err in errors:
+                print(f"  - {err}")
+            return 1
+        print("BASELINE: PASS（只收紧或新增，没有放宽）")
+        verified = True
 
     required = {s.strip() for s in args.require_sections.split(",") if s.strip()}
     unknown = required - set(SECTIONS)
@@ -385,7 +547,8 @@ def main(argv=None):
         return 2
 
     sources = {"__required__": required}
-    for section, path in (("float", args.float), ("power", args.power), ("firstsend", args.perf)):
+    for section, path in (("float", args.float), ("power", args.power),
+                          ("battery", args.battery), ("firstsend", args.perf)):
         if path:
             try:
                 with open(path, encoding="utf-8") as f:
@@ -397,6 +560,8 @@ def main(argv=None):
             sources[section] = None
 
     if not any(sources.get(s) for s in SECTIONS):
+        if verified:
+            return 0
         print("没有任何实测数据输入", file=sys.stderr)
         return 2
 
