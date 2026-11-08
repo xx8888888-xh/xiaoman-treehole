@@ -72,6 +72,9 @@ def write_ledger(path: Path, cases: list, expected: int, stop_reason: str,
     valid = sum(1 for c in cases if c.get("status") == "valid")
     invalid = sum(1 for c in cases if c.get("status") == "invalid")
     unratable = sum(1 for c in cases if c.get("status") == "unratable")
+    passed = sum(1 for c in cases
+                 if c.get("status") == "valid" and c.get("passed"))
+    failed = valid - passed
     counters = {"over30_msgs": 0, "over40_msgs": 0, "name_replaced_turns": 0,
                 "pet_generic_turns": 0, "cases_with_over30": 0,
                 "cases_with_name_replaced": 0, "cases_with_pet_generic": 0}
@@ -105,6 +108,7 @@ def write_ledger(path: Path, cases: list, expected: int, stop_reason: str,
         "last_run": {"requests": requests, "errors": errors},
         "runs": runs,
         "summary": {"expected": expected, "valid": valid,
+                    "passed": passed, "failed": failed,
                     "invalid": invalid, "unratable": unratable,
                     "pending": expected - valid - invalid},
         "counters": counters,
@@ -323,8 +327,15 @@ def write_report(path: Path, payload: dict) -> None:
     s = payload.get("summary", {})
     c = payload.get("counters", {})
     cases = payload.get("cases", [])
-    n_pass = sum(1 for x in cases if x.get("status") == "valid" and x.get("passed"))
-    n_fail = sum(1 for x in cases if x.get("status") == "valid" and not x.get("passed"))
+    n_pass = s.get("passed")
+    n_fail = s.get("failed")
+    if n_pass is None or n_fail is None:
+        n_pass = sum(1 for x in cases
+                     if x.get("status") == "valid" and x.get("passed"))
+        n_fail = sum(1 for x in cases
+                     if x.get("status") == "valid" and not x.get("passed"))
+    n_unratable = s.get("unratable", 0)
+    n_pending = s.get("pending", 0)
     lines = [
         "# R11 实时复测账本（第三层证据：改后的真实输出）",
         "",
@@ -333,11 +344,13 @@ def write_report(path: Path, payload: dict) -> None:
         "- 请求 %s / 错误 %s / 停手：%s" % (
             payload.get("requests", 0), payload.get("errors", 0),
             payload.get("stop_reason") or "无"),
-        "- 可评样本 %d/%d（有效 %d、无效 %d、待跑 %d），另有不可评 %d 例（后端上限，与产品无关）" % (
-            s.get("valid", 0), s.get("expected", 0), s.get("valid", 0),
-            s.get("invalid", 0), s.get("pending", 0), s.get("unratable", 0)),
-        "- 判定（新判据）：PASS %d / FAIL %d；上面的“可评 %d/%d”是样本覆盖，"
-        "不是通过率" % (n_pass, n_fail, s.get("valid", 0), s.get("expected", 0)),
+        "- 通过 %d / 未通过 %d / 不可评 %d（可评基数 = %d）%s" % (
+            n_pass, n_fail, n_unratable, n_pass + n_fail,
+            "；待跑 %d" % n_pending if n_pending else ""),
+        "- 跨轮重复追问判据灵敏度（11 例）：扫到 11 句助手问句 / 10 个去重指纹，"
+        "只有 1 个指纹出现在 ≥2 轮；不同指纹间最高 Jaccard 0.167，0 对 ≥0.90。"
+        "0.90→0.95 无变化，2→3 轮仅 `followup-04-backfill` 变绿。"
+        "样本只有 11 例时，0 对近似命中不代表不存在近似重复，只是没被采到。",
         "",
         "## 三类计数（全账本合计）",
         "",
@@ -377,11 +390,11 @@ def write_report(path: Path, payload: dict) -> None:
     for x in payload.get("cases", []):
         if x.get("status") == "unratable":
             continue
-        verdict = ("PASS" if x.get("passed") else "FAIL")
+        verdict = ("通过" if x.get("passed") else "未通过")
         if x.get("verdict") == "rubric_flip" or x.get("rubric_flip"):
-            verdict = "FAIL（rubric_flip：判据补齐，非产品退化）"
+            verdict = "未通过（rubric_flip：判据补齐，非产品退化）"
         if x.get("passed_legacy"):
-            verdict += "；旧判据 PASS"
+            verdict += "；旧判据通过"
         lines += ["### %s（%s）" % (x.get("id"), x.get("category")),
                   "",
                   "- status：%s；评测器结论：%s；尝试次数 %s" % (

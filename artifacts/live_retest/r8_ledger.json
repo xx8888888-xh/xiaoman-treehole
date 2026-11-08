@@ -1422,6 +1422,8 @@
  "summary": {
   "expected": 10,
   "valid": 10,
+  "passed": 5,
+  "failed": 5,
   "invalid": 0,
   "unratable": 1,
   "pending": 0
