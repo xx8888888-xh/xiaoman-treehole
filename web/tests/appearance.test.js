@@ -211,7 +211,7 @@ test("仅极简模式命中零动画，其余过渡只允许 --dur-* 令牌（�
 
   // 三种预设都不许循环装饰动画 / 自动播放；只允许一次性面板入场
   const keyframes = [...CSS.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]).sort();
-  assert.deepEqual(keyframes, ["modal-in", "panel-in"], "只允许抽屉/弹层的一次性入场");
+  assert.deepEqual(keyframes, ["modal-in", "msg-in", "panel-in"], "只允许抽屉/弹层/新消息的一次性入场");
   assert.doesNotMatch(CSS, /animation-iteration-count\s*:\s*infinite/);
   assert.doesNotMatch(CSS, /\bautoplay\b/i);
   assert.doesNotMatch(HTML, /<audio\b/i);
@@ -422,4 +422,20 @@ test("横屏分栏：#stage 规则不得把 :has 混进选择器列表（WebView
   assert.match(CSS, /#stage\s*\{\s*grid-column:\s*1;/, "#stage 缺少无条件生效的分栏定位");
   assert.match(CSS, /#app:has\(#emptyState\.hidden\)\s*#stage\s*\{\s*height:\s*auto;\s*min-height:\s*0;\s*\}/,
     "新版内核仍需一条 :has 覆盖（有消息时压过 23vh 规则）");
+});
+
+test("全站 CSS：:has() 不得与普通选择器混在同一列表（WebView 83 整条作废）", () => {
+  // 2026-11-07 复查：同上一条根因在舞台占位层也有一次
+  // `#stage .stage-canvas ~ .stage-skeleton, #stage:has(...) ... { display:none }`，
+  // 旧内核整条丢弃 → 兄弟选择器也不算数，占位层永远盖在画布上。
+  // 这里从"某一条具体规则"升级为全站扫描，防止以后新增的 :has 再踩同一个坑。
+  const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+  const offenders = [];
+  for (const chunk of stripped.split("}")) {
+    const sel = chunk.split("{")[0];
+    if (!sel.includes(":has(") || !sel.includes(",")) continue;
+    offenders.push(sel.trim().replace(/\s+/g, " "));
+  }
+  assert.deepEqual(offenders, [],
+    "这些选择器列表混入 :has()，WebView 83 会整条作废：" + offenders.join(" | "));
 });

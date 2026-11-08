@@ -76,7 +76,10 @@ const API = (() => {
     catch (e) {
       memCfg = cfg;    // 落盘失败：本次会话仍按这份配置聊天
       // 配额满/隐私模式：配置没落盘要让用户知道，而不是假装保存成功
-      try { if (typeof window !== "undefined" && window.__storageFull) window.__storageFull("设置"); } catch {}
+      // 走专用入口，明确说"在内存里、重启会丢"（只提示一次，见 app.js）
+      try {
+        if (typeof window !== "undefined" && window.__cfgMemFallback) window.__cfgMemFallback();
+      } catch {}
     }
     return cfg;
   }

@@ -38,9 +38,26 @@ docker compose up -d --build      # 必须在仓库根目录执行：web 与 ass
 |------|------|------|
 | 8901 | web | 前端静态站 |
 | 8902 | mock | 对话服务（mock 规则引擎 + LLM 代理） |
-| 8903 | tts | 语音服务（默认 `provider=none`，不内置合成后端，由设备系统 TTS 接管） |
+| 8903 | tts | 语音服务（默认 `provider=none`；`XIAOMAN_TTS_PROVIDER=edge` 打开在线音色，见下） |
 
 容器统一打 label `com.dsh.project=treehole`，可用 `docker ps --filter label=com.dsh.project=treehole` 查看。
+
+### 语音开箱即用（三选一）
+
+1. **只配对话后端就够了**：App 里 `apiBase` 填内网地址（如 `http://192.168.1.5:8902`），语音地址会自动推导成同机 `:8903`，不用再填第二项。
+2. **一条命令起语音服务**（只监听 `127.0.0.1`，不暴露给局域网）：
+   ```bash
+   bash scripts/start_tts.sh      # 打印该填的地址，Ctrl-C 结束
+   ```
+   - Android 模拟器：填 `http://10.0.2.2:8903`（QEMU 会把 `10.0.2.2` 转到宿主机回环）；
+   - 真机 USB：先 `adb reverse tcp:8903 tcp:8903`，App 里填 `http://127.0.0.1:8903`。
+3. **Docker**：`XIAOMAN_TTS_PROVIDER=edge docker compose up -d tts`（默认发布到 `127.0.0.1:8903`）。
+
+**绑定地址约定**：所有本机入口默认 `XIAOMAN_BIND_HOST=127.0.0.1`，不监听 `0.0.0.0`；
+只有容器内部才由 compose 注入 `0.0.0.0`，再由 `ports` 映射回宿主机回环。
+确需暴露到局域网时必须显式设 `XIAOMAN_BIND_HOST=0.0.0.0`，风险自负。
+
+三样都不可达时，App 自动落回柔化后的系统 TTS（pitch 1.06 / rate 0.96），文字照常输出。
 
 ### 方式 ②-b：本地进程（不想用 Docker）
 

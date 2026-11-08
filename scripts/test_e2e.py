@@ -1174,6 +1174,62 @@ async def main():
             check("⑦n-7 零 JS 错误", ok_p0)
             await ctx10.close()
 
+            # —— ⑦o 段数截断可观测（B：静默 slice → 有记录；不改上限，只让它可见） ——
+            # 用页内 fetch 桩返回 9 段回复：流式渲染槽位上限 5，旧版会把 6-9 段静默吃掉；
+            # 新版必须在 sessionStorage.xiaoman_trunc_log 留下 total/cap/droppedN。
+            ctx11 = await b.new_context(viewport={"width": 390, "height": 844})
+            pg11 = await ctx11.new_page()
+            err_tr = []
+            pg11.on("pageerror", lambda e: err_tr.append(str(e)))
+            await pg11.goto(BASE, wait_until="domcontentloaded")
+            await pg11.wait_for_selector("#textInput", state="visible", timeout=15000)
+            await pg11.wait_for_function("() => window.__truncLog && window.__isBusy() === false", timeout=15000)
+            await pg11.wait_for_timeout(2500)   # 等开场白播完，避免首条发送被 busy 吞掉
+            n_tr = await pg11.evaluate("document.querySelectorAll('#messages .msg-row.them').length")
+            await pg11.evaluate(
+                """() => {
+                  sessionStorage.removeItem('xiaoman_trunc_log');
+                  const enc = new TextEncoder();
+                  const parts = ['一','二','三','四','五','六','七','八','九'];
+                  const meta = 'event: meta\\ndata: {"mode":"mock","provider":"mock","model":"mock"}\\n\\n';
+                  const reply = parts.join('||');
+                  const done = {content: JSON.stringify({reply, emotion:'gentle', motion:null}),
+                    mode:'mock', provider:'mock', model:'mock', total_ms:10, tokens:reply.length};
+                  window.__origFetch = window.fetch;
+                  window.fetch = async () => {
+                    const body = new ReadableStream({
+                      start(c) {
+                        c.enqueue(enc.encode(meta));
+                        for (let i = 0; i < parts.length; i++) {
+                          c.enqueue(enc.encode('event: delta\\ndata: ' +
+                            JSON.stringify({text: parts.slice(0, i + 1).join('||')}) + '\\n\\n'));
+                        }
+                        c.enqueue(enc.encode('event: done\\ndata: ' + JSON.stringify(done) + '\\n\\n'));
+                        c.close();
+                      }
+                    });
+                    return new Response(body, {status:200, headers:{'content-type':'text/event-stream'}});
+                  };
+                }""")
+            await pg11.fill("#textInput", "截断观测")
+            await pg11.click("#sendBtn")
+            await pg11.wait_for_function("() => window.__truncLog().length >= 1", timeout=15000)
+            tr = await pg11.evaluate(
+                """() => ({
+                  log: window.__truncLog(),
+                  bubbles: document.querySelectorAll('#messages .msg-row.them').length,
+                })""")
+            await pg11.evaluate("() => { if (window.__origFetch) window.fetch = window.__origFetch; }")
+            e = tr["log"][0] if tr["log"] else {}
+            ok_tr = (e.get("kind") == "stream" and e.get("total") == 9 and e.get("cap") == 5
+                     and e.get("droppedN") == 4 and len(e.get("dropped") or []) == 3
+                     and tr["bubbles"] - n_tr == 5 and not err_tr)
+            print("⑦o 段数截断有记录(9段/上限5/丢4段):",
+                  f"PASS {e} bubbles={tr['bubbles'] - n_tr}" if ok_tr else f"FAIL {e} err={err_tr}")
+            check("⑦o 段数截断有记录", ok_tr)
+            await pg11.screenshot(path=os.path.join(SHOTS, "21_trunc_observability.png"))
+            await ctx11.close()
+
             # l-5 零控制台错误（迷你模式 context）
             print("⑦l-5 迷你模式零控制台错误:", "PASS" if not err_l else f"FAIL {err_l}")
             check("⑦l-5 迷你模式零控制台错误", not err_l)

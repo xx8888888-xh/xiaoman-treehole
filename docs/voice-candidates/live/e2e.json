@@ -1,0 +1,37 @@
+{
+ "provider": "edge",
+ "port": 8913,
+ "requests": [
+  {
+   "text_len": 22,
+   "seconds": 1.304,
+   "status": 200,
+   "content_type": "audio/mpeg",
+   "bytes": 31392,
+   "file": "live_1_22chars.mp3"
+  },
+  {
+   "text_len": 29,
+   "seconds": 1.225,
+   "status": 200,
+   "content_type": "audio/mpeg",
+   "bytes": 37584,
+   "file": "live_2_29chars.mp3"
+  },
+  {
+   "text_len": 32,
+   "seconds": 0.037,
+   "status": 200,
+   "content_type": "audio/mpeg",
+   "bytes": 44352,
+   "file": "live_3_32chars.mp3"
+  }
+ ],
+ "boot_s": 0.0,
+ "cache_hit": {
+  "seconds": 0.02,
+  "status": 200,
+  "bytes": 31392
+ },
+ "bad_voice": "400"
+}

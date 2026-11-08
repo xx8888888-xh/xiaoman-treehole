@@ -54,7 +54,7 @@
 1. **流式增量的文字过渡**：`app.js` 直接 `bubble.textContent = 累积文本`，每次替换都会重建文本节点，CSS 无法只对新增字符做淡入。建议：给流式气泡加 `.is-streaming`，用 `requestAnimationFrame` 之外的 CSS（例如外层 `opacity` 从 .86→1、300ms）或在末尾插入 `span.stream-tail` 只对尾巴做 120ms 淡入。**不改也能用，但"逐字出现"的顺滑度差一档**。
 2. **消息入场动画**：`chat_pager.js` 在窗口未满时整窗重建（`replaceChildren`），任何 `.msg-row` 入场动画都会在每次追加时对全部行重播。建议给"新增行"打 `data-fresh="1"`，只对该行做 200ms 上浮 6px + 淡入。
 3. **时间分隔行**：现在只有分页提示（`.window-tip`）。建议在连续消息间隔 >30 分钟时插入 `.time-divider`（复用 `.window-tip` 样式），文案"今天 14:20 / 昨天 / 10月28日"。**（已落地，见第六节；实际阈值取 5 分钟）**
-4. **滚动锚点**：`chat_pager` 已做"贴底才自动跟随"，但用户手动上翻后没有"回到底部"浮钮。建议加 `.jump-bottom`（44px 圆钮，`position:absolute` 于输入栏上方，`is-scrolled` 时显示），点击滚到底。
+4. **滚动锚点**：`chat_pager` 已做"贴底才自动跟随"，但用户手动上翻后没有"回到底部"浮钮。建议加 `.jump-bottom`（44px 圆钮，`position:absolute` 于输入栏上方，`is-scrolled` 时显示），点击滚到底。**（已落地，见 §6.4 与 `DECISIONS.md` §15；实际用 `pinned` 驱动）**
 5. **加载骨架**：聊天没有骨架屏（首页直接渲染空态）。如需"历史加载中"占位，建议在 `chat_pager` 的 loader 状态给 `.window-tip` 加 `.is-loading`，用三条 shimmer 线（CSS 动画，`prefers-reduced-motion` 关闭）。
 6. **`web/js/tween.js` 未新增**：本次没有任何 JS 侧动画需要统一曲线，单独建文件会成为死代码；统一曲线已放在 CSS 令牌 `--ease-out / --ease-standard`。若后续做流式淡入，再在该文件里导出 `tween(el, {duration, easing})` 给 `app.js` 用。
 7. **`prefers-reduced-motion` 与"手动覆盖"**：`test_appearance.py` 明确要求"系统 reduce 下用户手动选生动仍生效（160ms）"，因此本轮保留"用户显式选择优先"。这是与硬性文案"全量尊重 reduce"的一处刻意取舍，已在测试约束内。
@@ -132,8 +132,23 @@
 - 本轮本地浏览器：**未启动（0 次 / 0 秒）**。
 - 截图：沿用 `after/` 22 张，未新增（硬约束；新增行为已由 node 断言覆盖）。
 
-### 6.4 仍留的取舍
+### 6.4 加载骨架 + 流式逐字 + 行入场（2026-11-08 落地）
 
-- 回到底部浮钮（第三节-4）未做：`pinned=false` 时只有底栏"N 条新消息"提示；需要新增 HTML 节点与显隐状态，改动面大于本轮两项。
-- 加载骨架（第三节-5）未做：分页占位条已能表达"正在翻出…"，但没有 shimmer。
-- 流式逐字过渡（第三节-1/2）未做：`bubble.textContent` 整段替换，入场动画会在整窗重建时重播，需先给新增行打 `data-fresh`。
+第三节-1/2/5 的遗留项全部收口。三者共用一条原则：**状态要能被看见，但不能改变滚动与排版**。
+
+| 项 | 改前 | 改后 | 关键约束 |
+|---|---|---|---|
+| 加载骨架（§三-5） | `.window-tip` 只有一行「正在翻出更早的消息…」，无 busy 语义 | busy 时换成 3 条静态线（145.2/107.4/75.5px × 3px），`aria-busy=true` + `aria-label`，切回 idle 恢复文案 | 浮条高度 40px 不变（切 busy 不推挤列表）；`animation:none`，极简模式同样成立 |
+| 流式逐字（§三-1） | 服务端一次吐整段时，整段在一帧内铺满（探针实测 2 次更新、单帧 95 字） | 新增 `web/js/stream_typer.js`：短回复（≤20 字）整段落屏，长回复按字数自适应（170+0.6·len，封顶 400cps）；97 字实测 26 帧、单帧 ≤4 字、494ms 补齐 | 与网络到达解耦；切后台回来单帧最多按 120ms 计时，不跳字 |
+| 收尾欠账 | 流结束 `replace(full)` 直接 flush，最后 2 字缓冲 + 剩余欠账一帧灌入（实测 29 字跳变） | `finishSoon(160)` 补速播完剩余字，绝不瞬移半段 | 单帧上限 2×MAX_CPS；降级/危机改写仍走 `flush()` 立即定稿 |
+| 行入场（§三-2） | 整窗重建时无法只对新行动画 | 新行 `data-fresh=1` → `msg-in` 200ms 上浮淡入，260ms 后移除标记 | 只播已登记的 `msg-in`；极简 `animation:none` |
+
+滚动相关（本轮真 bug，详见 `DECISIONS.md` §16）：
+
+- `#chatScroll` 关闭浏览器滚动锚定（`overflow-anchor:none`）：流式气泡长高时 Chrome 会偷偷改 `scrollTop`，实测把上翻到 1252 的视口拽回 1308。
+- `stickBottom()` / pager `pinBottom()` 改 `scrollTo({behavior:"instant"})`：CSS `scroll-behavior:smooth` 下逐帧贴底永远追不上，流式结束会停在离底 200+px。
+- `MutationObserver` 的贴底门控改为当场算 `gap()`，不再读缓存值（上翻后缓存仍 ≤60 会误判一次 `scrollIntoView`，把视口拽到底）。
+- 实测：流式进行中上翻 900px 后继续逐字，`scrollTop 1355 → 1355`，23 次更新、194/194 字一帧没丢、浮钮保持可见；语音提示出现时 `scrollTop` 不变。
+
+验证：`scripts/test_layout_matrix.py` **53 → 80 条**（§8 骨架 9 条、§9 流式 18 条，原 53 条一条未删、阈值未放宽），**80/80 PASS**；`web/` Node 单测 **309 → 320/320**；Biome 0 error，新增文件 0 warning。
+

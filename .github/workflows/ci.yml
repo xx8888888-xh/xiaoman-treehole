@@ -72,6 +72,10 @@ jobs:
       - name: Syntax compile (server + scripts)
         run: python -m compileall -q server scripts
 
+      - name: Time-bomb guard (no hardcoded absolute dates in e2e scripts)
+        # test_roundtrip 曾写死 "2026-11-07T08:00"，过点后提醒被判成过去时间，CI 由绿转红。
+        run: python scripts/check_time_bombs.py
+
       - name: Sync assets + verify (web ↔ android assets/www)
         # 同一真源两处消费：先按 build_assets.sh 生成发布物，再逐文件 sha256 校验。
         run: |

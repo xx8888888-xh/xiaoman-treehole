@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import unittest
 import urllib.error
 import urllib.parse
@@ -129,7 +130,7 @@ class ProviderTest(unittest.TestCase):
             self.assertEqual(tts_server._provider_name(), "none")
 
     def test_supported_providers(self):
-        for name in ("cmd", "sherpa"):
+        for name in ("cmd", "sherpa", "edge"):
             with mock.patch.dict(os.environ, {"XIAOMAN_TTS_PROVIDER": name}, clear=False):
                 self.assertEqual(tts_server._provider_name(), name)
 
@@ -148,8 +149,25 @@ class ProviderTest(unittest.TestCase):
             self.assertFalse(tts_server.provider_available("sherpa"))
 
     def test_rate_table_matches_frontend(self):
+        # normal=0.95 与 EDGE_RATES 的 "-5%" 同义（B4 首选参数）；cmd/sherpa 吃倍率
         self.assertEqual(tts_server.TTS_RATES,
-                         {"slow": 0.86, "normal": 1.02, "fast": 1.18})
+                         {"slow": 0.84, "normal": 0.95, "fast": 1.12})
+
+    def test_edge_rate_table_is_percentage(self):
+        self.assertEqual(tts_server.EDGE_RATES,
+                         {"slow": "-12%", "normal": "-5%", "fast": "+5%"})
+
+    def test_voice_whitelist_drops_nonexistent_xiaoyuan(self):
+        """zh-CN-XiaoyuanNeural 在 edge-tts 里不存在（实测 NoAudioReceived），必须拒绝"""
+        with self.assertRaises(ValueError):
+            tts_server.parse_tts_payload(
+                json.dumps({"text": "你好", "voice": "zh-CN-XiaoyuanNeural"}).encode())
+        for ok in ("zh-CN-XiaoyiNeural", "zh-CN-shaanxi-XiaoniNeural",
+                   "zh-CN-YunxiaNeural"):
+            with self.subTest(ok=ok):
+                p = tts_server.parse_tts_payload(
+                    json.dumps({"text": "你好", "voice": ok}).encode())
+                self.assertEqual(p["voice"], ok)
 
 
 class CmdProviderTest(unittest.TestCase):
@@ -173,6 +191,50 @@ class CmdProviderTest(unittest.TestCase):
     def test_empty_output_raises(self):
         with self.assertRaises(tts_server.TtsProviderUnavailable):
             self._run(0, [sys.executable, "-c", "pass"])
+
+
+class EdgeProviderTest(unittest.TestCase):
+    """edge provider：只验证拼包、参数映射与失败语义（用假模块，不触网）"""
+
+    def _fake(self, audio=b"ID3edge", seen=None):
+        class FakeComm:
+            def __init__(self, text, voice, rate=None, pitch=None):
+                if seen is not None:
+                    seen.update(text=text, voice=voice, rate=rate, pitch=pitch)
+
+            async def stream(self):
+                yield {"type": "WordBoundary", "offset": 0}
+                yield {"type": "audio", "data": audio}
+
+        return types.SimpleNamespace(Communicate=FakeComm)
+
+    def test_joins_audio_chunks_and_maps_rate_pitch(self):
+        seen = {}
+        with mock.patch.dict(sys.modules, {"edge_tts": self._fake(seen=seen)}), \
+                mock.patch.dict(os.environ, {"XIAOMAN_TTS_EDGE_PITCH": "+3Hz"}):
+            out = tts_server._edge_synthesize("你好", "zh-CN-XiaoyiNeural", "slow")
+        self.assertEqual(out, b"ID3edge")
+        self.assertEqual(seen["rate"], "-12%")
+        self.assertEqual(seen["pitch"], "+3Hz")
+
+    def test_missing_package_raises(self):
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *a, **kw):
+            if name == "edge_tts":
+                raise ImportError("no edge_tts")
+            return real_import(name, *a, **kw)
+
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(tts_server.TtsProviderUnavailable) as cm:
+                tts_server._edge_synthesize("机密原文", "zh-CN-XiaoyiNeural", "normal")
+        self.assertNotIn("机密原文", str(cm.exception))
+
+    def test_empty_audio_raises_without_echo(self):
+        with mock.patch.dict(sys.modules, {"edge_tts": self._fake(audio=b"")}):
+            with self.assertRaises(tts_server.TtsProviderUnavailable):
+                tts_server._edge_synthesize("机密原文", "zh-CN-XiaoyiNeural", "normal")
 
 
 class HandlerHTTPTest(unittest.TestCase):
@@ -287,12 +349,11 @@ class HandlerHTTPTest(unittest.TestCase):
 
     def test_get_compat_still_works_and_text_not_logged(self):
         def fake_synth(text, voice, rate="normal"):
-            return b"ID3legacy"
+            return b"ID3legacy", "audio/mpeg"
 
         qs = urllib.parse.urlencode({"text": SECRET, "voice": tts_server.DEFAULT_VOICE})
         with mock.patch.object(tts_server, "provider_available", return_value=True), \
                 mock.patch.object(tts_server, "_get_or_generate_audio", fake_synth), \
-                mock.patch.object(tts_server, "audio_content_type", return_value="audio/mpeg"), \
                 self.assertLogs("xiaoman-tts", level="INFO") as cm:
             code, body, _ = self._get(f"/tts?{qs}")
 
@@ -312,11 +373,10 @@ class HandlerHTTPTest(unittest.TestCase):
 
         def fake_synth(text, voice, rate="normal"):
             calls.update(text=text, voice=voice, rate=rate)
-            return b"ID3fake-audio"
+            return b"ID3fake-audio", "audio/mpeg"
 
         with mock.patch.object(tts_server, "provider_available", return_value=True), \
                 mock.patch.object(tts_server, "_get_or_generate_audio", fake_synth), \
-                mock.patch.object(tts_server, "audio_content_type", return_value="audio/mpeg"), \
                 self.assertLogs("xiaoman-tts", level="INFO") as cm:
             code, body, headers = self._post({"text": SECRET, "rate": "fast"})
 
@@ -326,8 +386,69 @@ class HandlerHTTPTest(unittest.TestCase):
         self.assertEqual(calls["text"], SECRET)
         self.assertEqual(calls["voice"], tts_server.DEFAULT_VOICE)
         self.assertEqual(calls["rate"], "fast")
-        self.assertEqual(tts_server.TTS_RATES[calls["rate"]], 1.18)
+        self.assertEqual(tts_server.TTS_RATES[calls["rate"]], 1.12)
         self.assertNotIn(SECRET, "\n".join(cm.output))
+
+
+class PreferredVoiceAndFallbackTest(unittest.TestCase):
+    """B4 首选音色固化 + edge 断网落到 E1(Kokoro/sherpa) 降级链"""
+
+    def test_b4_is_default_voice(self):
+        # 画像结论：晓伊（Xiaoyi）为首选；normal 语速 = −5%，音高 = +2Hz
+        self.assertEqual(tts_server.DEFAULT_VOICE, "zh-CN-XiaoyiNeural")
+        self.assertEqual(tts_server.TTS_RATES["normal"], 0.95)
+        self.assertEqual(tts_server._edge_pitch(), "+2Hz")
+
+    def test_provider_chain_includes_fallback(self):
+        saved = (tts_server.PROVIDER, tts_server.FALLBACK)
+        try:
+            tts_server.PROVIDER, tts_server.FALLBACK = "edge", "sherpa"
+            self.assertEqual(tts_server.provider_chain(), ["edge", "sherpa"])
+            tts_server.FALLBACK = ""
+            self.assertEqual(tts_server.provider_chain(), ["edge"])
+        finally:
+            tts_server.PROVIDER, tts_server.FALLBACK = saved
+
+    def test_fallback_wav_used_when_edge_fails(self):
+        def edge_down(*a, **k):
+            raise tts_server.TtsProviderUnavailable("edge-tts failed: TimeoutError")
+
+        saved = (tts_server.PROVIDER, tts_server.FALLBACK)
+        try:
+            tts_server.PROVIDER, tts_server.FALLBACK = "edge", "cmd"
+            with mock.patch.object(tts_server, "provider_available", return_value=True), \
+                    mock.patch.object(tts_server, "_edge_synthesize", edge_down), \
+                    mock.patch.object(tts_server, "_cmd_synthesize", return_value=b"RIFF-cmd"):
+                audio, ctype = tts_server.synthesize("测试", tts_server.DEFAULT_VOICE)
+        finally:
+            tts_server.PROVIDER, tts_server.FALLBACK = saved
+        self.assertEqual(audio, b"RIFF-cmd")
+        self.assertEqual(ctype, "audio/wav")   # 跟着真正出声的 provider 走
+
+    def test_both_down_raises(self):
+        def down(*a, **k):
+            raise tts_server.TtsProviderUnavailable("down")
+
+        saved = (tts_server.PROVIDER, tts_server.FALLBACK)
+        try:
+            tts_server.PROVIDER, tts_server.FALLBACK = "edge", "sherpa"
+            with mock.patch.object(tts_server, "provider_available", return_value=True), \
+                    mock.patch.object(tts_server, "_edge_synthesize", down), \
+                    mock.patch.object(tts_server, "_sherpa_synthesize", down):
+                with self.assertRaises(tts_server.TtsProviderUnavailable):
+                    tts_server.synthesize("测试", tts_server.DEFAULT_VOICE)
+        finally:
+            tts_server.PROVIDER, tts_server.FALLBACK = saved
+
+    def test_any_provider_available_uses_fallback(self):
+        saved = (tts_server.PROVIDER, tts_server.FALLBACK)
+        try:
+            tts_server.PROVIDER, tts_server.FALLBACK = "edge", "sherpa"
+            with mock.patch.object(tts_server, "provider_available",
+                                   side_effect=lambda name=None: name == "sherpa"):
+                self.assertTrue(tts_server.any_provider_available())
+        finally:
+            tts_server.PROVIDER, tts_server.FALLBACK = saved
 
 
 if __name__ == "__main__":

@@ -894,8 +894,10 @@ def inputbar_problems(p):
         return probs
     if (ib.get("t") or -1) < 0:
         probs.append("输入栏被顶出视口上方（t=%s）" % ib.get("t"))
-    if (ib.get("b") or 1e9) > ih + 0.5:
-        probs.append("输入栏被顶出视口下方（b=%s ih=%s）" % (ib.get("b"), ih))
+    # 硬线：输入栏底边必须离视口底边至少 8px（横竖屏同一把尺），
+    # 云端实测提示条出现后曾把 inputbar 顶到 444.5（视口 363），此前只拦 >ih 漏掉了。
+    if (ib.get("b") or 1e9) > ih - 8:
+        probs.append("输入栏贴底/出视口（b=%s，硬线 ih-8=%s）" % (ib.get("b"), ih - 8))
     return probs
 
 
@@ -1515,6 +1517,17 @@ def main():
         pl8 = cdp.eval(FAIL_PROBE_JS) or {}
         bl8 = shot("e2e_08_fail_500_landscape.png")
         probs_l = fail_layout_problems(pl8) + fail_copy_problems(pl8, "http") + inputbar_problems(pl8)
+        # 输入栏不许因为提示条出现而后移（下移=被挤），也不许被大幅上移改变手感；
+        # 修法是让聊天区让高度，输入栏位置应当基本不动。
+        pre_ib = ((pre_l.get("probe") or {}).get("inputbar") or {}).get("b")
+        post_ib = (pl8.get("inputbar") or {}).get("b")
+        if pre_ib is not None and post_ib is not None:
+            if post_ib > pre_ib + 2:
+                probs_l.append("提示条出现后输入栏反而下移 %.1fpx（%.1f→%.1f）"
+                               % (post_ib - pre_ib, pre_ib, post_ib))
+            elif post_ib < pre_ib - 40:
+                probs_l.append("提示条出现后输入栏被大幅上移 %.1fpx（%.1f→%.1f）"
+                               % (pre_ib - post_ib, pre_ib, post_ib))
         METRICS["states"]["08_fail_500_landscape"] = {
             "shot": "e2e_08_fail_500_landscape.png", "bytes": bl8,
             "iw": pl8.get("iw"), "ih": pl8.get("ih"),

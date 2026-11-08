@@ -12,10 +12,17 @@ class FakeElement {
     this.className = "";
     this.textContent = "";
     this.onclick = null;
+    this.attrs = {};
     this.scrollTop = 0;
     this.scrollHeight = 0;
     this.clientHeight = 0;
   }
+
+  setAttribute(name, value) { this.attrs[name] = String(value); }
+
+  getAttribute(name) { return this.attrs[name]; }
+
+  removeAttribute(name) { delete this.attrs[name]; }
 
   appendChild(node) {
     return this.insertBefore(node, null);

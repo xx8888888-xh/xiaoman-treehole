@@ -86,3 +86,29 @@
 
 四项目标：① 加载期 >50ms 长任务最长块 ≤50ms（纹理预解码挪 idle、分批）；② 冷启动→首条消息可发送 ≤1.5s；
 ③ 流式逐字与历史窗口重建无 O(n) 全量重排；④ 200 轮后堆不线性上涨、纹理不重复解码。
+
+## w19 · feat/data-r3（第六轮并行·数据与发布收口）
+
+> 基线：`r5-20261105` / `a283342`。worktree `treehole-w19`，分支 `feat/data-r3`。
+> 本轮只做「数据完整性 + 发布物」，不改视觉/布局。
+
+| 范围 | 文件 |
+|---|---|
+| 数据层 | `web/js/backup.js`、`web/js/stats.js`（仅清空/还原相关）、`web/js/reminders.js`（仅镜像同步相关） |
+| 界面接线 | `web/js/app.js`（**只限**消息删改菜单、统计清空入口两段）、`web/js/memory.js`（仅在必要时） |
+| 原生 | `android/**`（提醒镜像同步、版本号、签名读取） |
+| 服务端 | `server/**`（导出/导入/删改校验、安全话术） |
+| 脚本/文档 | `scripts/**`、`docs/SAFETY_COPY.md`、`docs/DATA_R3.md`、`.github/workflows/android-release.yml` |
+| 新增测试 | `scripts/test_data_roundtrip.test.js`（真实 JSON 文件往返）、`server/tests/test_data_r3.py` |
+
+**禁止**：`web/css/**`、`web/index.html`、`web/js/stage.js`、`web/js/pet.js`、`web/js/mock_engine.js`、
+`web/js/chat_pager.js`、`package.json`、`.github/workflows/ci.yml`、`assets/**`、现有 `android.yml`。
+
+**闸门**：
+- `node --test "web/tests/*.test.js"` ≥ **222**（串行）
+- `node --test scripts/test_data_roundtrip.test.js`（真实文件 I/O，无 mock）
+- `python -m pytest server/tests -q`（串行，基线 153 passed + 19 subtests）
+- 本地禁止 headless 浏览器 / AVD / Gradle；APK 只在 `android-release.yml` 云端构建
+- 单会话 CPU/GPU/内存 ≤ 整机 30–40%，串行执行，采样写进 `docs/DATA_R3.md`
+
+**交付**：小步 commit（前缀 `w19:`），能推就推；完成后回报五项完成度、往返通过率、APK 体积与签名校验结果、遗留项。

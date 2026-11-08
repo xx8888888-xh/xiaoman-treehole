@@ -67,9 +67,40 @@ def _perf_data(n1=5, med1=152, max1=184, n4=5, med4=403, max4=638):
     }}}}
 
 
-def _sources(float_data=None, power_data=None, perf_data=None, required=None):
+def _battery_seg(name, mah30, device_mah30, cpu_ms, wakeups, net_bytes,
+                 frames=None, wakeup_alarms=0, jobs=0):
+    seg = {
+        "name": name,
+        "mah30": mah30,
+        "deviceMah30": device_mah30,
+        "cpuMs": cpu_ms,
+        "wakeups": wakeups,
+        "wakeupAlarms": wakeup_alarms,
+        "jobs": jobs,
+        "netBytes": net_bytes,
+        "mahMeasured": mah30,
+        "mahBasis": "uid-power-model" if name != "standby" else "device-power-model",
+    }
+    if frames is not None:
+        seg["frames"] = {"framesWhileHidden": frames, "source": "pet-visibilitychange"}
+    return seg
+
+
+def _battery_data(bg_frames=0, bg_cpu=200, bg_net=2000, bg_mah=0.04,
+                  fg_cpu=400000, fg_wakeups=0, bg_wakeups=0, standby_mah=0.03,
+                  standby_net=500):
+    return {"segments": [
+        _battery_seg("standby", standby_mah, standby_mah, 0, 0, standby_net),
+        _battery_seg("foreground", 0.01, 1.5, fg_cpu, fg_wakeups, 100),
+        _battery_seg("background", 0.0005, bg_mah, bg_cpu, bg_wakeups, bg_net,
+                     frames=bg_frames),
+    ]}
+
+
+def _sources(float_data=None, power_data=None, perf_data=None, battery_data=None,
+             required=None):
     src = {"float": float_data, "power": power_data, "firstsend": perf_data,
-           "__required__": set(required or [])}
+           "battery": battery_data, "__required__": set(required or [])}
     return src
 
 
@@ -153,6 +184,106 @@ class PerfGateTest(unittest.TestCase):
         rows = [r for r in results if r["section"] == "power"]
         self.assertTrue(all(r["class"] == perf_gate.SKIP for r in rows))
         self.assertFalse([r for r in results if r["class"] == perf_gate.FAIL])
+
+    def test_battery_three_segments_all_green(self):
+        results = perf_gate.evaluate(self.baseline, _sources(battery_data=_battery_data()))
+        fails = [r for r in results if r["section"] == "battery" and r["class"] == perf_gate.FAIL]
+        self.assertEqual(fails, [], f"电池基线不应有红项: {fails}")
+        self.assertEqual(_find(results, "battery.background_frames_30m")["class"], perf_gate.PASS)
+        self.assertEqual(
+            _find(results, "battery.background_device_mah_over_standby")["class"], perf_gate.PASS)
+
+    def test_battery_background_frames_30m_turns_red(self):
+        """把 5 分钟 0 帧结论扩到 30 分钟：隐藏期 20 帧必须判红。"""
+        results = perf_gate.evaluate(self.baseline,
+                                     _sources(battery_data=_battery_data(bg_frames=20)))
+        self.assertEqual(_find(results, "battery.background_frames_30m")["class"], perf_gate.FAIL)
+
+    def test_battery_background_cpu_turns_red(self):
+        results = perf_gate.evaluate(self.baseline,
+                                     _sources(battery_data=_battery_data(bg_cpu=8000)))
+        self.assertEqual(_find(results, "battery.background_cpu_ms")["class"], perf_gate.FAIL)
+
+    def test_battery_background_net_over_standby_turns_red(self):
+        results = perf_gate.evaluate(self.baseline,
+                                     _sources(battery_data=_battery_data(bg_net=200000)))
+        row = _find(results, "battery.background_net_bytes_over_standby")
+        self.assertEqual(row["class"], perf_gate.FAIL)
+
+    def test_battery_background_mah_over_standby_turns_red(self):
+        results = perf_gate.evaluate(self.baseline,
+                                     _sources(battery_data=_battery_data(bg_mah=0.5)))
+        row = _find(results, "battery.background_device_mah_over_standby")
+        self.assertEqual(row["class"], perf_gate.FAIL)
+
+    def test_battery_foreground_wakeups_turns_red(self):
+        results = perf_gate.evaluate(self.baseline,
+                                     _sources(battery_data=_battery_data(fg_wakeups=40)))
+        self.assertEqual(_find(results, "battery.foreground_wakeups")["class"], perf_gate.FAIL)
+
+    def test_battery_missing_required_turns_red(self):
+        results = perf_gate.evaluate(self.baseline,
+                                     _sources(_float_data(), required={"battery"}))
+        rows = [r for r in results if r["section"] == "battery"]
+        self.assertTrue(rows)
+        self.assertTrue(all(r["class"] == perf_gate.FAIL for r in rows))
+
+    def test_baseline_may_only_tighten(self):
+        old = {"metrics": [{
+            "id": "battery.background_device_mah_over_standby", "section": "battery",
+            "unit": "mAh", "rule": {"type": "max", "value": 0.2},
+        }]}
+        tighter = copy.deepcopy(old)
+        tighter["metrics"][0]["rule"]["value"] = 0.1
+        self.assertEqual(perf_gate.verify_monotonic(old, tighter), [])
+
+        looser = copy.deepcopy(old)
+        looser["metrics"][0]["rule"]["value"] = 0.3
+        errors = perf_gate.verify_monotonic(old, looser)
+        self.assertTrue(errors)
+        self.assertIn("放宽", errors[0])
+
+    def test_baseline_removed_metric_or_new_exemption_is_loosening(self):
+        old = {"metrics": [{
+            "id": "battery.background_cpu_ms", "section": "battery",
+            "unit": "ms", "rule": {"type": "max", "value": 5000.0},
+        }]}
+        removed = {"metrics": []}
+        self.assertTrue(perf_gate.verify_monotonic(old, removed))
+
+        old_ex = {"metrics": [], "exemptions": [{
+            "id": "float.full_tier_raf", "section": "float",
+            "guard": {"minRafPerSec": 12.0},
+        }]}
+        new_ex = copy.deepcopy(old_ex)
+        new_ex["exemptions"].append({"id": "battery.free_pass", "section": "battery"})
+        errors = perf_gate.verify_monotonic(old_ex, new_ex)
+        self.assertTrue(any("新增豁免" in e for e in errors), errors)
+
+        weak_guard = copy.deepcopy(old_ex)
+        weak_guard["exemptions"][0]["guard"]["minRafPerSec"] = 8.0
+        errors = perf_gate.verify_monotonic(old_ex, weak_guard)
+        self.assertTrue(any("guard 被放宽" in e for e in errors), errors)
+
+    def test_cli_monotonic_only_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            old = {"metrics": [{
+                "id": "battery.background_cpu_ms", "section": "battery",
+                "unit": "ms", "rule": {"type": "max", "value": 5000.0},
+            }]}
+            new = {"metrics": [{
+                "id": "battery.background_cpu_ms", "section": "battery",
+                "unit": "ms", "rule": {"type": "max", "value": 0.3},
+            }]}
+            (tmp / "old.json").write_text(json.dumps(old), encoding="utf-8")
+            (tmp / "new.json").write_text(json.dumps(new), encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = perf_gate.main(["--baseline", str(tmp / "new.json"),
+                                       "--verify-monotonic-against", str(tmp / "old.json")])
+            self.assertEqual(code, 0, buf.getvalue())
+            self.assertIn("BASELINE: PASS", buf.getvalue())
 
     def test_cli_green_and_red_exit_codes(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,8 +9,11 @@
  *
  * provider：
  * 1. native  → 安卓系统 TTS（AndroidTTS JS Bridge；优先，离线、零依赖、零许可风险）
- * 2. server  → 可选自建语音服务（**默认关闭**：只有注入 XIAOMAN_TTS_SERVER
- *              或用户显式配置 ttsServer 才可用；没配地址 available()=false）
+ * 2. server  → 自建语音服务（三种启用方式，优先级从高到低：
+ *              XIAOMAN_TTS_SERVER 注入 → 设置页显式地址 ttsServer →
+ *              从对话后端 apiBase 推导出「同一台机器:8903」的局域网地址）
+ *              推导只在 apiBase 是内网/局域网地址时生效，公网 API 域名一律不猜
+ *              （否则会凭空造出一个永远 503 的 provider，每句白等 10s）
  *              POST {base}/tts  JSON {text, voice, rate} → audio/*
  *              原文只放 body，不进查询串（避免整句对话被访问日志落盘，审计 P1-5）
  * 3. browser → Web Speech API speechSynthesis（离线兜底）
@@ -24,16 +27,25 @@
 
 const TTS = (() => {
   // 语速档位（与设置页同值）：服务端 / 浏览器 / 安卓桥三路共用同一映射
-  const RATE = { slow: 0.86, normal: 1.02, fast: 1.18 };
+  // 「小满」语气：整体略慢半拍（normal 1.02 → 0.96），句尾不赶
+  const RATE = { slow: 0.84, normal: 0.96, fast: 1.12 };
   // 音色白名单：与服务端 ALLOWED_VOICES 对齐（至少 2 个）；非法值一律回默认音色
+  // 2026-11-07：zh-CN-XiaoyuanNeural 在 edge-tts 里并不存在（实测 NoAudioReceived），
+  // 换成同样年轻女声的陕西方言音色 XiaoniNeural（普通话为主，仅个别字带腔）
   const VOICES = Object.freeze([
-    "zh-CN-XiaoyiNeural",     // 默认：女性，自然
-    "zh-CN-XiaoxiaoNeural",   // 女性，温柔
-    "zh-CN-XiaoyuanNeural",   // 女性，甜妹
-    "zh-CN-YunjianNeural"     // 男性，沉稳
+    "zh-CN-XiaoyiNeural",     // 默认：年轻女声，元气
+    "zh-CN-XiaoxiaoNeural",   // 女声，温柔
+    "zh-CN-shaanxi-XiaoniNeural", // 女声，软糯
+    "zh-CN-YunjianNeural"     // 男声，沉稳
   ]);
   const DEFAULT_VOICE = "zh-CN-XiaoyiNeural";
-  const AUDIO_START_TIMEOUT = 7000;   // 弱网：音频 7s 还没真正开播就降级，先保住文字
+  const AUDIO_START_TIMEOUT = 10000;  // 弱网/长句：音频 10s 还没真正开播就降级，先保住文字
+                                      // （edge 一句 60 字实测 ~4.9s，7s 会把长句误杀成系统音）
+  // 服务端请求预算单独一套：server 侧 edge 最坏 12s×2（EDGE_TIMEOUT + 重试），
+  // 用 10s 会在服务器刚回 200 时 abort（AbortError），把快好的音频扔了。
+  const SERVER_FETCH_TIMEOUT = 20000;
+  const SERVER_FETCH_ATTEMPTS = 2;    // 网络层失败（TypeError）重试一次
+  const SERVER_RETRY_BACKOFF = 300;
   const ENVELOPE_FRAME_MS = 50;       // 口型包络关键帧间隔（20Hz，足够 15/30fps 舞台）
 
   /** 纯函数：PCM 通道 → 归一化 RMS 包络（可单测，不依赖 WebAudio） */
@@ -126,14 +138,42 @@ const TTS = (() => {
     return VOICES.indexOf(v) >= 0 ? v : DEFAULT_VOICE;
   }
 
+  /** 从 URL 里取主机名（带端口会被去掉）；非法/相对地址返回空串 */
+  function hostOf(url) {
+    const m = /^https?:\/\/([^/?#]+)/i.exec(String(url || "").trim());
+    if (!m) return "";
+    let h = m[1].toLowerCase();
+    const colon = h.lastIndexOf(":");
+    if (colon > 0 && h.indexOf("]") === -1) h = h.slice(0, colon);
+    return h;
+  }
+
+  /** 内网/局域网主机：只有这类地址才敢"同机推导"，公网 API 域名不猜语音端口 */
+  function isLanHost(h) {
+    return /^10\./.test(h) || /^192\.168\./.test(h)
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /\.local$/i.test(h);
+  }
+
   /**
-   * 服务端地址：默认关闭。只有显式注入/显式配置才启用（新装用户不会请求任何
-   * 远程语音服务；provider 缺失时 available()=false）。
+   * 服务端地址解析（开箱即用）：
+   *  1) XIAOMAN_TTS_SERVER 注入（CI/内嵌页面用）
+   *  2) 设置页显式 ttsServer
+   *  3) 显式 ttsBase（非回环才算，避免历史默认值把 provider 误开）
+   *  4) 对话后端是内网地址 → 语音服务就在同一台机器 8903（只配一次后端，语音自动跟上）
    */
   function serverBase(win, cfg) {
     const injected = normalizeBase(win && win.XIAOMAN_TTS_SERVER);
+    if (injected) return injected;
     const fromCfg = normalizeBase(cfg && cfg.ttsServer);
-    return injected || fromCfg || "";
+    if (fromCfg) return fromCfg;
+    const ttsBase = normalizeBase(cfg && cfg.ttsBase);
+    const tbHost = hostOf(ttsBase);
+    if (tbHost && tbHost !== "127.0.0.1" && tbHost !== "localhost") return ttsBase;
+    const apiBase = normalizeBase(cfg && cfg.apiBase);
+    const apiHost = hostOf(apiBase);
+    // 手机上的 127.0.0.1 是手机自己，推导出来只会永远连不上
+    if (apiHost && isLanHost(apiHost)) return "http://" + apiHost + ":8903";
+    return "";
   }
 
   /** 按环境创建一套引擎（浏览器用真实 window；单测注入 fake window） */
@@ -369,32 +409,48 @@ const TTS = (() => {
       audio.play().catch(() => settle(true, "play_rejected"));
     }
 
-    /** 服务端语音请求：POST JSON body → blob URL（原文不进 URL） */
+    /** 服务端语音请求：POST JSON body → blob URL（原文不进 URL）
+     *  网络层失败（TypeError: Failed to fetch）重试一次。AVD 实测这条错误串
+     *  对应三种可复现故障：连接被拒 / 局域网明文被拦 / 服务端 200 后 body 中断
+     *  （net::ERR_CONNECTION_REFUSED / ERR_CLEARTEXT_NOT_PERMITTED /
+     *   ERR_CONTENT_LENGTH_MISMATCH）。前两种重试也没用（但只多 300ms），
+     *  第三种重试一次就能救回来，不必降级成系统音。
+     *  AbortError 是本端主动放弃（超时预算用尽），不重试。 */
     async function fetchServerAudio(base, text, voice, rate) {
-      const ctrl = typeof W.AbortController !== "undefined" ? new W.AbortController() : null;
-      const abortTimer = ctrl ? setTimeout(() => ctrl.abort(), AUDIO_START_TIMEOUT) : 0;
-      try {
-        const res = await W.fetch(`${base}/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, voice, rate }),
-          signal: ctrl ? ctrl.signal : undefined
-        });
-        if (!res.ok) {
-          let detail = "";
-          try {
-            const j = await res.json();
-            detail = j && j.error ? ` ${j.error}` : "";
-          } catch (e) { /* 非 JSON 错误体不深究 */ }
-          const err = new Error(`tts http ${res.status}${detail}`);
-          err.status = res.status;
-          throw err;
+      let lastErr = null;
+      for (let attempt = 0; attempt < SERVER_FETCH_ATTEMPTS; attempt++) {
+        const ctrl = typeof W.AbortController !== "undefined" ? new W.AbortController() : null;
+        const abortTimer = ctrl ? setTimeout(() => ctrl.abort(), SERVER_FETCH_TIMEOUT) : 0;
+        try {
+          const res = await W.fetch(`${base}/tts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, voice, rate }),
+            signal: ctrl ? ctrl.signal : undefined
+          });
+          if (!res.ok) {
+            let detail = "";
+            try {
+              const j = await res.json();
+              detail = j && j.error ? ` ${j.error}` : "";
+            } catch (e) { /* 非 JSON 错误体不深究 */ }
+            const err = new Error(`tts http ${res.status}${detail}`);
+            err.status = res.status;
+            throw err;
+          }
+          const blob = await res.blob();
+          return W.URL.createObjectURL(blob);
+        } catch (e) {
+          lastErr = e;
+          const transient = !!(e && e.name === "TypeError");
+          if (!transient || attempt + 1 >= SERVER_FETCH_ATTEMPTS) throw e;
+          console.info("server tts 网络层失败，重试一次:", e.message);
+          await new Promise((r) => setTimeout(r, SERVER_RETRY_BACKOFF));
+        } finally {
+          if (abortTimer) clearTimeout(abortTimer);
         }
-        const blob = await res.blob();
-        return W.URL.createObjectURL(blob);
-      } finally {
-        if (abortTimer) clearTimeout(abortTimer);
       }
+      throw lastErr;
     }
 
     // ---------- provider 实现（统一 available / speak / stop） ----------
@@ -453,7 +509,8 @@ const TTS = (() => {
           const u = new W.SpeechSynthesisUtterance(text);
           u.lang = "zh-CN";
           u.rate = RATE[cfg && cfg.ttsRate] || RATE.normal;
-          u.pitch = 1.15;
+          // 1.15 会让系统音听起来更尖、更像播报；1.06 只抬一点点
+          u.pitch = 1.06;
           const finish = settleOnce(onFrame, onEnd);
           u.onend = finish;
           u.onerror = () => { noteFailure("browser", "browser_error"); finish(); };
@@ -473,14 +530,14 @@ const TTS = (() => {
       }
     };
 
-    /** 自建语音服务（默认关闭；请求失败只降级，不打扰用户） */
+    /** 自建语音服务（地址解析见 serverBase；请求失败只降级，不打扰用户） */
     const serverProvider = {
       id: "server",
       available(cfg) {
         const c = cfg || loadCfg();
         const injected = normalizeBase(W.XIAOMAN_TTS_SERVER);
         if (injected) return true;
-        return c.tts === "server" && !!normalizeBase(c.ttsServer);
+        return c.tts === "server" && !!serverBase(W, c);
       },
       async speak(text, opts) {
         const { cfg, onFrame, onEnd, gen } = opts || {};
@@ -705,7 +762,9 @@ const TTS = (() => {
     _speechLevel: speechLevel,
     _charMs: CHAR_MS,
     /** 单测入口：注入 fake window 造独立引擎（不触碰真实浏览器/音频） */
-    _create: createEngine
+    _create: createEngine,
+    /** 设置页 / 诊断用：真实生效的服务端地址（与 provider 判定同一套规则） */
+    resolveServer: (win, cfg) => serverBase(win, cfg)
   });
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof window !== "undefined") window.TTS = api;

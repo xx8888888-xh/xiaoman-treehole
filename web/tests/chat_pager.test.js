@@ -29,8 +29,10 @@ function setup(opts = {}) {
   typing.className = "msg-row hidden";
   host.appendChild(typing);
   const scroll = doc.createElement("div");
-  Pager.mount(Object.assign({ host, typing, scroll, build, doc }, opts));
-  return { doc, host, typing, scroll };
+  const jump = doc.createElement("button");
+  jump.className = "jump-bottom hidden";
+  Pager.mount(Object.assign({ host, typing, scroll, build, doc, jump }, opts));
+  return { doc, host, typing, scroll, jump };
 }
 
 function pushN(p, n, from = 0) {
@@ -86,6 +88,21 @@ test("向上翻页：节点数不变，窗口前移，能回到更早的消息",
   assert.equal(countNodes(host), before);
 });
 
+test("整页重建后句柄 el 指向新节点（逐字 paint 不会写到已脱离文档的旧节点）", () => {
+  const { host } = setup();
+  pushN(Pager, 3);
+  const h = Pager.push({ text: "先说半句", who: "them" });
+  const old = h.el;
+  assert.ok(old, "push 后应有节点");
+  Pager.jumpLatest();                       // 整页重建（bottom）
+  assert.notEqual(h.el, old, "重建必须把句柄指向新节点");
+  assert.ok(host.findAll("msg-row").includes(h.el), "句柄节点应仍在文档里");
+  h.rec.text = "先说半句，再补后半句";       // 重建后才到达的增量（流式收尾）
+  const bubble = h.el.children[0];
+  bubble.textContent = h.rec.text;
+  assert.equal(h.el.children[0].textContent, "先说半句，再补后半句");
+});
+
 test("翻页占位不闪烁：同一条占位节点从等待到完成始终在原地", async () => {
   let release = null;
   const { host } = setup({
@@ -95,7 +112,11 @@ test("翻页占位不闪烁：同一条占位节点从等待到完成始终在�
   const barBefore = host.children[0];
   const pending = Pager.older();
   assert.equal(host.children[0], barBefore, "占位节点未被重建");
-  assert.equal(barBefore.textContent, "正在翻出更早的消息…");
+  // 加载中是骨架（三条静态占位线），不再是文字；语义走 aria-label
+  assert.ok(barBefore.className.includes("is-loading"));
+  assert.equal(barBefore.findAll("sk-line").length, 3, "骨架三条线");
+  assert.equal(barBefore.getAttribute("aria-busy"), "true");
+  assert.equal(barBefore.getAttribute("aria-label"), "正在翻出更早的消息");
   assert.equal(barBefore.className.includes("hidden"), false);
   release(Array.from({ length: 10 }, (_, i) => ({ text: `old${i}`, who: "them" })));
   await pending;
@@ -129,6 +150,38 @@ test("用户翻历史时新消息不打断：只提示条数，回到底部才�
   assert.equal(Pager.stats().start, 19);
   const texts = rowTexts(host);
   assert.equal(texts[texts.length - 1], "m32");
+});
+
+test("回到底部浮钮：上翻出现、新消息带条数、点击回底后收起", () => {
+  const { scroll, jump } = setup();
+  pushN(Pager, 30);
+  assert.equal(jump.className.includes("hidden"), true, "跟随最新时浮钮隐藏");
+  // 用户滚到历史中段（离底 500px）
+  scroll.scrollHeight = 1200;
+  scroll.clientHeight = 400;
+  scroll.scrollTop = 300;
+  scroll.onscroll();
+  assert.equal(jump.className.includes("hidden"), false, "上翻历史后浮钮出现");
+  assert.equal(jump.getAttribute("aria-label"), "回到最新消息");
+  pushN(Pager, 3, 30);   // 上翻期间来 3 条新消息：浮钮不消失，条数写进 aria-label
+  assert.equal(jump.className.includes("hidden"), false, "新消息不打断阅读");
+  assert.equal(jump.getAttribute("aria-label"), "回到最新消息（3 条新消息）");
+  jump.onclick();
+  assert.equal(jump.className.includes("hidden"), true, "回底后自动收起");
+  assert.equal(Pager.stats().last, "m32");
+});
+
+test("短会话（<=VIEW）上翻后新消息：底栏与浮钮按未渲染条数提示", () => {
+  const { host, scroll, jump } = setup();
+  pushN(Pager, 3);
+  const bottomBar = host.findAll("window-tip").pop();
+  scroll.scrollHeight = 900;
+  scroll.clientHeight = 400;
+  scroll.scrollTop = 100;
+  scroll.onscroll();
+  pushN(Pager, 1, 3);
+  assert.equal(bottomBar.textContent, "↓ 1 条新消息", "新消息未进窗口，条数不能算成 0");
+  assert.equal(jump.getAttribute("aria-label"), "回到最新消息（1 条新消息）");
 });
 
 test("markVoice 写回记录：滑出窗口后重新渲染仍带「语音已播」", async () => {

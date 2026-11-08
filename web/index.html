@@ -73,6 +73,10 @@
         </div>
       </div>
     </div>
+    <!-- 回到底部浮钮：0 高锚点贴在对话区底部，按钮浮在状态条/输入栏上方，不占文档流 -->
+    <div class="jump-anchor">
+      <button class="jump-bottom hidden" id="jumpBottom" type="button" aria-label="回到最新消息">↓</button>
+    </div>
     <div class="hook-bar hidden" id="hookBar"></div>
     <!-- 状态区统一收在一列：可操作的错误在上，环境旁白在下 -->
     <div class="status-stack" id="statusStack">
@@ -171,13 +175,14 @@
         </label>
         <p class="mini" id="ttsHint" role="status" aria-live="polite"></p>
         <label class="field"><span>语音服务地址</span>
-          <input id="cfgTtsBase" type="url" inputmode="url" placeholder="http://127.0.0.1:8903">
+          <input id="cfgTtsBase" type="url" inputmode="url" placeholder="留空＝自动（对话后端同机 :8903）">
         </label>
+        <p class="mini">留空时：对话后端填的是内网地址，语音就会自动用同一台机器的 8903 端口；也可以直接填 <code>http://192.168.1.5:8903</code>。一条命令起服务：<code>bash scripts/start_tts.sh</code>。</p>
         <label class="field"><span>说话音色</span>
           <select id="cfgVoice">
             <option value="zh-CN-XiaoyiNeural">小艺 · 元气少女</option>
-            <option value="zh-CN-XiaoxiaoNeural">小晓 · 温柔御姐</option>
-            <option value="zh-CN-XiaoyuanNeural">小圆 · 甜妹</option>
+            <option value="zh-CN-XiaoxiaoNeural">小晓 · 温柔轻语</option>
+            <option value="zh-CN-shaanxi-XiaoniNeural">小妮 · 软糯</option>
           </select>
         </label>
         <p class="mini" id="voiceHint">音色只在「服务端语音」真正出声时生效；本机语音使用系统音色。</p>
@@ -287,7 +292,9 @@
 <script src="js/time_divider.js"></script>
 <script src="js/greet_day.js"></script>
 <script src="js/chat_pager.js"></script>
+<script src="js/stream_typer.js"></script>
 <script src="js/voice_tip.js"></script>
+<script src="js/trunc_log.js"></script>
 <script src="js/resilience.js"></script>
 <script src="js/app.js"></script>
 </body>
