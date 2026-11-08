@@ -2,14 +2,21 @@
   [double]$LimitPercent = 30.0,
   [int]$GraceSeconds = 120,
   [int]$IntervalSeconds = 2,
-  [string]$LogPath = 'D:\android-avd\watchdog.log'
+  [string]$LogPath = 'D:\android-avd\watchdog.log',
+  [switch]$DryRun
 )
 $ErrorActionPreference = 'Continue'
 $stopFile = 'D:\android-avd\watchdog.stop'
 $pidFile = 'D:\android-avd\watchdog.pid'
+$cores = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+
+if ($DryRun) {
+  "LIMIT=on threshold=$LimitPercent% grace=${GraceSeconds}s interval=${IntervalSeconds}s cores=$cores start_window=21:00-06:00 log=$LogPath"
+  exit 0
+}
+
 Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
 $PID | Set-Content -LiteralPath $pidFile -Encoding UTF8
-$cores = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 
 function Write-Log([string]$msg) {
   "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff') $msg" | Add-Content -LiteralPath $LogPath -Encoding UTF8
@@ -23,28 +30,14 @@ function Get-EmuGroup {
   return @($all) + @($extra)
 }
 
-$timeMod = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'emu_timewindow.ps1'
-if (-not (Test-Path -LiteralPath $timeMod)) { $timeMod = 'D:\android-avd\emu_timewindow.ps1' }
-# 收口：时间窗模块缺失时一律不启动（fail closed）。否则 $limitOff 为空 → 会按 30% 上限
-# 在免限时窗（21:00-06:00）里误杀满负荷的模拟器。
-if (-not (Test-Path -LiteralPath $timeMod)) {
-  Write-Log "REFUSE time window module missing ($timeMod) -> watchdog exit (fail closed)"
-  Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
-  exit 2
-}
-. $timeMod
-
-# 时间窗状态：21:00-06:00 LIMIT=off（不采样不杀），其余 LIMIT=on
-$limitOff = Test-QuietWindow (Get-Date)
+# 策略（2026-11-08 定稿）：30% 硬线始终生效，不再有 21:00-06:00 免限窗口。
+# 启动时段限制由 avd_local.ps1 负责；本看门狗只负责按阈值击杀。
+$limitLabel = 'LIMIT=on'
 $mono = [Diagnostics.Stopwatch]::StartNew()
-$lastWall = Get-Date
 $lastMono = 0.0
-$candidate = $null
-$candidateCount = 0
 
-Write-Log "watchdog start limit=$LimitPercent% grace=${GraceSeconds}s interval=${IntervalSeconds}s cores=$cores window=21:00-06:00 state=$(Get-LimitLabel (Get-Date))"
+Write-Log "watchdog start limit=$LimitPercent% grace=${GraceSeconds}s interval=${IntervalSeconds}s cores=$cores state=$limitLabel start_window=21:00-06:00"
 $prev = @{}
-$lastTick = Get-Date
 $peak = 0.0
 $groupStart = $null
 
@@ -52,47 +45,9 @@ while (-not (Test-Path -LiteralPath $stopFile)) {
   Start-Sleep -Seconds $IntervalSeconds
   $now = Get-Date
   $m = $mono.Elapsed.TotalSeconds
-  $wallDelta = ($now - $lastWall).TotalSeconds
-  $monoDelta = $m - $lastMono
-  $lastWall = $now
+  $dt = $m - $lastMono
   $lastMono = $m
-  if ($wallDelta -le 0) { $wallDelta = $IntervalSeconds }
-  $dt = $wallDelta
-  $lastTick = $now
-
-  # 时钟跳变：墙钟增量与单调时钟偏差 > 5s 时，本次不信任墙钟，保持原状态并重新确认
-  if ([math]::Abs($wallDelta - $monoDelta) -gt 5) {
-    Write-Log "clock jump wall_delta=$([math]::Round($wallDelta,1))s mono_delta=$([math]::Round($monoDelta,1))s -> keep $(Get-LimitLabel $now) state, re-confirm next samples"
-    $candidate = $null
-    $candidateCount = 0
-    $prev = @{}
-    $lastTick = $now
-    continue
-  }
-
-  $rawOff = Test-QuietWindow $now
-  if ($rawOff -ne $limitOff) {
-    if ($candidate -eq $rawOff) { $candidateCount++ } else { $candidate = $rawOff; $candidateCount = 1 }
-    # 连续 2 次采样一致才切换，单次跳变不会立刻改判
-    if ($candidateCount -ge 2) {
-      $limitOff = $rawOff
-      $candidate = $null
-      $candidateCount = 0
-      Write-Log "window switch -> $(Get-LimitLabel $now) (2 consecutive samples confirmed)"
-    }
-  } else {
-    $candidate = $null
-    $candidateCount = 0
-  }
-
-  if ($limitOff) {
-    # 免限时窗内：不采样、不杀
-    $prev = @{}
-    $peak = 0.0
-    $groupStart = $null
-    continue
-  }
-
+  if ($dt -le 0) { $dt = $IntervalSeconds }
   $group = Get-EmuGroup
   if ($group.Count -eq 0) {
     $prev = @{}
