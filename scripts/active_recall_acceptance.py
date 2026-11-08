@@ -16,6 +16,10 @@
   python scripts/active_recall_acceptance.py --reps 3 --verbose
   python scripts/active_recall_acceptance.py --json artifacts/active_recall_acceptance/report.json
 
+账本隔离：缺省每次运行写入独立目录
+  artifacts/active_recall_acceptance/runs/<时间戳>_reps<N>_seed<S>/report.json
+同 seed 复跑也不会覆盖上一次的取证；需要指定路径时再用 --json。
+
 说明：
   - 直接调用 server/mock_api.py 的 make_reply（fake 后端），不联网、不调用真实模型。
   - 窗口口径（主判据）：每套会话从 T1 起每 10 轮一窗，尾窗不足 10 轮按实际轮数算并标 partial，
@@ -1606,8 +1610,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--seed", type=int, default=20261108, help="随机种子基数")
     parser.add_argument(
         "--json",
-        default="artifacts/active_recall_acceptance/report.json",
-        help="报告 JSON 输出路径；传空字符串则不写文件",
+        default=None,
+        help="报告 JSON 输出路径；缺省写入 runs/<时间戳>_reps<N>_seed<S>/report.json；"
+        "传空字符串则不写文件",
     )
     parser.add_argument("--verbose", action="store_true", help="打印全部回带事件明细")
     args = parser.parse_args(argv)
@@ -1628,10 +1633,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     _print_console(report, verbose=args.verbose)
 
-    if args.json:
+    if args.json is None:
+        # 账本按 run 目录隔离：同 seed 复跑不再覆盖上一次的取证
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        base = REPO_ROOT / "artifacts/active_recall_acceptance/runs"
+        run_dir = base / f"{stamp}_reps{args.reps}_seed{args.seed}"
+        n = 1
+        while run_dir.exists():
+            n += 1
+            run_dir = base / f"{stamp}_reps{args.reps}_seed{args.seed}-{n}"
+        out = run_dir / "report.json"
+    elif args.json:
         out = Path(args.json)
         if not out.is_absolute():
             out = REPO_ROOT / out
+    else:
+        out = None
+
+    if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n报告已写入：{out}")
