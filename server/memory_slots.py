@@ -174,6 +174,41 @@ def mentioned_in_text(key: str, value: str, text: str) -> bool:
     return False
 
 
+NAMED_KEYS = ("昵称", "宠物", "老板", "家人", "室友")
+
+
+def named_values(pairs, text: str) -> list:
+    """本轮用户亲口点名的实体记忆值（[(key, 值显示)]）。
+
+    只认结构里真实存在的值：实体槽整值（≥2 字）；宠物按条目名字（≥2 字）。
+    泛指“猫/狗”不算点名（那不是名字），也不按物种词表去猜。
+    用途：生成后的确定性校验（用户点名了，回复就必须出现），不是提示词请求。
+    """
+    text = text or ""
+    out, seen = [], set()
+    for key, value in (pairs or []):
+        if key not in NAMED_KEYS:
+            continue
+        v = str(value or "").strip()
+        if not v:
+            continue
+        if key == "宠物":
+            for e in _pet_entries(v):
+                name = str(e.get("name") or "").strip()
+                if len(name) >= 2 and not _pet_generic(name) and name in text:
+                    if name not in seen:
+                        seen.add(name)
+                        out.append((key, name))
+            continue
+        # 基词/别名（"老板""加班"这类）不是"点名"，避免把普通词硬插进回复
+        if v == key or v in TOPIC_ALIASES.get(key, ()):
+            continue
+        if len(v) >= 2 and v in text and v not in seen:
+            seen.add(v)
+            out.append((key, v))
+    return out
+
+
 def _clean_name(v: str) -> str:
     for suf in _NAME_SUFFIX:
         if v.endswith(suf) and len(v) > len(suf):
@@ -240,6 +275,59 @@ def _pet_display(value: str) -> str:
         else:
             parts.append(name or sp)
     return "、".join(p for p in parts if p)
+
+
+def text_species(text: str) -> set:
+    """本轮文本提到的物种（与槽位共用同一张物种表；「兔子」命中后不再重复计「兔」）。"""
+    t = text or ""
+    out = {w for w in _PET_SPECIES_WORDS if w in t}
+    if "兔子" in out:
+        out.discard("兔")
+    return out
+
+
+def species_label(text: str) -> str:
+    """把文本里的物种归一成可落盘的字符串（供 mock 这类扁平结构保存物种字段）。"""
+    found = text_species(text)
+    return "、".join(w for w in _PET_SPECIES_WORDS if w in found)
+
+
+def pet_species(value: str) -> set:
+    """从槽位结构取物种，不猜：
+    - 带名字的条目取「物种：名字」的物种段（产品的结构化物种字段）；
+    - 只有泛称（没有名字）的条目，值本身即物种（“狗”“养只狗”）；
+    - 具体名字但没有物种段（“年糕”“橘猫”）→ 空集：结构里没有物种信息。
+    """
+    out = set()
+    for e in _pet_entries(value):
+        sp = str(e.get("species") or "").strip()
+        if sp:
+            out |= text_species(sp)
+            continue
+        name = str(e.get("name") or "").strip()
+        if name and _pet_generic(name):
+            out |= text_species(name)
+    return out
+
+
+def pet_specific(value: str) -> bool:
+    """槽里是否有具体名字（泛称“猫/狗/养只狗”不算）——泛称不是“记得你”，不该主动回带。"""
+    return any(_pet_specific(e) for e in _pet_entries(value))
+
+
+def pet_species_mismatch(value: str, text: str, species_hint: str = "") -> bool:
+    """槽位物种与用户本轮物种对不上 → True。
+
+    species_hint 供扁平结构（如 mock 的会话级物种字段）补充物种；
+    任一侧没有物种信息时返回 False：无法判定就不误杀，也绝不凭空补一个物种。
+    """
+    slot_sp = pet_species(value)
+    if not slot_sp and species_hint:
+        slot_sp = text_species(species_hint)
+    user_sp = text_species(text)
+    if not slot_sp or not user_sp:
+        return False
+    return not (slot_sp & user_sp)
 
 
 def _merge_pet_value(existing: dict, value: str, source: str) -> str:
@@ -997,6 +1085,11 @@ class SlotStore:
             # 敏感槽门控：用户本轮没主动提这一领域（如只说"考试好难"）就整条跳过
             picks = [s for s in picks
                      if is_invited(s["key"], s.get("value") or "", query)]
+            # 宠物物种门控：用户本轮聊猫、槽里是狗 → 这条宠物不回带（按槽位物种判，
+            # 物种未知时放行，见 pet_species_mismatch）
+            picks = [s for s in picks
+                     if not (s.get("key") == "宠物"
+                             and pet_species_mismatch(s.get("value") or "", query))]
             if touch:
                 ids = {s["id"] for s in picks}
                 for s in slots:

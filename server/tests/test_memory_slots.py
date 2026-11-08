@@ -424,5 +424,59 @@ class SensitiveGateTest(unittest.TestCase):
         self.assertTrue(ms.is_invited("老板", "张三", "考试好难"))
 
 
+class PetSpeciesTest(unittest.TestCase):
+    """W24 宠物物种：从槽位结构取物种（带名字取「物种：名字」的物种段；泛称值本身即物种）。"""
+
+    def test_species_from_slot_structure(self):
+        self.assertEqual(ms.pet_species("猫：年糕"), {"猫"})
+        self.assertEqual(ms.pet_species("狗：煤球"), {"狗"})
+        self.assertEqual(ms.pet_species("养只狗"), {"狗"})
+        self.assertEqual(ms.pet_species("年糕"), set(),
+                         "具体名字但没有物种段 → 结构里没有物种信息")
+
+    def test_mismatch_only_when_both_sides_known(self):
+        self.assertTrue(ms.pet_species_mismatch("猫：年糕", "想养只狗"))
+        self.assertFalse(ms.pet_species_mismatch("猫：年糕", "猫粮还没买"))
+        self.assertFalse(ms.pet_species_mismatch("年糕", "想养只狗"),
+                         "结构里没有物种 → 不误杀，也不凭空补一个")
+
+    def test_hint_supplies_missing_species(self):
+        """扁平结构（mock）：物种单独存在会话字段，补上后才判。"""
+        self.assertTrue(ms.pet_species_mismatch("年糕", "想养只狗", "猫"))
+        self.assertFalse(ms.pet_species_mismatch("年糕", "猫粮还没买", "猫"))
+
+    def test_specific_only(self):
+        self.assertTrue(ms.pet_specific("年糕"))
+        self.assertFalse(ms.pet_specific("养只狗"))
+        self.assertFalse(ms.pet_specific("猫"))
+
+    def test_recall_filters_mismatched_pet(self):
+        store = ms.SlotStore()
+        sid = "pet-species-recall"
+        store.ingest(sid, "我家猫叫年糕")
+        self.assertNotIn("宠物",
+                         [s["key"] for s in store.recall(sid, "狗粮还没买")])
+        self.assertIn("宠物",
+                      [s["key"] for s in store.recall(sid, "猫粮还没买")])
+
+
+class NamedValueTest(unittest.TestCase):
+    """W24 点名判定：只认结构里真实存在的具体值；泛指/基词不算点名。"""
+
+    def test_pet_name_counts_only_by_name(self):
+        self.assertEqual(ms.named_values([("宠物", "猫：年糕")], "你说年糕是不是欠揍"),
+                         [("宠物", "年糕")])
+        self.assertEqual(ms.named_values([("宠物", "养只狗")], "想养只狗"), [])
+        self.assertEqual(ms.named_values([("宠物", "猫：年糕")], "它今天干嘛了"), [])
+
+    def test_base_word_is_not_a_name(self):
+        self.assertEqual(ms.named_values([("老板", "老板")], "老板今天又发火"), [])
+        self.assertEqual(ms.named_values([("老板", "张三")], "张三今天又发火"),
+                         [("老板", "张三")])
+
+    def test_non_entity_keys_ignored(self):
+        self.assertEqual(ms.named_values([("状态", "失眠")], "失眠好难受"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

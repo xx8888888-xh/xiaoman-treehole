@@ -160,7 +160,7 @@ def test_same_turn_control_still_recalls():
 
 
 def test_same_turn_pet_name_suppressed():
-    """W23：宠物槽按名字判同轮复述（值存"猫：年糕"，用户说"年糕"也算已说过）。"""
+    """W23：宠物槽按名字判同轮复述（值存宠物名"年糕"，用户说"年糕"也算已说过）。"""
     sid = "w23-same-turn-pet"
 
     def say(text):
@@ -171,3 +171,62 @@ def test_same_turn_pet_name_suppressed():
     say("开了三个会")
     out = say("年糕又在拆家了")
     assert "年糕" not in (out.get("hook") or ""), "宠物名已说过应抑制：%r" % out
+
+
+def test_pet_species_mismatch_not_recalled():
+    """W24 物种门控：槽里是猫（年糕），用户本轮聊狗 → 不许回"你家猫年糕呢"。"""
+    sid = "w24-pet-species-mismatch"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("我家猫叫年糕")
+    say("今天工作好多")
+    say("开了三个会")
+    out = say("狗粮还没买")
+    assert "年糕" not in (out.get("hook") or ""), "物种对不上不该回带：%r" % out
+    assert "年糕" not in out["reply"], "回复里也不该忽然提猫：%r" % out
+
+
+def test_pet_species_match_still_recalls():
+    """对照：同物种（猫）→ 照常回带，物种门控不误杀。"""
+    sid = "w24-pet-species-match"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("我家猫叫年糕")
+    say("今天工作好多")
+    say("开了三个会")
+    out = say("猫粮还没买")
+    assert "年糕" in (out.get("hook") or ""), "同物种应照常回带：%r" % out
+
+
+def test_generic_pet_value_not_recalled():
+    """W24 泛指不回流：槽里只有物种（"养只狗"）、没有名字 → 不回头问"你家养只狗呢"。"""
+    sid = "w24-pet-generic"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("想养只狗")
+    say("今天工作好多")
+    say("开了三个会")
+    out = say("狗粮还没买")
+    assert "养只狗" not in (out.get("hook") or ""), "泛指值不该回带：%r" % out
+
+
+def test_dog_mentioned_without_dog_memory_no_fabrication():
+    """反例：只提到"狗"、记忆里没有狗 → 不许凭空造一只，也不许把猫说成狗。"""
+    sid = "w24-pet-dog-negative"
+
+    def say(text):
+        return mock_api.make_reply([{"role": "user", "content": text}], sid)
+
+    say("我家猫叫年糕")
+    for text in ("狗粮还没买", "楼下那只狗又叫了"):
+        out = say(text)
+        blob = out["reply"] + "||" + (out.get("hook") or "")
+        assert "养只狗" not in blob, "不许凭空造一只狗：%r" % out
+        assert "你家狗" not in blob, "不许把没记忆的狗当既有事实：%r" % out
+

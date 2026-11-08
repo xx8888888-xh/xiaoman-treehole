@@ -543,6 +543,17 @@ def _pick_recall(memories, mem_updates, topic, user_text, sess, turn):
         # "你上次说失眠"就是复读，且白占 RECALL_MAX 名额。
         if memory_slots.mentioned_in_text(k, memories.get(k) or "", user_text):
             continue
+        if k == "宠物":
+            pet_value = memories.get(k) or ""
+            # 泛指（只有物种没有名字）不是"记得你"：回带只会产出"你家养只狗呢"
+            if not memory_slots.pet_specific(pet_value):
+                continue
+            # 物种门控：用户本轮聊猫、槽里是狗 → 不回带。按槽位物种判；
+            # 结构里没有物种信息时放行（不猜、也不凭空补一个物种）。
+            if memory_slots.pet_species_mismatch(
+                    pet_value, user_text,
+                    (sess.get("pet_species") or {}).get(k, "")):
+                continue
         ext = extracted.get(k)
         if ext is not None and turn - ext < RECALL_EXTRACT_GAP:
             continue  # 闸门0：提取后不足 2 轮，"你上次说"指向太近
@@ -1177,7 +1188,7 @@ def _norm_history(raw):
 
 _STATE_SCALARS = ("crisis_count", "depress_count", "turns", "recall_count", "mem_aware_ts")
 _STATE_BOOLS = ("depress_esc",)
-_STATE_DICTS = ("memories", "memory_hits", "risk_state")
+_STATE_DICTS = ("memories", "memory_hits", "risk_state", "pet_species")
 _STATE_LISTS = ("told_v", "mem_extracted", "recent_replies")
 
 
@@ -1220,7 +1231,7 @@ class _State:
     _RESTORE_KEYS = (
         "last_topic", "memories", "crisis_count", "depress_count", "depress_esc",
         "turns", "told_v", "memory_hits", "mem_extracted", "recall_count",
-        "recent_replies", "mem_aware_ts", "risk_state",
+        "recent_replies", "mem_aware_ts", "risk_state", "pet_species",
     )
 
     def __init__(self):
@@ -1560,6 +1571,65 @@ def _guard_result_flow(result, session_id):
     return result
 
 
+def _named_memory_pairs(session_id):
+    """当前会话里的实体记忆 (key, 值) 候选；墓碑值直接排除（点名也不许复活）。"""
+    pairs = []
+    if _SLOTS:
+        for s in _SLOTS.all(session_id):
+            pairs.append((str(s.get("key") or ""), str(s.get("value") or "")))
+        dead = set()
+        for it in _SLOTS.forgotten_items(session_id):
+            dead.update([str(it.get("value") or "")]
+                        + [str(a) for a in (it.get("aliases") or [])])
+        dead.discard("")
+        if dead:
+            pairs = [(k, v) for k, v in pairs if not any(t in v for t in dead)]
+    for k, v in (_STATE.get_memories(session_id) or {}).items():
+        pairs.append((str(k), str(v or "")))
+    return pairs
+
+
+def _ensure_named_echo(result, user_text, session_id):
+    """生成后置校验：本轮用户唯一点名的实体记忆，回复里必须出现该值。
+
+    不靠提示词"请记得叫名字"（那种靠模型自觉的写法会失效）：这里对成品做确定性
+    检查，缺失就换用记忆感知模板（重试）/ 前置呼应（替换）。
+    边界：一轮点了多条（自我介绍轮）不强行选一条；没点名或没这条不动；
+    删除/拒绝轮不动（用户正说"忘了/别提"）；危机话术逐字保留。
+    """
+    if not isinstance(result, dict) or not user_text or not session_id:
+        return result
+    if result.get("crisis") or result.get("risk_level"):
+        return result
+    if DELETE_RE.search(user_text) or TALK_REFUSAL_RE.search(user_text):
+        return result
+    reply = result.get("reply")
+    if not isinstance(reply, str) or not reply.strip():
+        return result
+    named = memory_slots.named_values(_named_memory_pairs(session_id), user_text)
+    if len(named) != 1:
+        return result
+    key, value = named[0]
+    if value in reply:
+        return result
+    sess = _STATE.get_session(session_id) or {}
+    pool = MEM_AWARE_POOL.get(key) or ()
+    out = dict(result)
+    if pool:
+        # 重试：改走记忆感知模板（必含 {v}），并沿用会话内"没用过"的去重口径，
+        # 避免每轮同句把"点名"变成复读机。
+        recent = sess.get("recent_replies") or []
+        cands = [t.replace("{v}", value) for t in pool
+                 if t.replace("{v}", value) not in recent]
+        out["reply"] = random.choice(cands or [t.replace("{v}", value) for t in pool])
+        recent.append(out["reply"])
+        if len(recent) > 8:
+            del recent[0]
+    else:
+        out["reply"] = "%s，%s" % (value, reply)
+    return out
+
+
 def guard_result(result, user_text, session_id=None):
     """对任何路径的回复做输出兜底（mock 模式也可能复读上游/模板里的危险肯定语）。
     content=null/空回复同样过闸：危机语境换成安全话术，其余给兜底句。"""
@@ -1576,12 +1646,14 @@ def guard_result(result, user_text, session_id=None):
         if level in ("high", "medium"):
             result["crisis"] = True
             result["risk_level"] = "high" if level == "high" else "medium"
-        return _guard_result_flow(result, session_id)
+        return _ensure_named_echo(
+            _guard_result_flow(result, session_id), user_text, session_id)
     fixed = risk_guard.filter_persona(reply, user_text)
     if fixed != reply:
         result = dict(result)
         result["reply"] = fixed
-    return _guard_result_flow(result, session_id)
+    return _ensure_named_echo(
+        _guard_result_flow(result, session_id), user_text, session_id)
 
 
 # ---------------- 核心回复逻辑 ----------------
@@ -1649,6 +1721,8 @@ def make_reply(messages, session_id=None):
             old.pop(k, None)
             dropped.append(k)
         sess = _STATE.get_session(session_id)
+        for k in dropped:
+            sess.setdefault("pet_species", {}).pop(k, None)
         sess["no_probe"] = 2
         reply = "行，删了。" if dropped else "行，不记了。"
         return {"reply": reply, "emotion": "flat", "motion": None,
@@ -1677,6 +1751,13 @@ def make_reply(messages, session_id=None):
     # 写回会话状态
     if mem_updates:
         _STATE.update_memories(session_id, mem_updates)
+    # 宠物物种字段：mock 的 memories 只存值（名字/泛指），物种信息在提取正则里
+    # 存在但会被丢掉 → 这里按提取轮文本把物种落到会话的 pet_species（槽位结构），
+    # 供回带前物种门控判；不改 memories 的值，判据口径仍是原值。
+    if mem_updates.get("宠物"):
+        sp = memory_slots.species_label(user_text)
+        if sp:
+            _STATE.get_session(session_id).setdefault("pet_species", {})["宠物"] = sp
 
     pool = TOPIC.get(topic, TOPIC["generic"])
     # W20：好消息按事件细分（抢到票 / 升职 / 中奖 / 瘦了…），别让"中奖"接"抢到票"
@@ -1806,8 +1887,10 @@ def make_reply(messages, session_id=None):
             reply = "%s，%s" % (name, reply)
         # 称呼不算 hook 回提，不占 RECALL_MAX 名额，只记冷却
         _STATE.get_session(session_id).setdefault("memory_hits", {})["昵称"] = turn
-    return {"reply": reply, "emotion": emo, "motion": motion,
-            "memory_updates": mem_updates, "hook": hook, "crisis": False}
+    return _ensure_named_echo({
+        "reply": reply, "emotion": emo, "motion": motion,
+        "memory_updates": mem_updates, "hook": hook, "crisis": False},
+        user_text, session_id)
 
 
 def _log_chat(route, mode, provider, model, ttfb_ms, first_token_ms,

@@ -94,33 +94,78 @@ class NameExtractionTest(unittest.TestCase):
 
 class MemoryAwareCooldownTest(unittest.TestCase):
     def test_user_mentions_respect_awareness_cooldown(self):
-        """记忆感知：写入轮当场接住，随后 2 轮静默，冷却满再提（与离线引擎同源）。
+        """用户只用"它"指代时走冷却：不刻意复读。
 
-        W20 曾把同键冷却放宽到 1 轮（"用户每轮主动提都必须逐字接住"），但这条口径
-        与 152 项验收（G11-2②/⑤② 冷却窗口内不刻意复读）和离线引擎的 3 轮口径
-        直接冲突，分支 CI 也是 150/152 红；合并时回到 3 轮契约，重复感交给模板去重。
+        用户自己点名的那一轮不受冷却压制——回复必须出现该值（生成后置校验，
+        见 NamedEchoGuardTest）。冷却只约束"用户没点名时要不要主动提"。
         """
         payloads = say("aware-cool", [
-            "我家猫叫年糕",          # 轮0 写入：当场接住
-            "你猜年糕在干嘛",        # 轮1 冷却：静默
-            "年糕今天拆家了",        # 轮2 冷却：静默
-            "年糕是不是欠揍",        # 轮3 冷却满：可再提
-            "年糕最近乖不乖",        # 轮4 再提后重新进冷却：静默
+            "我家猫叫年糕",            # 轮0 写入：当场接住
+            "你猜它在干嘛",            # 轮1 没点名：静默
+            "它今天拆家了",            # 轮2 没点名：静默
+            "你说的那个小家伙真欠揍",   # 轮3 没点名：仍不主动提
+            "它最近乖不乖",            # 轮4 没点名：仍不主动提
         ])
         self.assertIn("年糕", payloads[0]["reply"], "写入轮必须当场接住")
-        for i in (1, 2):
-            self.assertNotIn("年糕", payloads[i]["reply"], "冷却期不应连提（轮 %d）" % i)
-        self.assertIn("年糕", payloads[3]["reply"], "冷却结束后应可再提")
-        self.assertNotIn("年糕", payloads[4]["reply"], "再提之后重新进入冷却")
-        # 接住 ≠ 复读：允许出声的两轮不得整句相同，也不得同头 4 字
-        self.assertNotEqual(payloads[0]["reply"], payloads[3]["reply"])
-        self.assertNotEqual(payloads[0]["reply"][:4], payloads[3]["reply"][:4])
+        for i in (1, 2, 3, 4):
+            self.assertNotIn("年糕", payloads[i]["reply"],
+                             "没点名就不该连提（轮 %d）" % i)
 
     def test_greet_turn_skips_awareness(self):
         """开场引用不是用户主动提，不应烧冷却（既有守卫保持）。"""
         payload = mock_api.make_reply(
             [{"role": "user", "content": "在吗"}], fresh("aware-greet"))
         self.assertIsNotNone(payload["reply"])
+
+
+class NamedEchoGuardTest(unittest.TestCase):
+    """生成后置校验：本轮用户点名的记忆值必须出现在回复里（不靠提示词自觉）。"""
+
+    def test_named_value_echoes_even_in_cooldown(self):
+        payloads = say("named-echo", [
+            "我家猫叫年糕",
+            "你猜年糕在干嘛",      # 冷却期内，但用户点名
+            "年糕今天拆家了",
+            "年糕是不是欠揍",
+        ])
+        for i, p in enumerate(payloads):
+            self.assertIn("年糕", p["reply"], "用户点名第 %d 轮，回复必须出现该值" % i)
+
+    def test_unnamed_turn_does_not_force_name(self):
+        """反例：用户没点名（只说"它"）时不许强行插名字。"""
+        payloads = say("named-neg", ["我家猫叫年糕", "它今天把我杯子推下去了"])
+        self.assertNotIn("年糕", payloads[1]["reply"])
+
+    def test_guard_result_wraps_upstream_reply(self):
+        """上游/模型路径同样过闸：成品缺值 → 确定性替换。"""
+        sid = fresh("named-guard")
+        mock_api._STATE.update_memories(sid, {"宠物": "年糕"})
+        out = mock_api.guard_result(
+            {"reply": "它今天又拆家了", "hook": None}, "你说年糕是不是欠揍", sid)
+        self.assertIn("年糕", out["reply"])
+
+    def test_guard_result_keeps_unnamed_reply(self):
+        sid = fresh("named-guard-neg")
+        mock_api._STATE.update_memories(sid, {"宠物": "年糕"})
+        out = mock_api.guard_result(
+            {"reply": "它今天又拆家了", "hook": None}, "它今天又拆家了？", sid)
+        self.assertEqual(out["reply"], "它今天又拆家了")
+
+    def test_guard_result_does_not_pick_among_multiple_names(self):
+        """一轮点了多条（自我介绍轮）→ 不强行选一条插进回复。"""
+        sid = fresh("named-guard-multi")
+        mock_api._STATE.update_memories(sid, {"宠物": "年糕", "老板": "张三"})
+        out = mock_api.guard_result(
+            {"reply": "嗯。", "hook": None}, "年糕和张三今天都烦", sid)
+        self.assertEqual(out["reply"], "嗯。")
+
+    def test_guard_result_skips_forget_turn(self):
+        """用户正说"忘了"→ 不硬把名字塞回去。"""
+        sid = fresh("named-guard-del")
+        mock_api._STATE.update_memories(sid, {"宠物": "年糕"})
+        out = mock_api.guard_result(
+            {"reply": "行，不记了。", "hook": None}, "把年糕忘了吧", sid)
+        self.assertEqual(out["reply"], "行，不记了。")
 
 
 class HookPriorityTest(unittest.TestCase):
