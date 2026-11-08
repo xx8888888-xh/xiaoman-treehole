@@ -902,6 +902,65 @@ async def main():
               (back12["bg"], back12["text"]),
               guard="防止深色类被遗留在 body 上，后续用例/会话被串色")
 
+        # ---------- 13) 窄屏 ≤360px：输入栏、横向溢出、长文折行、浮钮 ----------
+        for w, h, tag in ((360, 640, "360x640"), (320, 568, "320x568")):
+            await pg.set_viewport_size({"width": w, "height": h})
+            await pg.wait_for_timeout(260)
+            await pg.evaluate("() => window.ChatPager.jumpLatest()")
+            # 等过程化回底的 800ms 窗口过去，后面 scrollTop=0 才会被当成"用户上翻"；
+            # 窗口内 onScroll 仍视作程序化滚动，pinned 保持 true，浮钮不会出现。
+            await pg.wait_for_timeout(900)
+            nm = await measure(pg)
+            docn = await pg.evaluate("""() => {
+              const s = document.getElementById('sendBtn'); const r = s.getBoundingClientRect();
+              const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+              return { cw: document.documentElement.clientWidth,
+                       sw: document.documentElement.scrollWidth,
+                       sendW: +r.width.toFixed(1), sendH: +r.height.toFixed(1),
+                       sendHit: !!el && (el === s || s.contains(el)),
+                       stageH: +document.getElementById('stage').getBoundingClientRect().height.toFixed(1) };
+            }""")
+            metrics[f"narrow_{tag}"] = {"m": nm, "doc": docn}
+            check(f"窄屏 {tag}：输入栏底边 <= 视口-8（{nm['inputbar']['b']} <= {h - 8}）",
+                  nm["inputbar"]["b"] <= h - 8, nm["inputbar"]["b"] - (h - 8),
+                  guard="防止窄屏把输入栏顶出视口，底部按钮点不到")
+            check(f"窄屏 {tag}：文档无横向溢出（{docn['sw']} <= {docn['cw']}）",
+                  docn["sw"] <= docn["cw"] + 1, (docn["sw"], docn["cw"]),
+                  guard="防止窄屏出现整页左右滑")
+            check(f"窄屏 {tag}：发送按钮可见可命中且 >= 44px",
+                  docn["sendHit"] and docn["sendW"] >= 44 and docn["sendH"] >= 44,
+                  docn, guard="防止窄屏挤压后发送键变成不可点的细条")
+            nwrap = await pg.evaluate("""() => {
+              const b = [...document.querySelectorAll('#messages .bubble')]
+                .find(x => x.textContent.startsWith('折行测试'));
+              const r = b.getBoundingClientRect(); const cs = getComputedStyle(b);
+              const s = document.getElementById('chatScroll');
+              return { w: +r.width.toFixed(1), h: +r.height.toFixed(1),
+                       cw: b.clientWidth, sw: b.scrollWidth,
+                       lh: parseFloat(cs.lineHeight) || 0,
+                       chatw: s.clientWidth };
+            }""")
+            check(f"窄屏 {tag}：长中文在更窄列里继续折行、不溢出",
+                  nwrap["w"] <= nwrap["chatw"] * 0.86 + 2
+                  and nwrap["sw"] <= nwrap["cw"] + 1
+                  and nwrap["h"] / nwrap["lh"] >= 6,
+                  nwrap, guard="防止窄屏沿用桌面气泡宽度，右侧文字被裁")
+            if w == 320:
+                check(f"窄屏 320：舞台兜底高度 >= 120（实测 {docn['stageH']}）",
+                      docn["stageH"] >= 120, docn["stageH"],
+                      guard="防止 320 宽把舞台压没，首屏只剩输入框")
+                await pg.evaluate("""() => { const s = document.getElementById('chatScroll');
+                  s.style.scrollBehavior = 'auto'; s.scrollTop = 0; }""")
+                await pg.wait_for_timeout(200)
+                jm = (await measure(pg))["jump"] or {}
+                check(f"窄屏 320：回底浮钮 44px、可命中、不压输入栏（overlap={jm.get('overlapInputbar')}）",
+                      bool(jm.get("visible")) and jm.get("hit")
+                      and (jm.get("rect") or {}).get("w", 0) >= 44
+                      and (jm.get("rect") or {}).get("h", 0) >= 44
+                      and not jm.get("overlapInputbar"),
+                      {k: jm.get(k) for k in ("visible", "hit", "rect", "overlapInputbar")},
+                      guard="防止窄屏浮钮被挤成小块或被输入栏盖住")
+
 
         await browser.close()
 
