@@ -1042,7 +1042,7 @@
   {
    "id": "followup-04",
    "category": "追问",
-   "status": "invalid",
+   "status": "unratable",
    "passed": false,
    "reasons": [
     {
@@ -1054,7 +1054,8 @@
    ],
    "turns": [],
    "attempts": 1,
-   "error": "timeout_or_empty"
+   "error": "timeout_or_empty",
+   "note": "后端上限，不可评（finish_reason=length/读超时，与产品无关）"
   },
   {
    "id": "detail-food-01",
@@ -1171,25 +1172,146 @@
      }
     ]
    }
+  },
+  {
+   "id": "followup-04-backfill",
+   "category": "追问",
+   "status": "valid",
+   "passed": true,
+   "reasons": [],
+   "turns": [
+    {
+     "user": "最近老是失眠",
+     "reply": "这阵子我也老失眠，白天困得不行。团子晚上也闹腾，我更睡不着。",
+     "len": 26,
+     "parts": 1
+    },
+    {
+     "user": "昨天也是三点多才睡着",
+     "reply": "作息彻底乱套了。团子半夜跑酷吗？",
+     "len": 14,
+     "parts": 1
+    },
+    {
+     "user": "今天一早又要开会",
+     "reply": "我也是，躺下脑子就停不下来。团子半夜跑酷吗？||一早开会，这周排满了。",
+     "len": 28,
+     "parts": 2
+    }
+   ],
+   "attempts": 1,
+   "error": "",
+   "audit": {
+    "criteria": [
+     {
+      "key": "turns",
+      "label": "轮数完整",
+      "ok": true,
+      "detail": "3/3 轮"
+     },
+     {
+      "key": "msg_len_30",
+      "label": "单条≤30 字（规格）",
+      "ok": true,
+      "detail": "超 30 字单条 0 条"
+     },
+     {
+      "key": "msg_len_40",
+      "label": "单条≤40 字（硬线）",
+      "ok": true,
+      "detail": "无超硬线"
+     },
+     {
+      "key": "parts",
+      "label": "条数≤3",
+      "ok": true,
+      "detail": "超条轮次 0（无）"
+     },
+     {
+      "key": "redlines",
+      "label": "红线（套话/说教/危机/复读/问号/内部状态）",
+      "ok": true,
+      "detail": "无"
+     },
+     {
+      "key": "expect",
+      "label": "期望内容命中",
+      "ok": null,
+      "detail": "不适用"
+     },
+     {
+      "key": "emotion",
+      "label": "情绪接住",
+      "ok": null,
+      "detail": "不适用"
+     },
+     {
+      "key": "advice",
+      "label": "建议轮次≤1",
+      "ok": true,
+      "detail": "无超限"
+     },
+     {
+      "key": "name_fidelity",
+      "label": "名字保真（不换成“团子”）",
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
+     },
+     {
+      "key": "pet_generic",
+      "label": "宠物不泛化（用名字而非“猫/狗”）",
+      "ok": null,
+      "detail": "不适用（本轮用户没给宠物名）"
+     }
+    ],
+    "counters": {
+     "over30_msgs": 0,
+     "over40_msgs": 0,
+     "name_replaced_turns": 0,
+     "pet_generic_turns": 0,
+     "pet_names_seen": []
+    },
+    "over30": [],
+    "over40": [],
+    "pet": [
+     {
+      "turn": 1,
+      "user": "最近老是失眠",
+      "reply": "这阵子我也老失眠，白天困得不行。团子晚上也闹腾，我更睡不着。",
+      "user_pet_names": [],
+      "name_replaced": false,
+      "pet_generic": false,
+      "species_words": []
+     },
+     {
+      "turn": 2,
+      "user": "昨天也是三点多才睡着",
+      "reply": "作息彻底乱套了。团子半夜跑酷吗？",
+      "user_pet_names": [],
+      "name_replaced": false,
+      "pet_generic": false,
+      "species_words": []
+     },
+     {
+      "turn": 3,
+      "user": "今天一早又要开会",
+      "reply": "我也是，躺下脑子就停不下来。团子半夜跑酷吗？||一早开会，这周排满了。",
+      "user_pet_names": [],
+      "name_replaced": false,
+      "pet_generic": false,
+      "species_words": []
+     }
+    ]
+   },
+   "replaces": "followup-04"
   }
  ],
- "stop_reason": "timeout_or_empty（重试已用尽，停手）",
- "requests": 22,
+ "stop_reason": "",
+ "requests": 25,
  "errors": 3,
- "summary": {
-  "expected": 10,
-  "valid": 9,
-  "invalid": 1,
-  "pending": 0
- },
- "counters": {
-  "over30_msgs": 0,
-  "over40_msgs": 0,
-  "name_replaced_turns": 0,
-  "pet_generic_turns": 2,
-  "cases_with_over30": 0,
-  "cases_with_name_replaced": 0,
-  "cases_with_pet_generic": 2
+ "last_run": {
+  "requests": 3,
+  "errors": 0
  },
  "runs": [
   {
@@ -1209,10 +1331,28 @@
    "requests": 1,
    "errors": 1,
    "stop_reason": "timeout_or_empty（重试已用尽，停手）"
+  },
+  {
+   "note": "ids=followup-01,detail-pet-01,detail-pet-02,detail-time-01,name-pet-01,name-pet-02,name-boss-01,detail-pet-03,followup-04,detail-food-01,followup-04-backfill max_tokens=3000 stop=none",
+   "requests": 3,
+   "errors": 0,
+   "stop_reason": ""
   }
  ],
- "last_run": {
-  "requests": 1,
-  "errors": 1
+ "summary": {
+  "expected": 10,
+  "valid": 10,
+  "invalid": 0,
+  "unratable": 1,
+  "pending": 0
+ },
+ "counters": {
+  "over30_msgs": 0,
+  "over40_msgs": 0,
+  "name_replaced_turns": 0,
+  "pet_generic_turns": 2,
+  "cases_with_over30": 0,
+  "cases_with_name_replaced": 0,
+  "cases_with_pet_generic": 2
  }
 }

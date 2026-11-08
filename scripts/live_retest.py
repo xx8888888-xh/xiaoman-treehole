@@ -10,7 +10,7 @@
 
 默认 10 例 = R7 那批 7 例（含 3 个名字用例）+ 3 例补长度/建议缺口。
 账本：artifacts/live_retest/r8_ledger.json
-  cases[] {id, category, status(valid|invalid|pending), passed, reasons[], turns[], attempts}
+  cases[] {id, category, status(valid|invalid|unratable|pending), passed, reasons[], turns[], attempts}
   summary {expected, valid, invalid, pending}
 
 口径：
@@ -38,11 +38,22 @@ import credentials  # noqa: E402
 FREE_MODEL = "dots-studio/dots-3-note-preview:free"
 BASE = "https://openrouter.ai/api/v1"
 LEDGER = ROOT / "artifacts" / "live_retest" / "r8_ledger.json"
-# R7 真实复测的 7 例（含 3 个名字用例）+ 3 例补 R7 未覆盖的长度/建议缺口
+# followup-04 两次都因后端输出上限拿不到可评内容，保留记录但不再重跑。
+UNRATABLE_IDS = ("followup-04",)
+# 补例：与 followup-04 同类别（追问）、同判据、同 3 轮结构，只用来补满 10 个可评例。
+BACKFILL_CASES = (
+    {"id": "followup-04-backfill", "category": "追问",
+     "replaces": "followup-04",
+     "turns": ["最近老是失眠", "昨天也是三点多才睡着", "今天一早又要开会"],
+     "criteria": "接住失眠的循环；最多一条具体建议，不每轮都劝早睡。",
+     "max_advice_turns": 1},
+)
+BACKFILL_ID = "followup-04-backfill"
+# R7 真实复测的 7 例（含 3 个名字用例）+ 3 例补 R7 未覆盖的长度/建议缺口 + 1 例替补
 DEFAULT_IDS = (
     "followup-01", "detail-pet-01", "detail-pet-02", "detail-time-01",
     "name-pet-01", "name-pet-02", "name-boss-01",
-    "detail-pet-03", "followup-04", "detail-food-01",
+    "detail-pet-03", "followup-04", "detail-food-01", BACKFILL_ID,
 )
 
 
@@ -60,6 +71,7 @@ def write_ledger(path: Path, cases: list, expected: int, stop_reason: str,
                  run_note: str = "", record_run: bool = True) -> dict:
     valid = sum(1 for c in cases if c.get("status") == "valid")
     invalid = sum(1 for c in cases if c.get("status") == "invalid")
+    unratable = sum(1 for c in cases if c.get("status") == "unratable")
     counters = {"over30_msgs": 0, "over40_msgs": 0, "name_replaced_turns": 0,
                 "pet_generic_turns": 0, "cases_with_over30": 0,
                 "cases_with_name_replaced": 0, "cases_with_pet_generic": 0}
@@ -93,7 +105,8 @@ def write_ledger(path: Path, cases: list, expected: int, stop_reason: str,
         "last_run": {"requests": requests, "errors": errors},
         "runs": runs,
         "summary": {"expected": expected, "valid": valid,
-                    "invalid": invalid, "pending": expected - valid - invalid},
+                    "invalid": invalid, "unratable": unratable,
+                    "pending": expected - valid - invalid},
         "counters": counters,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -313,9 +326,9 @@ def write_report(path: Path, payload: dict) -> None:
         "- 请求 %s / 错误 %s / 停手：%s" % (
             payload.get("requests", 0), payload.get("errors", 0),
             payload.get("stop_reason") or "无"),
-        "- 有效 %d/%d，无效 %d，待跑 %d" % (
-            s.get("valid", 0), s.get("expected", 0), s.get("invalid", 0),
-            s.get("pending", 0)),
+        "- 可评 %d/%d（有效 %d、无效 %d、待跑 %d），另有不可评 %d 例（后端上限，与产品无关）" % (
+            s.get("valid", 0), s.get("expected", 0), s.get("valid", 0),
+            s.get("invalid", 0), s.get("pending", 0), s.get("unratable", 0)),
         "",
         "## 三类计数（全账本合计）",
         "",
@@ -334,8 +347,17 @@ def write_report(path: Path, payload: dict) -> None:
         "## 逐例",
         "",
     ]
+    unratable = [x for x in payload.get("cases", [])
+                 if x.get("status") == "unratable"]
     missing = [x for x in payload.get("cases", [])
-               if x.get("status") != "valid"]
+               if x.get("status") not in ("valid", "unratable")]
+    if unratable:
+        lines += ["### 不可评案例（保留记录，不计失败、不重跑）", ""]
+        for x in unratable:
+            lines.append("- `%s`（%s）：status=unratable；%s" % (
+                x.get("id"), x.get("category"),
+                x.get("note") or "后端上限，不可评"))
+        lines.append("")
     if missing:
         lines += ["### 缺失案例（缺第三层证据，不用离线复算冒充）", ""]
         for x in missing:
@@ -344,6 +366,8 @@ def write_report(path: Path, payload: dict) -> None:
                 x.get("error") or x.get("reasons") or "未跑"))
         lines.append("")
     for x in payload.get("cases", []):
+        if x.get("status") == "unratable":
+            continue
         lines += ["### %s（%s）" % (x.get("id"), x.get("category")),
                   "",
                   "- status：%s；评测器结论：%s；尝试次数 %s" % (
@@ -412,34 +436,48 @@ def main() -> int:
 
     data = ev.load_cases(Path(args.cases))
     universal = data["universal"]
-    by_id = {c["id"]: c for c in data["cases"]}
+    by_id = {c["id"]: c for c in list(data["cases"]) + list(BACKFILL_CASES)}
     missing = [i for i in args.ids if i not in by_id]
     if missing:
         print("用例不存在：%s" % ", ".join(missing), file=sys.stderr)
         return 2
     cases = [by_id[i] for i in args.ids]
+    expected = sum(1 for i in args.ids if i not in UNRATABLE_IDS)
 
     out_path = Path(args.out)
     old = {"cases": []} if args.reset else load_ledger(out_path)
     prior = {c["id"]: c for c in old.get("cases", [])}
     records = {i: prior.get(i, {"id": i, "category": by_id[i]["category"],
+                                "replaces": by_id[i].get("replaces"),
                                 "status": "pending", "passed": False,
                                 "reasons": [], "turns": [], "attempts": 0})
                for i in args.ids}
+    for cid, rec in records.items():
+        if by_id[cid].get("replaces") and not rec.get("replaces"):
+            rec["replaces"] = by_id[cid]["replaces"]
     # 续跑时补算旧样本的逐项判据（不重发请求、不动已有全文）
     for cid, rec in records.items():
         if rec.get("status") == "valid" and rec.get("turns") and not rec.get("audit"):
             rec["audit"] = audit_case(by_id[cid], _record_result(rec), universal)
+    # followup-04：后端输出上限，保留记录、标成不可评，不再算失败、不再重跑
+    for cid in UNRATABLE_IDS:
+        rec = records.get(cid)
+        if rec and rec.get("status") != "valid" and rec.get("reasons"):
+            rec["status"] = "unratable"
+            rec["note"] = "后端上限，不可评（finish_reason=length/读超时，与产品无关）"
 
     if args.dry_run:
         print("== 断点复测计划（dry-run，不发请求） ==")
         for c in cases:
             r = records[c["id"]]
-            print("  %-16s %-6s %s" % (c["id"], c["category"],
+            print("  %-20s %-6s %s" % (c["id"], c["category"],
                                        r.get("status", "pending")))
-        print("  valid 已跳过 %d，待跑 %d，模型 %s"
-              % (sum(1 for r in records.values() if r.get("status") == "valid"),
-                 sum(1 for r in records.values() if r.get("status") != "valid"),
+        print("  可评目标 %d：已有效 %d，待跑 %d，不可评 %d，模型 %s"
+              % (expected,
+                 sum(1 for r in records.values() if r.get("status") == "valid"),
+                 sum(1 for i, r in records.items()
+                     if r.get("status") not in ("valid", "unratable")),
+                 sum(1 for r in records.values() if r.get("status") == "unratable"),
                  args.model))
         return 0
 
@@ -469,7 +507,11 @@ def main() -> int:
         cid = case["id"]
         rec = records[cid]
         if rec.get("status") == "valid":
-            print("[%d/%d] %-16s SKIP（已有有效样本）" % (idx, len(cases), cid),
+            print("[%d/%d] %-20s SKIP（已有有效样本）" % (idx, len(cases), cid),
+                  flush=True)
+            continue
+        if rec.get("status") == "unratable":
+            print("[%d/%d] %-20s SKIP（后端上限，不可评，保留记录）" % (idx, len(cases), cid),
                   flush=True)
             continue
         if stop_reason:
@@ -508,13 +550,13 @@ def main() -> int:
             wait = min(args.backoff_base * (2 ** (attempt - 1)), args.backoff_max)
             print("  …退避 %.0fs 后重试同一条" % wait, flush=True)
             time.sleep(wait)
-        write_ledger(out_path, [records[i] for i in args.ids], len(cases),
+        write_ledger(out_path, [records[i] for i in args.ids], expected,
                      stop_reason, args.model, backend.calls, backend.errors,
                      record_run=False)
         if stop_reason:
             break
 
-    payload = write_ledger(out_path, [records[i] for i in args.ids], len(cases),
+    payload = write_ledger(out_path, [records[i] for i in args.ids], expected,
                           stop_reason, args.model, backend.calls, backend.errors,
                           run_note="ids=%s max_tokens=%s stop=%s" % (
                               ",".join(args.ids), args.max_tokens,
