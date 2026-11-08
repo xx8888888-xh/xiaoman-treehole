@@ -639,6 +639,9 @@ class ApiBackend:
                         "_backend_error": "模型把 max_tokens 用在 reasoning，content 为空"}
             return {"reply": "", "hook": None, "_backend_error": last_err or "空响应"}
         payload = parse_model_json(raw)
+        # 同轮“把年糕忘了”：先落用户侧记忆（删槽→墓碑），输出侧才能拦住复读
+        if not payload.get("_parse_error"):
+            self.slots.ingest(self.sid, user)
         # 与产品输出兜底一致：ta 的宠物有具体名字时，回复里不许出现小满自己的猫名
         if isinstance(payload.get("reply"), str):
             names = self.slots.pet_names(self.sid) if self.slots else []
@@ -646,11 +649,13 @@ class ApiBackend:
                       if k == "宠物" and not self.memory_slots._pet_generic(v)]
             payload["reply"] = self.memory_slots.guard_own_pet_name(
                 payload["reply"], names)
+        # 生成后兜底：墓碑值/别名出现在哪个分句就删哪个分句
+        if isinstance(payload.get("reply"), str):
+            payload["reply"] = self.slots.scrub_reply(self.sid, payload["reply"])
         # 与产品输出兜底一致：客户端只按 || 切气泡，换行/超长单句要归一
         if isinstance(payload.get("reply"), str):
             payload["reply"] = self.risk_guard.reflow_messages(payload["reply"])
         if not payload.get("_parse_error"):
-            self.slots.ingest(self.sid, user)
             updates = payload.get("memory_updates")
             if isinstance(updates, dict) and updates:
                 self.slots.apply_updates(self.sid, updates, source="model")

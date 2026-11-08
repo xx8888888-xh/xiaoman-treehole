@@ -282,6 +282,13 @@ def _norm_target(t: str) -> str:
     return (t or "").strip().strip("的了呀吧啊哦的了")
 
 
+# 墓碑：用户说过“忘了/别记/删了”之后，值/唯一别名不再出现在候选与回复里。
+# 与槽文件分离落盘，只存 value + aliases + key + ts + reason，不存用户原句。
+TOMBSTONE_VERSION = 1
+_GENERIC_FORGET = {"猫", "狗", "它", "他", "她", "这个", "那个", "这件", "那件",
+                   "宠物", "东西", "事", "一下", "上面那个", "刚才说的"}
+
+
 def detect_deletions(text: str) -> list:
     """返回用户要求删除的记忆指代（值/类别/指代词）。'别忘了带钥匙'不算删除。"""
     text = text or ""
@@ -478,12 +485,57 @@ class SlotStore:
     def __init__(self, root: str | Path | None = None):
         self.root = Path(root) if root else None
         self._mem = {}
+        self._tomb = {}
         if self.root:
             self.root.mkdir(parents=True, exist_ok=True)
 
     # ---- 持久化 ----
     def _path(self, sid: str) -> Path:
         return self.root / ("slots-%s.json" % _sid_hash(sid))
+
+    def _tomb_path(self, sid: str) -> Path:
+        return self.root / ("suppress-%s.json" % _sid_hash(sid))
+
+    def _load_tomb(self, sid: str) -> list:
+        if sid in self._tomb:
+            return self._tomb[sid]
+        items = []
+        if self.root:
+            p = self._tomb_path(sid)
+            if p.exists():
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    raw = data.get("items") if isinstance(data, dict) else data
+                    for it in raw or []:
+                        if not isinstance(it, dict):
+                            continue
+                        value = str(it.get("value") or "").strip()
+                        if not value:
+                            continue
+                        items.append({
+                            "key": str(it.get("key") or ""),
+                            "value": value,
+                            "aliases": [str(a) for a in (it.get("aliases") or []) if str(a)],
+                            "ts": int(it.get("ts") or 0),
+                            "reason": str(it.get("reason") or "user_forget"),
+                        })
+                except (OSError, ValueError, TypeError):
+                    items = []  # 墓碑损坏按空处理，不阻断对话
+        self._tomb[sid] = items
+        return items
+
+    def _save_tomb(self, sid: str, items: list):
+        self._tomb[sid] = items
+        if not self.root:
+            return
+        p = self._tomb_path(sid)
+        tmp = p.with_suffix(".tmp")
+        payload = {"version": TOMBSTONE_VERSION, "updated": _now(), "items": items}
+        try:
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, p)
+        except OSError:
+            pass
 
     def _load(self, sid: str) -> list:
         if sid in self._mem:
@@ -653,7 +705,98 @@ class SlotStore:
             if sig not in seen:
                 seen.add(sig)
                 uniq.append(s)
+        if uniq:
+            self._record_forget(sid, uniq, targets)
         return uniq
+
+    def _record_forget(self, sid: str, removed: list, targets: list):
+        """删槽后写墓碑：只存 value + 用户亲口说过的唯一别名 + key/ts/reason。"""
+        items = self._load_tomb(sid)
+        now = _now()
+        for s in removed:
+            value = str(s.get("value") or "").strip()
+            if not value:
+                continue
+            aliases = set()
+            for t in targets:
+                if not t or t == "__last__" or t in _GENERIC_FORGET:
+                    continue
+                if t != value and t in value:
+                    aliases.add(t)
+            entry = {"key": str(s.get("key") or ""), "value": value,
+                     "aliases": sorted(aliases), "ts": now,
+                     "reason": "user_forget"}
+            items = [x for x in items
+                     if not (x["key"] == entry["key"] and x["value"] == value)]
+            items.append(entry)
+        self._save_tomb(sid, items)
+
+    def forgotten_items(self, sid: str) -> list:
+        with _LOCK:
+            return [dict(x) for x in self._load_tomb(sid)]
+
+    def _filter_tombstones(self, sid: str, slots: list) -> list:
+        """生成前过滤候选：命中墓碑的值/别名不进 system 记忆段。"""
+        items = self._load_tomb(sid)
+        if not items:
+            return slots
+        out = []
+        for s in slots:
+            if s.get("key") == "宠物":
+                entries = _pet_entries(s["value"])
+                alive = []
+                for e in entries:
+                    name = e["name"] or e["species"]
+                    hit = False
+                    for it in items:
+                        if it["key"] != "宠物":
+                            continue
+                        for t in [it["value"]] + it["aliases"]:
+                            if t and (t == name or (len(t) >= 2 and t in name)):
+                                hit = True
+                                break
+                        if hit:
+                            break
+                    if not hit:
+                        alive.append(e)
+                if not alive:
+                    continue
+                if len(alive) != len(entries):
+                    s = dict(s, value=_pet_value(alive))
+                out.append(s)
+                continue
+            dead = False
+            for it in items:
+                if it["key"] == "宠物":
+                    continue
+                for t in [it["value"]] + it["aliases"]:
+                    if t and (t == s["value"] or t in s["value"] or s["value"] in t):
+                        dead = True
+                        break
+                if dead:
+                    break
+            if not dead:
+                out.append(s)
+        return out
+
+    def scrub_reply(self, sid: str, reply: str) -> str:
+        """生成后兜底：命中墓碑值/别名的分句直接删掉；全删则返回空串。"""
+        if not reply:
+            return reply
+        toks = []
+        for it in self._load_tomb(sid):
+            toks.extend([it["value"]] + it["aliases"])
+        toks = [t for t in toks if t]
+        if not toks:
+            return reply
+        parts = []
+        for part in reply.split("||"):
+            segs = re.findall(r"[^。！？!?；;\n]+[。！？!?；;\n]?", part)
+            keep = [sg for sg in segs if not any(t in sg for t in toks)]
+            joined = "".join(keep).strip()
+            if joined:
+                parts.append(joined)
+        return "||".join(parts)
 
     def rename_pet(self, sid: str, name: str, text: str = "") -> dict | None:
         """同一只改口：'其实它叫年糕不是团子'。保留物种，只换名字。
@@ -699,6 +842,7 @@ class SlotStore:
                touch: bool = True) -> list:
         with _LOCK:
             slots = self._load(sid)
+            slots = self._filter_tombstones(sid, slots)
             now = _now()
             q_grams = _grams(query)
             if q_grams:

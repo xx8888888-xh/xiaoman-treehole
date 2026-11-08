@@ -1530,14 +1530,21 @@ def _guard_pet_text(text, session_id):
         return text
     if session_id and _SLOTS:
         text = memory_slots.guard_own_pet_name(text, _SLOTS.pet_names(session_id))
+        # 生成后兜底：墓碑值与别名在发送前就删掉（流式按已成形分句处理）
+        text = _SLOTS.scrub_reply(session_id, text)
     return risk_guard.reflow_messages(text)
 
 
 def _guard_result_flow(result, session_id):
-    """结果级兜底（mock 路径）：名字保真 + 分条归一。危机话术逐字保留，不重排。"""
+    """结果级兜底（mock 路径）：名字保真 + 墓碑过滤 + 分条归一。危机话术逐字保留。"""
     result = _guard_pet_name(result, session_id)
     if result.get("crisis") or result.get("risk_level"):
         return result
+    if session_id and _SLOTS and isinstance(result.get("reply"), str):
+        cleaned = _SLOTS.scrub_reply(session_id, result["reply"])
+        if cleaned != result["reply"]:
+            result = dict(result)
+            result["reply"] = cleaned
     fixed = risk_guard.reflow_messages(result.get("reply"))
     if fixed != result.get("reply"):
         result = dict(result)

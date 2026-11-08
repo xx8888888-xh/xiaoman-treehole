@@ -236,5 +236,65 @@ class PersistenceTest(unittest.TestCase):
             self.assertEqual(json.loads(p.read_text(encoding="utf-8"))["version"], 1)
 
 
+class TombstoneTest(unittest.TestCase):
+    """墓碑：删槽 → 独立落盘；候选过滤 + 回复分句扫描；只封值与唯一别名。"""
+
+    def test_forget_persists_separately_and_filters_candidates(self):
+        with tempfile.TemporaryDirectory() as d:
+            sid = "u-tomb"
+            s1 = ms.SlotStore(d)
+            s1.ingest(sid, "我家猫叫年糕")
+            removed = s1.delete_from_text(sid, "把年糕忘了")
+            self.assertEqual([s["value"] for s in removed], ["年糕"])
+            tomb = Path(d) / ("suppress-%s.json" % ms._sid_hash(sid))
+            self.assertTrue(tomb.exists())
+            raw = tomb.read_text(encoding="utf-8")
+            self.assertIn("年糕", raw)
+            self.assertNotIn("把年糕忘了", raw, "墓碑不许存原句")
+            items = s1.forgotten_items(sid)
+            self.assertEqual([(x["key"], x["value"]) for x in items],
+                             [("宠物", "年糕")])
+            # 新实例复载：墓碑仍在，候选被过滤
+            s2 = ms.SlotStore(d)
+            self.assertEqual(s2.forgotten_items(sid)[0]["value"], "年糕")
+            self.assertNotIn("宠物", [h["key"] for h in s2.recall(sid, "我家猫呢")])
+
+    def test_reingest_same_value_stays_hidden(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.upsert("u", "宠物", "年糕")
+            s.delete_from_text("u", "把年糕删了")
+            s.upsert("u", "宠物", "年糕")  # 又被提取回来
+            self.assertNotIn("年糕", [h["value"] for h in s.recall("u", "猫")])
+
+    def test_partial_pet_forget_keeps_other(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.ingest("u", "我家猫叫年糕")
+            s.ingest("u", "我家狗叫煤球")
+            s.delete_from_text("u", "把年糕删了")
+            hit = s.recall("u", "我家猫和狗")
+            self.assertEqual([h["value"] for h in hit if h["key"] == "宠物"],
+                             ["狗：煤球"])
+
+    def test_scrub_reply_drops_only_matching_clause(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.upsert("u", "宠物", "年糕")
+            s.delete_from_text("u", "把年糕忘了")
+            out = s.scrub_reply("u", "年糕又拆家了吧？||今天下雨了，你带伞没")
+            self.assertEqual(out, "今天下雨了，你带伞没")
+            # 泛称“猫”不封：不含墓碑值的句子原样保留
+            self.assertEqual(s.scrub_reply("u", "猫都爱拆家"),
+                             "猫都爱拆家")
+
+    def test_scrub_returns_empty_when_all_dropped(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.upsert("u", "宠物", "年糕")
+            s.delete_from_text("u", "把年糕忘了")
+            self.assertEqual(s.scrub_reply("u", "年糕今天特别乖。"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
