@@ -4,7 +4,7 @@
 
 ---
 
-## 2026-11-08 · assets 漂移收口 + 构建可溯源守卫 + 登记 Gradle 打包缺口
+## 2026-11-08 · assets 漂移收口 + 构建可溯源守卫 + Gradle 打包守卫补齐（本条下部为同日补齐结果）
 
 [2026-11-08 12:47] 动作 → 结果 → 触及文件
 
@@ -18,14 +18,28 @@
 2. `scripts/build_assets.sh` 加可溯源守卫：`git rev-parse HEAD` 拿不到时**报错退出**，不再写 `source_commit=null`。实测三种场景：坏 `.git`（`gitdir:` 指向不存在路径）→ 退出非零 + 中文报错且**不生成 manifest**；无 `.git` 目录 → 同样非零；本仓库在 WSL 下跑（正是 01:11 那次的真实成因）→ `RESULT=NONZERO`；正常仓库 Git Bash → `RESULT=EXIT0`，76 files / verify PASS（不误伤）。
 3. `android/README.md` 登记 Gradle 缺口：`./gradlew assembleDebug` / Android Studio 直接打包**不会**同步 `assets/www`，会把旧副本打进 APK；必须走 `build_apk.sh`。
 
-### 待办（**JDK / Android SDK 回来后**，本机已归档，故未改 Gradle、未测不写）
-- 在 `android/app/build.gradle.kts` 给 `preBuild` 挂一个 `Exec` 任务跑 `python3 scripts/verify_assets.py`（fail-fast：漂移即拒绝出包）；**方案即本条目 + `android/README.md` 的 ⚠ 段**，不要只依赖 CI。
-- 已确认不改 CI（`ci.yml`/`android-ci.yml` 等已各自先跑 `build_assets.sh` 再校验，CI 侧不缺这一环）。
+### 已解决（同日 14:3x 补齐，前置假设已被推翻：本机 JDK/SDK 可用）
+> 原「JDK / Android SDK 已归档」的判断有误：实测 `E:\dev\jdk-21`（Temurin 21.0.13）与 `D:\android-sdk`（platforms;android-34 + build-tools;34.0.0）均可用，`D:\gradle-home` 还有 Gradle 8.7 与 AGP 8.4.1 缓存，**因此本次是真跑验证，不是"只交配置"。**
+
+- 新增 `scripts/sync_assets.py`（纯标准库、跨平台）：`web/` → `assets/www` 清空重建（只清内容保留目录，compose bind mount 不失效）+ 生成 `ASSET_MANIFEST.json`（HEAD 不可解析即失败，与 `build_assets.sh` 同口径）+ 复用 `verify_assets.py` 的 `is_excluded/compare` 自检。**不依赖 bash / tar / find**。
+- `android/app/build.gradle.kts` 新增 `syncAssets`（Exec）与 `verifyAssets`（dependsOn syncAssets），两者挂在 `preBuild` 与 `merge*Assets` 上；Python 解释器按 `TREEHOLE_PYTHON` → PATH 的 `py`/`python`/`python3` 解析（跳过 WindowsApps Store 占位符），并设 `PYTHONIOENCODING=utf-8`。任一任务非零退出 → **BUILD FAILED**，无 warning 放行。
+- 实测（全部本机实跑，`--offline --no-daemon --max-workers=2`）：
+  - `python scripts/sync_assets.py` → `ASSET_SYNC PASS files=76 bytes=1,443,082 commit=2bb3bf40`；清单 `source_commit` 不再是 null。
+  - 改坏 `assets/www/index.html` 后 `./gradlew :app:verifyAssets -x syncAssets` → **BUILD FAILED**（`ASSET_VERIFY FAIL mismatch=1`）；sync 复原后再次 PASS。
+  - `./gradlew :app:verifyAssets` → BUILD SUCCESSFUL（sync+verify 都在链上）。
+  - `./gradlew assembleDebug` → BUILD SUCCESSFUL（48s）；`python scripts/verify_manifest.py --apk android/app/build/outputs/apk/debug/app-debug.apk` → **ASSET_CHECK PASS 76 files / 1,443,082 B**，APK 内 manifest `source_commit=2bb3bf40`（证明 Gradle-only 打包已自动重算 assets）。
+- `android/README.md` 的 ⚠「已知缺口」段改写为「发布物守卫（已补齐）」，并单列已实测 / 仍待验证。
+
+### 仍待验证
+- Android Studio 图形界面点 Build（任务链与 `gradlew` 相同，未能在 IDE 内实点）。
+- `assembleRelease` / minify / 多变体链路（本机无签名材料，未跑）。
+- 非 Windows 的 Gradle 路径（CI `android-ci.yml` 在推送后会跑 `./gradlew assembleDebug`，可作复核）。
+- CI 侧未新增改动：`ci.yml`/`android-ci.yml` 仍各自先跑 `build_assets.sh`（Gradle 守卫现在会再同步一次，幂等）。
 
 ### 提醒
-- 本次重建只是**当前快照**（manifest `source_commit` 记录的是构建时 HEAD，期间被其他会话推过多次），任何后续 `web/` 提交都会让它立刻再漂；**不构成「漂移已修复」**。真正的修复是打包期重算（`build_apk.sh` 已具备）+ 上面的 Gradle 校验缺口补上。
+- 本次重建只是**当前快照**（manifest `source_commit` 记录的是构建时 HEAD），任何后续 `web/` 提交都会让它立刻再漂；**真正的修复是打包期重算**，现在 `build_apk.sh` 与 Gradle（`preBuild`→`syncAssets`→`verifyAssets`）两条路径都已具备，Gradle 缺口不再存在。
 
-触及：scripts/build_assets.sh、android/README.md、docs/DEVLOG.md（生成物 `android/app/src/main/assets/www/` 不入库、未提交）
+触及：scripts/sync_assets.py（新增）、android/app/build.gradle.kts、android/README.md、docs/DEVLOG.md（生成物 `android/app/src/main/assets/www/` 仍不入库）
 
 ---
 

@@ -15,14 +15,31 @@
 2. `bash scripts/build_assets.sh` —— 把 `web/` 同步进 `android/app/src/main/assets/www`（唯一真源，务必先跑）
 3. `bash scripts/build_apk.sh` —— aapt2 → javac/ecj → d8 → 签名，产物 `android/app/build/outputs/apk/debug/xiaoman-treehole-v030-debug.apk`
 
-（若仓库补上了 Gradle Wrapper，也可 `cd android && ./gradlew assembleDebug`，产物名为 `app-debug.apk`。）
+（也可 `cd android && ./gradlew assembleDebug`，产物 `app/build/outputs/apk/debug/app-debug.apk`；见下「发布物守卫」。）
 
-> ⚠ **已知缺口（2026-11-08 登记）**：`./gradlew assembleDebug` / Android Studio 直接打包**不会**同步 `assets/www`
-> （`build.gradle.kts` 里没有任何 assets 任务），会把目录里现成的旧副本打进 APK —— 这就是「APK 行为落后于 web/」的来源。
-> 要保证 APK 与 `web/` 一致，必须走 `build_apk.sh`（打包前强制 `build_assets.sh`，打包后按清单校验 APK 内 assets）。
-> 只跑 Gradle 的话，请先手动执行 `bash scripts/build_assets.sh`。
-> 补法（等 JDK/Android SDK 可用后再做）：给 `preBuild` 挂一个 Exec 任务跑 `python3 scripts/verify_assets.py`，
-> 漂移即 fail-fast、拒绝出包；方案记在 [docs/DEVLOG.md](../docs/DEVLOG.md) 的 2026-11-08 条目，**不要**只靠 CI 兜。
+## 发布物守卫（2026-11-08 补齐）
+
+`assets/www` 是 `.gitignore` 的生成物，旧行为是 Gradle / Android Studio 直接 Build 不会同步它，
+于是把目录里现成的旧副本打进 APK（「APK 行为落后于 web/」的唯一来源）。现已补上：
+
+- `:app:syncAssets` —— 跑 [scripts/sync_assets.py](../scripts/sync_assets.py)：`web/` → `assets/www` 清空重建，
+  并生成 `ASSET_MANIFEST.json`（`source_commit` 必须可解析，拿不到 git HEAD 直接失败）。
+  与 `build_assets.sh` 同口径，但纯 Python，**不依赖 bash / tar / find**，Windows 与 Linux 一致。
+- `:app:verifyAssets` —— 跑 [scripts/verify_assets.py](../scripts/verify_assets.py)：逐文件 sha256/字节比对
+  `web/` 与 `assets/www`（同一排除规则，见 `scripts/build_assets.sh` 的 `asset_excludes.sh`）。
+- 两者都挂在 `preBuild` 与 `merge*Assets` 上，任务非零退出即 **BUILD FAILED**，**不做 warning 放行**。
+  所以 `./gradlew assembleDebug`、Android Studio Build、`build_apk.sh` 三条路径都会从 `web/` 重算发布物。
+
+环境要求：`git` + Python 3 在 PATH（`py` / `python` 任一即可）；解释器不在 PATH 时用环境变量
+`TREEHOLE_PYTHON` 指定绝对路径。手工等价命令：`bash scripts/build_assets.sh` 或 `python scripts/sync_assets.py`。
+
+**已实测**（本机 JDK 21 + SDK 34）：`./gradlew :app:verifyAssets` 成功；把 `assets/www` 改坏后再跑校验 →
+`BUILD FAILED`（`ASSET_VERIFY FAIL mismatch=1`）；`./gradlew assembleDebug` 成功后
+`python scripts/verify_manifest.py --apk .../app-debug.apk` → **PASS 76 files / 1,443,082 B**。
+
+**仍待验证**：Android Studio 图形界面点 Build（任务链与 `gradlew` 相同，未在 IDE 内实点）；
+release / minify / 多变体链路（本机无签名材料，未跑）；非 Windows 的 Gradle 路径（CI `android-ci.yml`
+会在推送后跑 `./gradlew assembleDebug` 复核）。
 
 ## 真机安装
 adb install <上一步产物路径>

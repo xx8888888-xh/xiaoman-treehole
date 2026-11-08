@@ -120,8 +120,8 @@ def main(argv=None):
         print(f"ASSET_VERIFY FAIL src={args.src} dst={args.dst} "
               f"missing={len(missing)} extra={len(extra)} mismatch={len(mismatch)}",
               file=sys.stderr)
-        print("请先运行 `bash scripts/build_assets.sh` 重新生成发布物；"
-              "容器会拒绝启动以避免对外提供过期页面。", file=sys.stderr)
+        print("请先运行 `python scripts/sync_assets.py`（等价 `bash scripts/build_assets.sh`）"
+              "重新生成发布物；容器会拒绝启动以避免对外提供过期页面。", file=sys.stderr)
         return 1
 
     files = collect_files(args.dst)
