@@ -267,18 +267,19 @@ def _synth_sets(events_by_set, mentions_by_set=None):
 
 
 def test_evaluate_windows_errors_and_failures():
-    events = {
-        1: [
-            _synth_event(1, 1),
+    events = {}
+    for s in range(1, ara.SETS + 1):
+        events[s] = [_synth_event(s, t) for t in (1, 11, 21, 31)]
+    events[1].extend(
+        [
             _synth_event(1, 2),
-            _synth_event(1, 11),
-            _synth_event(1, 21),
-            _synth_event(1, 21).copy(),
+            _synth_event(1, 12),
+            _synth_event(1, 21),  # 与 T21 同轮 -> per_turn_cap
             _synth_event(1, 22),
-        ],
-        2: [_synth_event(2, 1)],
-        3: [_synth_event(3, 10, verdict="E_sensitive")],
-    }
+            _synth_event(1, 23),
+        ]
+    )
+    events[3].append(_synth_event(3, 10, verdict="E_sensitive"))
     mention = {
         "kind": "delete",
         "key": "宠物",
@@ -293,25 +294,65 @@ def test_evaluate_windows_errors_and_failures():
     }
     res = ara.evaluate(_synth_sets(events, {4: [mention]}))
 
-    assert len(res["windows"]) == ara.TOTAL_WINDOWS
-    assert [w["V"] for w in res["windows"][:4]] == [2, 1, 3, 1]
-    assert res["windows"][2]["pass"] is False
-    assert res["V"] == 7 and res["E"] == 2 and res["invalid"] == 0
+    assert len(res["windows_local"]) == ara.SETS * 4
+    assert [(w["start"], w["end"], w["V"], w["pass"]) for w in res["windows_local"][:4]] == [
+        (1, 10, 2, True),
+        (11, 20, 2, True),
+        (21, 30, 4, False),
+        (31, 35, 1, True),
+    ]
+    assert res["windows_local"][3]["partial"] is True
+    assert res["V"] == 45 and res["E"] == 2 and res["invalid"] == 0
+    assert res["checks"]["window_budget"]["violations"] == 1
+    assert res["checks"]["window_budget"]["windows"] == 40
     assert res["checks"]["errors"]["actual"] == 2
     assert res["checks"]["tombstone_zero"]["mentions"] == 1
-    assert abs(res["precision"] - 7 / 9) < 1e-9
-    assert res["checks"]["precision"]["denominator"] == 9
+    assert abs(res["precision"] - 45 / 47) < 1e-9
 
-    assert any(f["criterion"] == "window_budget" and f["window"] == 3 for f in res["failures"])
+    assert len(res["windows"]) == ara.TOTAL_WINDOWS
+    diag = res["diagnostics"]
+    assert diag["global_windows"]["count"] == 35
+    assert diag["global_windows"]["participates_in_verdict"] is False
+    assert diag["still_red"] == [3]
+    assert diag["green_to_red"] == []
+    assert diag["coverage_complete"] is True and diag["coverage_gaps"] == []
+    assert "绿转红 0 条" in diag["green_to_red_conclusion"]
+    assert "_covering_global()" in diag["green_to_red_computed_by"]
+    assert res["checks"]["window_scheme_audit"]["pass"] is True
+    assert res["checks"]["window_budget"]["partial_windows"] == ara.SETS
+    assert diag["offset_slice_windows"]
+
+    assert any(
+        f["criterion"] == "window_budget" and f["set"] == 1 and f["local_turns"] == [21, 30]
+        for f in res["failures"]
+    )
     cap = [f for f in res["failures"] if f["criterion"] == "per_turn_cap"]
     assert cap and cap[0]["set"] == 1 and cap[0]["turn"] == 21
     assert any(f["criterion"] == "tombstone_zero" for f in res["failures"])
 
 
+def test_local_windows_partial_tail_is_upper_bound_only():
+    """尾窗只有 5 轮样本：V=0 不判“回带过少”，但 V>2 仍越上限。"""
+    empty = ara._local_windows(1, "S01", [], [])
+    assert [(w["start"], w["end"], w["rule"], w["pass"]) for w in empty] == [
+        (1, 10, "range", False),
+        (11, 20, "range", False),
+        (21, 30, "range", False),
+        (31, 35, "upper_only", True),
+    ]
+    assert empty[3]["partial"] is True and empty[3]["actual_turns"] == 5
+
+    tail = ara._local_windows(
+        1, "S01", [_synth_event(1, t) for t in (31, 32, 33)], []
+    )[3]
+    assert tail["V"] == 3 and tail["pass"] is False
+
+
 def test_consistency_requires_at_least_two_reps():
     fp = {
         "V": 1, "E": 0, "invalid": 0,
-        "windows": [(1, 1, 0, 0)],
+        "windows_local": [(1, 1, 10, 1, 0, 0, True)],
+        "diagnostic_global": [(1, 1, 0, 0, True)],
         "events": [(1, 1, "hook", "宠物", "V")],
         "mentions": [],
         "failures": [],

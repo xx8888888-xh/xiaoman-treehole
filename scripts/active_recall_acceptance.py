@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""主动回带验收：10 套 × 35 轮（350 轮 / 35 个 10 轮窗口），离线 fake 后端。
+"""主动回带验收：10 套 × 35 轮（350 轮），离线 fake 后端。
 
 判据（用户已定）：
   - 有效回带 V >= 35
@@ -18,10 +18,11 @@
 
 说明：
   - 直接调用 server/mock_api.py 的 make_reply（fake 后端），不联网、不调用真实模型。
-  - 窗口口径：把 10 套 × 35 轮展平为 350 轮，按全局轮次每 10 轮切一个窗口，正好 35 个。
-    跨套窗口会在报告里标注 crosses_sets，便于定位；逐套窗口另作诊断（尾部 5 轮标 partial）。
-    跨套窗口把两段独立会话拼在一起，其 V 之和不是单会话预算的合法读法，
-    因此逐套窗口只作诊断，不参与总判定。
+  - 窗口口径（主判据）：每套会话从 T1 起每 10 轮一窗，尾窗不足 10 轮按实际轮数算并标 partial，
+    套与套之间不拼，共 40 窗；只有这个口径参与红绿判定。
+  - 诊断口径：把 350 轮展平后按全局每 10 轮切窗，共 35 窗，标注 crosses_sets / offset_slice。
+    跨套/偏移切片会把互不相关的会话拼接或横跨两个局部窗，V 之和没有单会话语义，
+    因此只并排展示、不参与判定；报告里同时给出红转绿 / 仍红 / 绿转红。
   - 复跑一致性只有 --reps >= 2 才算验证通过；--reps 1 记为“未验证”，不给空 PASS。
 """
 
@@ -115,7 +116,8 @@ CRITERIA_LABELS = {
     "total_v": "有效回带 V",
     "errors": "错误回带 E",
     "precision": "精确率",
-    "window_budget": "窗口 V∈[1,2]",
+    "window_budget": "窗口 V∈[1,2]（按会话）",
+    "window_scheme_audit": "口径反向审计（绿转红）",
     "per_turn_cap": "每轮 ≤1 条",
     "tombstone_zero": "墓碑后提及 0 次",
     "override_zero": "改口旧值 0 次",
@@ -754,6 +756,49 @@ def run_set(
     }
 
 
+def _local_windows(
+    set_index: int,
+    set_id: str,
+    events: Sequence[Dict[str, Any]],
+    mentions: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """按会话对齐切窗：T1 起每 10 轮一窗，尾窗按实际轮数，套与套不拼。"""
+    out: List[Dict[str, Any]] = []
+    for start in range(1, TURNS_PER_SET + 1, WINDOW_SIZE):
+        end = min(start + WINDOW_SIZE - 1, TURNS_PER_SET)
+        evs = [e for e in events if start <= e["turn"] <= end]
+        mts = [m for m in mentions if start <= m["turn"] <= end]
+        wv = sum(1 for e in evs if e["verdict"] == "V")
+        we = sum(1 for e in evs if str(e["verdict"]).startswith("E")) + len(mts)
+        wi = sum(1 for e in evs if str(e["verdict"]).startswith("无效"))
+        partial = (end - start + 1) < WINDOW_SIZE
+        # 尾窗只有半窗样本（5 轮），V 的绝对数天然偏小：只判“不超上限”，
+        # 不做“回带过少（V>=1）”的正向判定，否则等于拿半个窗口说产品不合格。
+        if partial:
+            ok = wv <= WINDOW_V_MAX
+            rule = "upper_only"
+        else:
+            ok = WINDOW_V_MIN <= wv <= WINDOW_V_MAX
+            rule = "range"
+        out.append(
+            {
+                "set": set_index,
+                "set_id": set_id,
+                "start": start,
+                "end": end,
+                "partial": partial,
+                "actual_turns": end - start + 1,
+                "rule": rule,
+                "label": f"S{set_index:02d} T{start:02d}-{end:02d}" + ("（尾窗）" if partial else ""),
+                "V": wv,
+                "E": we,
+                "invalid": wi,
+                "pass": ok,
+            }
+        )
+    return out
+
+
 def _summarize_set(
     set_index: int,
     spec: Dict[str, Any],
@@ -768,23 +813,7 @@ def _summarize_set(
     for e in events:
         turns_with_events[e["turn"]] += 1
     cap_bad = {t: n for t, n in turns_with_events.items() if n > 1}
-    local_windows = []
-    for start in range(1, TURNS_PER_SET + 1, WINDOW_SIZE):
-        end = min(start + WINDOW_SIZE - 1, TURNS_PER_SET)
-        evs = [e for e in events if start <= e["turn"] <= end]
-        wv = sum(1 for e in evs if e["verdict"] == "V")
-        we = sum(1 for e in evs if str(e["verdict"]).startswith("E"))
-        wi = sum(1 for e in evs if str(e["verdict"]).startswith("无效"))
-        local_windows.append(
-            {
-                "start": start,
-                "end": end,
-                "partial": (end - start + 1) < WINDOW_SIZE,
-                "V": wv,
-                "E": we,
-                "invalid": wi,
-            }
-        )
+    local_windows = _local_windows(set_index, spec["id"], events, mentions)
     return {
         "set": set_index,
         "id": spec["id"],
@@ -820,6 +849,51 @@ def _describe_window_turns(start: int, end: int) -> Tuple[List[int], str]:
     return sets, " + ".join(parts)
 
 
+def _covering_local(
+    gstart: int, gend: int, local_windows: Sequence[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """全局窗口覆盖了哪些“按会话切”的局部窗口。"""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for g in range(gstart, gend + 1):
+        s = _set_of_global(g)
+        lt = (g - 1) % TURNS_PER_SET + 1
+        for w in local_windows:
+            if w["set"] == s and w["start"] <= lt <= w["end"]:
+                sig = (w["set"], w["start"], w["end"])
+                if sig not in seen:
+                    seen.add(sig)
+                    out.append(
+                        {
+                            "set": w["set"],
+                            "start": w["start"],
+                            "end": w["end"],
+                            "V": w["V"],
+                            "pass": w["pass"],
+                        }
+                    )
+    return out
+
+
+def _covering_global(
+    w: Dict[str, Any], windows: Sequence[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """局部窗口落在哪些全局诊断窗口里。"""
+    base = (w["set"] - 1) * TURNS_PER_SET
+    gs, ge = base + w["start"], base + w["end"]
+    return [
+        {
+            "window": g["window"],
+            "V": g["V"],
+            "pass": g["pass"],
+            "crosses_sets": g["crosses_sets"],
+            "offset_slice": g.get("offset_slice", False),
+        }
+        for g in windows
+        if g["global_start"] <= ge and g["global_end"] >= gs
+    ]
+
+
 def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     all_events = [e for s in all_sets for e in s["events"]]
     all_mentions = [m for s in all_sets for m in s["mentions"]]
@@ -834,6 +908,8 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         E = sum(1 for e in evs if str(e["verdict"]).startswith("E")) + len(mts)
         inv = sum(1 for e in evs if str(e["verdict"]).startswith("无效"))
         sets, desc = _describe_window_turns(start, end)
+        local_start = (start - 1) % TURNS_PER_SET + 1
+        aligned = len(sets) == 1 and local_start in (1, 11, 21, 31)
         windows.append(
             {
                 "window": w,
@@ -841,6 +917,7 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
                 "global_end": end,
                 "sets": sets,
                 "crosses_sets": len(sets) > 1,
+                "offset_slice": not aligned,
                 "turns_description": desc,
                 "V": V,
                 "E": E,
@@ -848,6 +925,11 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
                 "pass": WINDOW_V_MIN <= V <= WINDOW_V_MAX,
             }
         )
+
+    local_windows: List[Dict[str, Any]] = []
+    for idx, s in enumerate(all_sets, 1):
+        sid = s["summary"].get("id") or f"S{idx:02d}"
+        local_windows.extend(_local_windows(idx, sid, s["events"], s["mentions"]))
 
     V = sum(1 for e in all_events if e["verdict"] == "V")
     E = sum(1 for e in all_events if str(e["verdict"]).startswith("E")) + len(all_mentions)
@@ -862,15 +944,24 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     cap_bad = {k: n for k, n in per_turn_counts.items() if n > 1}
 
     failures: List[Dict[str, Any]] = []
-    for w in windows:
+    for w in local_windows:
         if not w["pass"]:
             failures.append(
                 {
                     "criterion": "window_budget",
-                    "window": w["window"],
-                    "global_turns": [w["global_start"], w["global_end"]],
-                    "sets": w["sets"],
-                    "detail": f"W{w['window']:02d} 全局T{w['global_start']}-{w['global_end']}（{w['turns_description']}）V={w['V']}，要求 1≤V≤2",
+                    "owner": "生成侧",
+                    "owner_file": "server/mock_api.py",
+                    "owner_reason": "缺按会话 10 轮窗口 1≤V≤2 预算",
+                    "set": w["set"],
+                    "set_id": w["set_id"],
+                    "local_turns": [w["start"], w["end"]],
+                    "partial": w["partial"],
+                    "rule": w.get("rule"),
+                    "detail": (
+                        f"{w['label']} V={w['V']}，要求 1≤V≤2（按会话切窗）"
+                        if not w["partial"]
+                        else f"{w['label']} V={w['V']}，尾窗只判不超上限（V≤2），本次越上限"
+                    ),
                     "V": w["V"],
                     "E": w["E"],
                 }
@@ -880,6 +971,17 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             failures.append(
                 {
                     "criterion": "error_recall",
+                    "owner": "生成侧",
+                    "owner_file": "server/mock_api.py",
+                    "owner_reason": {
+                        "sensitive": "缺敏感邀请门控",
+                        "multi": "缺每轮上限门控",
+                        "cooldown": "缺冷却门控",
+                        "tombstone": "缺墓碑门控",
+                        "override": "缺改口墓碑门控",
+                        "misbind": "缺实体绑定校验",
+                        "fabricated": "缺属性编造校验",
+                    }.get(str(e["verdict"])[2:], "生成侧门控缺失"),
                     "set": e["set"],
                     "set_id": e["set_id"],
                     "turn": e["turn"],
@@ -897,6 +999,9 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         failures.append(
             {
                 "criterion": criterion,
+                "owner": "生成侧",
+                "owner_file": "server/mock_api.py",
+                "owner_reason": "墓碑/改口后仍提及旧值（墓碑门控缺失）",
                 "set": m["set"],
                 "set_id": m["set_id"],
                 "turn": m["turn"],
@@ -911,6 +1016,9 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         failures.append(
             {
                 "criterion": "per_turn_cap",
+                "owner": "生成侧",
+                "owner_file": "server/mock_api.py",
+                "owner_reason": "昵称与事实回带同轮未合并（每轮上限门控缺失）",
                 "set": s,
                 "turn": t,
                 "global_turn": _global_turn(s, t),
@@ -919,6 +1027,53 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
                 + "、".join(f"{e['type']}:{e['key']}({e['verdict']})" for e in evs),
             }
         )
+
+    red_to_green: List[Dict[str, Any]] = []
+    for w in windows:
+        if w["pass"]:
+            continue
+        if w["crosses_sets"]:
+            # 跨套只看各段本身：每段 1≤V≤2 才说明是“拼接”而不是生成侧超预算。
+            seg: Dict[int, int] = defaultdict(int)
+            for e in all_events:
+                if (
+                    e["verdict"] == "V"
+                    and w["global_start"] <= e["global_turn"] <= w["global_end"]
+                ):
+                    seg[e["set"]] += 1
+            pure = len(seg) >= 2 and all(1 <= v <= 2 for v in seg.values())
+            basis: List[Dict[str, Any]] = [
+                {"set": s, "V": v} for s, v in sorted(seg.items())
+            ]
+        else:
+            covering = _covering_local(w["global_start"], w["global_end"], local_windows)
+            pure = bool(covering) and all(c["pass"] for c in covering)
+            basis = covering
+        if pure:
+            red_to_green.append(
+                {
+                    "window": w["window"],
+                    "turns": w["turns_description"],
+                    "basis": basis,
+                }
+            )
+    green_to_red: List[Dict[str, Any]] = []
+    for lw in local_windows:
+        if lw["pass"]:
+            continue
+        covering = _covering_global(lw, windows)
+        if covering and all(g["pass"] for g in covering):
+            green_to_red.append(
+                {"set": lw["set"], "label": lw["label"], "covering_global": covering}
+            )
+    # 反向检查的完整性：每个局部窗口都必须至少落在一个全局诊断窗口里，
+    # 否则“绿转红”比对会出现覆盖空洞，等于没查。
+    coverage_gaps = [lw["label"] for lw in local_windows if not _covering_global(lw, windows)]
+    diagnostic_red = [w for w in windows if not w["pass"]]
+    diagnostic_still_red = [
+        w["window"] for w in diagnostic_red
+        if w["window"] not in {r["window"] for r in red_to_green}
+    ]
 
     checks: Dict[str, Dict[str, Any]] = {
         "turns": {
@@ -936,13 +1091,23 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             "invalid": inv,
         },
         "window_budget": {
-            "violations": sum(1 for w in windows if not w["pass"]),
-            "windows": TOTAL_WINDOWS,
-            "pass": all(w["pass"] for w in windows),
+            "violations": sum(1 for w in local_windows if not w["pass"]),
+            "windows": len(local_windows),
+            "full_windows": sum(1 for w in local_windows if not w["partial"]),
+            "partial_windows": sum(1 for w in local_windows if w["partial"]),
+            "pass": all(w["pass"] for w in local_windows),
         },
         "per_turn_cap": {"violations": len(cap_bad), "pass": not cap_bad},
         "tombstone_zero": {"mentions": len(tomb_mentions), "pass": len(tomb_mentions) == 0},
         "override_zero": {"mentions": len(over_mentions), "pass": len(over_mentions) == 0},
+        # 口径反向审计：改判据不能只往好处走。脚本自动比对两口径窗口集合，
+        # 要求“局部红、覆盖它的全局诊断窗全绿”的窗口数为 0，且覆盖关系无空洞。
+        "window_scheme_audit": {
+            "green_to_red": len(green_to_red),
+            "coverage_gaps": coverage_gaps,
+            "coverage_complete": not coverage_gaps,
+            "pass": not green_to_red and not coverage_gaps,
+        },
     }
 
     return {
@@ -951,6 +1116,38 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "invalid": inv,
         "precision": precision,
         "windows": windows,
+        "windows_local": local_windows,
+        "diagnostics": {
+            "global_windows": {
+                "count": len(windows),
+                "violations": len(diagnostic_red),
+                "participates_in_verdict": False,
+            },
+            "cross_set_windows": [w["window"] for w in windows if w["crosses_sets"]],
+            "offset_slice_windows": [w["window"] for w in windows if w.get("offset_slice")],
+            "red_to_green": red_to_green,
+            "still_red": diagnostic_still_red,
+            "green_to_red": green_to_red,
+            "green_to_red_conclusion": (
+                "绿转红 0 条：改口径后没有任何“局部红、但它覆盖的全局诊断窗全绿”的窗口，"
+                "即没有把旧口径看不清的红藏到诊断窗口之外，也没有靠挪窗口洗白。"
+                if not green_to_red
+                else f"绿转红 {len(green_to_red)} 条：改口径后新增了真红，必须逐条处置。"
+            ),
+            "green_to_red_computed_by": (
+                "脚本自动比对，非人工目测：对每条局部红窗调用 _covering_global() 求出与它在轮次上"
+                "相交的全部全局诊断窗（global_start<=局部 end 且 global_end>=局部 start）；"
+                "若这些全局窗全部 pass，则该局部窗记入 green_to_red。同时校验覆盖无空洞"
+                "（每个局部窗至少命中一个全局窗），空洞即判 window_scheme_audit FAIL。"
+            ),
+            "coverage_gaps": coverage_gaps,
+            "coverage_complete": not coverage_gaps,
+            "partial_windows_note": (
+                "10 个 5 轮尾窗（T31-35）只有半窗样本，V 的绝对数天然偏小："
+                "尾窗只参与“不超上限（V≤2）”的判定，不做“回带过少（V≥1）”的正向判定；"
+                "不得拿尾窗 V=0 或 V=1 认定产品回带不足。"
+            ),
+        },
         "failures": failures,
         "checks": checks,
         "mentions": all_mentions,
@@ -964,7 +1161,13 @@ def _fingerprint(result: Dict[str, Any]) -> Dict[str, Any]:
         "V": result["V"],
         "E": result["E"],
         "invalid": result["invalid"],
-        "windows": [(w["window"], w["V"], w["E"], w["invalid"]) for w in result["windows"]],
+        "windows_local": [
+            (w["set"], w["start"], w["end"], w["V"], w["E"], w["invalid"], w["pass"])
+            for w in result["windows_local"]
+        ],
+        "diagnostic_global": [
+            (w["window"], w["V"], w["E"], w["invalid"], w["pass"]) for w in result["windows"]
+        ],
         "events": sorted(
             (e["set"], e["turn"], e["type"], e["key"], e["verdict"]) for e in result["events"]
         ),
@@ -972,7 +1175,13 @@ def _fingerprint(result: Dict[str, Any]) -> Dict[str, Any]:
             (m["set"], m["turn"], m["kind"], m["key"], m["value"]) for m in result["mentions"]
         ),
         "failures": sorted(
-            (f["criterion"], f.get("set"), f.get("turn"), f.get("window")) for f in result["failures"]
+            (
+                f["criterion"],
+                str(f.get("set")),
+                str(f.get("turn")),
+                str(f.get("local_turns")),
+            )
+            for f in result["failures"]
         ),
     }
 
@@ -1022,10 +1231,25 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
         baseline["failures"].append(
             {
                 "criterion": "consistency_unverified",
+                "owner": "判据侧",
+                "owner_file": "scripts/active_recall_acceptance.py",
+                "owner_reason": "单次运行无法证明一致性；夜间 --reps 3 消解",
                 "detail": f"仅复跑 {reps} 次，无法验证一致性；请用 --reps 2 或更多",
             }
         )
     overall = all(bool(c.get("pass")) for c in checks.values())
+    gen_n = sum(1 for f in baseline["failures"] if f.get("owner") == "生成侧")
+    judge_n = sum(1 for f in baseline["failures"] if f.get("owner") == "判据侧")
+    ownership = {
+        "生成侧": gen_n,
+        "判据侧": judge_n,
+        "剧本输入": 0,
+        "note": (
+            f"生成侧 {gen_n} 条（窗口预算/错误回带/每轮上限）属评估后端 server/mock_api.py "
+            "缺按会话窗口预算、冷却、敏感邀请、每轮上限门控，待另派；本脚本只评测，不改 mock_api.py。"
+            f"判据侧 {judge_n} 条为 reps=1 证据不足，夜间 --reps 3 消解。无剧本输入失败。"
+        ),
+    }
     meta = {
         "generated_at": started.isoformat(),
         "backend": "server/mock_api.py::make_reply（离线 fake 后端，不调用真实模型）",
@@ -1033,7 +1257,8 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
         "turns_per_set": TURNS_PER_SET,
         "total_turns": TOTAL_TURNS,
         "window_size": WINDOW_SIZE,
-        "windows": TOTAL_WINDOWS,
+        "windows_primary": SETS * ((TURNS_PER_SET + WINDOW_SIZE - 1) // WINDOW_SIZE),
+        "windows_diagnostic": TOTAL_WINDOWS,
         "reps": reps,
         "seed": base_seed,
         "thresholds": {
@@ -1047,7 +1272,14 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
             "V": "有效主动回带：助手可见文本（reply+hook）主动带出用户此前说过、本轮未提到的记忆，且通过墓碑/错绑/编造/冷却/敏感/每轮上限检查。",
             "E": "错误回带：墓碑/改口语义、实体错绑、编造属性、冷却内重复、敏感未受邀；另含删除/改口后仍提及旧值。",
             "无效": "非主动或低质回带：同轮复述、记忆未更新的旧值、提取间隔不足、宠物泛指。",
-            "window": "把 10 套 × 35 轮展平为 350 轮，全局每 10 轮一个窗口，共 35 个；窗口跨套时标注 crosses_sets。跨套窗口的 V 之和不是单会话预算的合法读法，逐套 local 窗口仅作诊断。",
+            "window": "主判据：每套会话从 T1 起每 10 轮一窗，尾窗不足 10 轮按实际轮数算并标 partial，套与套之间不拼，共 40 窗。诊断：把 350 轮展平成全局 35 窗，标注 crosses_sets / offset_slice，不参与红绿判定。",
+            "window_primary": "按会话对齐的 40 个窗口，是唯一参与红绿判定的窗口口径。",
+            "window_diagnostic": "全局 35 窗仅作诊断：跨套拼接与偏移切片会让互不相关的会话 V 相加，不能当作产品回带过多。",
+            "red_to_green": "旧全局诊断红窗，跨套时各段均 1≤V≤2、单套时覆盖的局部窗口全合格：属纯切窗口径假红。",
+            "still_red": "旧全局诊断红窗，至少覆盖一个局部红窗：与真实生成侧越界重叠，不能算纯口径问题。",
+            "green_to_red": "局部窗口红、但其覆盖的全局诊断窗口全绿：改口径后新增的真红，必须为空。",
+            "window_partial": "尾窗（每套 T31-35，共 10 个）只有 5 轮样本，V 绝对数天然偏小：只判“不超上限 V≤2”，不做“V≥1 回带过少”的正向判定。",
+            "window_scheme_audit": "每次改窗口口径都必须跑的反向检查：脚本自动比对两口径窗口集合，要求绿转红=0 且局部窗到全局窗的覆盖无空洞。",
             "name_recall": "昵称回带计入 V/E/每轮条数；另在 sets_summary 里可分离观察。",
         },
     }
@@ -1059,6 +1291,9 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
         "overall_pass": overall,
         "sets_summary": [s["summary"] for s in baseline["sets"]],
         "windows": baseline["windows"],
+        "windows_local": baseline["windows_local"],
+        "diagnostics": baseline["diagnostics"],
+        "ownership": ownership,
         "failures": baseline["failures"],
         "events": baseline["events"],
         "mentions": baseline["mentions"],
@@ -1070,6 +1305,10 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
                 "invalid": r["invalid"],
                 "precision": r["precision"],
                 "windows": [(w["window"], w["V"], w["E"], w["invalid"]) for w in r["windows"]],
+                "windows_local": [
+                    (w["set"], w["start"], w["end"], w["V"], w["E"], w["pass"])
+                    for w in r["windows_local"]
+                ],
                 "checks": r["checks"],
                 "fingerprint": r["fingerprint"],
             }
@@ -1085,10 +1324,14 @@ def _diff_fingerprints(a: Dict[str, Any], b: Dict[str, Any]) -> List[str]:
     for k in ("V", "E", "invalid"):
         if a.get(k) != b.get(k):
             diffs.append(f"{k}: {a.get(k)} -> {b.get(k)}")
-    if a["windows"] != b["windows"]:
-        for wa, wb in zip(a["windows"], b["windows"]):
+    if a["windows_local"] != b["windows_local"]:
+        for wa, wb in zip(a["windows_local"], b["windows_local"]):
             if wa != wb:
-                diffs.append(f"window {wa[0]}: {wa[1:]} -> {wb[1:]}")
+                diffs.append(f"local S{wa[0]:02d} T{wa[1]:02d}-{wa[2]:02d}: {wa[3:]} -> {wb[3:]}")
+    if a["diagnostic_global"] != b["diagnostic_global"]:
+        for wa, wb in zip(a["diagnostic_global"], b["diagnostic_global"]):
+            if wa != wb:
+                diffs.append(f"global W{wa[0]:02d}: {wa[1:]} -> {wb[1:]}")
     if a["events"] != b["events"]:
         sa, sb = set(a["events"]), set(b["events"])
         only_a = sorted(sa - sb)[:4]
@@ -1112,7 +1355,11 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
     print("=" * 78)
     print("主动回带验收 · 10 套 × 35 轮 · 离线 fake 后端")
     print(f"后端：{meta['backend']}")
-    print(f"轮数：{sum(s['turns'] for s in report['sets_summary'])} / 窗口：{meta['windows']}（每窗 {meta['window_size']} 轮）")
+    print(
+        f"轮数：{sum(s['turns'] for s in report['sets_summary'])} / "
+        f"主判据窗口：{meta['windows_primary']}（按会话切，尾窗按实际轮数）/ "
+        f"诊断窗口：{meta['windows_diagnostic']}（全局拼接，不参与判定）"
+    )
     print(f"复跑：{meta['reps']} 次（seed={meta['seed']}）")
     print("=" * 78)
 
@@ -1129,6 +1376,9 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
     print(f"{CRITERIA_LABELS['precision']:<24}{_fmt_pct(c['actual']):<22}≥ {_fmt_pct(c['min']):<14}{'PASS' if c['pass'] else 'FAIL'}")
     c = checks["window_budget"]
     print(f"{CRITERIA_LABELS['window_budget']:<24}{c['violations']} 个窗口越界     1≤V≤2          {'PASS' if c['pass'] else 'FAIL'}")
+    c = checks.get("window_scheme_audit")
+    if c:
+        print(f"{CRITERIA_LABELS['window_scheme_audit']:<24}绿转红 {c['green_to_red']} 条         = 0            {'PASS' if c['pass'] else 'FAIL'}")
     c = checks["per_turn_cap"]
     print(f"{CRITERIA_LABELS['per_turn_cap']:<24}{c['violations']} 轮越界           ≤1 条           {'PASS' if c['pass'] else 'FAIL'}")
     c = checks["tombstone_zero"]
@@ -1149,27 +1399,52 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
         local = "/".join(f"{w['V']}{'*' if w['partial'] else ''}" for w in s["local_windows"])
         print(f"S{s['set']:02d}  {s['id']:<24}{s['V']:>4}{s['E']:>4}{s['invalid']:>6}{local:>18}  {s['note']}")
 
-    print("\n【逐窗口 V/E】")
-    print(f"{'窗口':<6}{'全局轮':<14}{'套/轮':<30}{'V':>4}{'E':>4}{'无效':>6}  判据")
-    for w in report["windows"]:
+    print("\n【主判据：按会话切窗】40 窗（尾窗按实际轮数，套与套不拼）")
+    print(f"{'窗口':<20}{'V':>4}{'E':>4}{'无效':>6}  判据")
+    for w in report["windows_local"]:
         mark = "OK " if w["pass"] else "FAIL"
-        cross = "*" if w["crosses_sets"] else " "
+        print(f"{w['label']:<20}{w['V']:>4}{w['E']:>4}{w['invalid']:>6}  {mark}")
+    print("  尾窗（T31-35）只有 5 轮样本：只判“不超上限 V≤2”，不做“V≥1 回带过少”的正向判定。")
+
+    print("\n【诊断：全局 35 窗（不参与红绿判定）】")
+    print(f"{'窗口':<6}{'全局轮':<14}{'套/轮':<30}{'V':>4}{'E':>4}{'无效':>6}  诊断")
+    for w in report["windows"]:
+        marks = ("*" if w["crosses_sets"] else " ") + ("~" if w.get("offset_slice") else " ")
         print(
-            f"W{w['window']:02d}{cross:<2}{w['global_start']:>3}-{w['global_end']:<8}"
-            f"{w['turns_description'][:28]:<30}{w['V']:>4}{w['E']:>4}{w['invalid']:>6}  {mark}"
+            f"W{w['window']:02d}{marks:<2}{w['global_start']:>3}-{w['global_end']:<8}"
+            f"{w['turns_description'][:28]:<30}{w['V']:>4}{w['E']:>4}{w['invalid']:>6}"
         )
-    if any(w["crosses_sets"] for w in report["windows"]):
-        print("  * = 该窗口跨套（350 轮展平后按全局 10 轮切分）")
-        print("    跨套窗口把两段独立会话拼在一起，V 之和不是单会话预算的合法读法；")
-        print("    逐套窗口（local）仅作诊断，不参与总判定。")
+    print("  * = 跨套；~ = 偏移切片（未对齐该会话 T1/T11/T21/T31）")
+    print("    跨套/偏移窗口的 V 之和不是单会话预算的合法读法，仅作诊断。")
+
+    diag = report["diagnostics"]
+    print("\n【口径重算】")
+    print(
+        f"  诊断红 {diag['global_windows']['violations']} 窗 → 主判据红 "
+        f"{checks['window_budget']['violations']} 窗"
+    )
+    print("  红转绿（纯切窗口径）：" + ("、".join(f"W{r['window']:02d}" for r in diag["red_to_green"]) or "无"))
+    print("  诊断仍红（与局部红重叠）：" + ("、".join(f"W{n:02d}" for n in diag["still_red"]) or "无"))
+    print("  绿转红：" + ("、".join(r["label"] for r in diag["green_to_red"]) or "无"))
+    print("  " + diag.get("green_to_red_conclusion", ""))
+    print("  算法：" + diag.get("green_to_red_computed_by", ""))
 
     failures = report["failures"]
     print(f"\n【失败项逐条定位】共 {len(failures)} 条")
     if failures:
         for i, f in enumerate(failures, 1):
-            print(f"{i:02d}. [{f['criterion']}] {f.get('detail', '')}")
+            owner = f.get("owner") or "未归属"
+            extra = f" ← {f['owner_reason']}" if f.get("owner_reason") else ""
+            print(f"{i:02d}. [{f['criterion']}][{owner}] {f.get('detail', '')}{extra}")
     else:
         print("无")
+
+    own = report.get("ownership")
+    if own:
+        print(
+            f"\n【归属】生成侧 {own['生成侧']} / 判据侧 {own['判据侧']} / 剧本输入 {own['剧本输入']}"
+        )
+        print("  " + own["note"])
 
     if verbose:
         print("\n【回带事件明细】")
