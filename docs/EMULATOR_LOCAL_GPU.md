@@ -18,7 +18,7 @@
 | 击杀动作 | 立即结束整组进程，并写 SUMMARY | 日志 `KILL trigger` / `SUMMARY killed emulator group` |
 | 收尾 | `adb emu kill` → 强制清理 → 断言残留为 0 | 日志 `STOP OK: no residual emulator/qemu`；`Get-Process emulator,qemu-system-x86_64` 为 0 |
 
-抗时钟跳变：看门狗同时记录墙钟与单调时钟，二者增量偏差 >5s 视为跳变，本次不采样、不切换状态；正常状态切换需连续 2 次采样一致。
+CPU 采样间隔用单调时钟（Stopwatch）计算，墙钟只用于时间显示与进程年龄（CreationDate），时钟跳变不会改变阈值判定。
 
 ## GPU 占用怎么测、当前是多少
 
@@ -227,8 +227,33 @@ SUMMARY killed emulator group: ran=186.9s peak_cpu=68.3% threshold=30% residual=
 ## 策略差异说明（2026-11-08，重要）
 
 - **上一版（2026-11-07）**：21:00–06:00 为 `LIMIT=off`，看门狗不采样、不杀。
-- **最新裁定（2026-11-08 09:2x）**：模拟器只在 21:00 后启动；必须 `-no-audio`；整机 CPU 超 30% 立即 kill，唯一豁免是冷启动 120 秒。优先级高于上一版。
-- **代码现状**：`emulator_watchdog.ps1` + `emu_timewindow.ps1` 仍按 21:00–06:00 输出 `LIMIT=off`，即在该时段启动时不会执行 30% 击杀。本次任务只写文档、未改代码，故存在“文档策略”与“脚本默认行为”的差异。
-- **同步方案（下次代码变更执行）**：移除 `LIMIT=off` 分支，使 21:00 后启动也始终 `LIMIT=on`；保留 120 秒冷启动豁免；不要通过临时调高 30% 阈值来绕过。
-- **过渡期人工复核**：21:00 后启动时，同时看 `watchdog.log` 是否出现 `state=LIMIT=off`；若是，说明仍在旧规则下，需按上面的同步方案先改代码再跑。
+- **最新裁定（2026-11-08）**：模拟器只在 21:00 后启动；必须 `-no-audio`；整机 CPU 超 30% 立即 kill，唯一豁免是冷启动 120 秒。
+- **代码已对齐（2026-11-08）**：
+  - `emulator_watchdog.ps1` 删除 21:00–06:00 免限分支，恒定 `state=LIMIT=on`，30% / 120s / 2s 保持不变；
+  - `avd_local.ps1` 增加启动闸门：窗外直接 `START REFUSED` 并以退出码 3 结束（不启动、不挂看门狗）；
+  - `-no-audio`、`-no-snapshot-load -no-snapshot-save` 固化为默认启动参数；
+  - 新增 `-Action dryrun` 与看门狗 `-DryRun`，不启动模拟器即可打印启动命令与判定阈值（实测输出见本文件“对齐验证”）。
 - **10 套冷启动验证状态**：因本机 CPU 100% 紧急停工，仅完成第 1 轮（冷启动 112.2s、CPU 峰值 40.1%、GPU 峰值 0%、未触发 kill、收尾残留 0），其余 9 轮未执行；恢复后从第 2 轮继续，结果写入 `D:\android-avd\rounds10.json`。
+
+## 对齐验证（不启动模拟器）
+
+```powershell
+# 看门狗阈值自检
+powershell -File D:\android-avd\emulator_watchdog.ps1 -DryRun
+# LIMIT=on threshold=30% grace=120s interval=2s cores=8 start_window=21:00-06:00 log=D:\android-avd\watchdog.log
+
+# 启动器 dry-run（当前 10:xx，窗外）
+powershell -File D:\android-avd\avd_local.ps1 -Action dryrun
+# MODE=baseline avd=treehole_api34 lcd=720x1280@320 cores=4 gpu=swiftshader_indirect snapshot=none baseline_writes=allowed reason=
+# LIMIT=on threshold=30% grace=120s interval=2s start_window=21:00-06:00 now=...
+# START=blocked outside=21:00-06:00
+# CMD=D:\android-sdk\emulator\emulator.exe -avd treehole_api34 -no-audio -no-boot-anim -gpu swiftshader_indirect -no-metrics -cores 4 -memory 3072 -no-snapshot-load -no-snapshot-save
+
+# 窗外启动应被拒绝（退出码 3，不启动模拟器）
+powershell -File D:\android-avd\avd_local.ps1 -Action start
+# START REFUSED: outside 21:00-06:00 ...
+
+# 时间窗边界（启动闸门共用判定）
+powershell -File D:\android-avd\avd_local.ps1 -Action test-window
+# WINDOW TEST PASS 7/7
+```
