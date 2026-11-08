@@ -1,0 +1,2153 @@
+{
+ "turns": 35,
+ "repeat": 10,
+ "runs": [
+  {
+   "run": 1,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 2,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 3,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 4,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 5,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 6,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 7,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 8,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 9,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  },
+  {
+   "run": 10,
+   "digests": {
+    "S1_mixed": {
+     "stored": {
+      "昵称": true,
+      "宠物": true,
+      "喜好": true,
+      "职业": true,
+      "住址": true
+     },
+     "check": {
+      "昵称": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "宠物": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "喜好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "昵称": null,
+      "宠物": null,
+      "喜好": 3,
+      "职业": 3,
+      "住址": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S2_nonpin5": {
+     "stored": {
+      "职业": true,
+      "住址": true,
+      "星座": true,
+      "血型": true,
+      "爱好": true
+     },
+     "check": {
+      "职业": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "住址": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "星座": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "血型": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      },
+      "爱好": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "职业": 3,
+      "住址": 3,
+      "星座": 3,
+      "血型": 3,
+      "爱好": 3
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 0
+    },
+    "S3_coexist": {
+     "stored": {
+      "年糕": true,
+      "煤球": true
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "煤球": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "煤球": null
+     },
+     "triggers": {
+      "8": true,
+      "22": true,
+      "26": true,
+      "31": true,
+      "34": true
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 4
+    },
+    "S4_correct": {
+     "stored": {
+      "年糕": true,
+      "团子": false
+     },
+     "check": {
+      "年糕": {
+       "20": true,
+       "25": true,
+       "30": true,
+       "35": true
+      },
+      "团子": {
+       "20": false,
+       "25": false,
+       "30": false,
+       "35": false
+      }
+     },
+     "first_missing": {
+      "年糕": null,
+      "团子": 13
+     },
+     "triggers": {
+      "8": null,
+      "22": null,
+      "26": null,
+      "31": null,
+      "34": null
+     },
+     "pin_missing": 0,
+     "nonpin_leak": 0,
+     "over_limit": 0,
+     "max_inject": 3
+    }
+   },
+   "pin_missing_total": 0,
+   "nonpin_leak_total": 0,
+   "over_limit_total": 0
+  }
+ ],
+ "identical": true,
+ "inconsistencies": [],
+ "limit_probe": {
+  "query": "阿秋年糕护士杭州吃辣老板失眠男朋友",
+  "limit": 6,
+  "eligible": [
+   {
+    "key": "昵称",
+    "value": "阿秋",
+    "kind": "pin",
+    "pin": true,
+    "emotion": 5,
+    "uses": 0,
+    "overlap": 1,
+    "score": 12.4,
+    "filtered": false,
+    "rank": 1
+   },
+   {
+    "key": "关系",
+    "value": "有男朋友",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 3,
+    "uses": 0,
+    "overlap": 4,
+    "score": 11.0,
+    "filtered": false,
+    "rank": 2
+   },
+   {
+    "key": "宠物",
+    "value": "年糕",
+    "kind": "pin",
+    "pin": true,
+    "emotion": 3,
+    "uses": 0,
+    "overlap": 1,
+    "score": 10.8,
+    "filtered": false,
+    "rank": 3
+   },
+   {
+    "key": "状态",
+    "value": "最近失眠",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 3,
+    "uses": 0,
+    "overlap": 3,
+    "score": 9.6,
+    "filtered": false,
+    "rank": 4
+   },
+   {
+    "key": "老板",
+    "value": "王经理",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 3,
+    "uses": 0,
+    "overlap": 3,
+    "score": 9.6,
+    "filtered": false,
+    "rank": 5
+   },
+   {
+    "key": "喜好",
+    "value": "喜欢吃辣",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 2,
+    "uses": 0,
+    "overlap": 1,
+    "score": 6.0,
+    "filtered": false,
+    "rank": 6
+   },
+   {
+    "key": "住址",
+    "value": "杭州拱墅区",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 2,
+    "uses": 0,
+    "overlap": 1,
+    "score": 6.0,
+    "filtered": false,
+    "rank": 7
+   },
+   {
+    "key": "职业",
+    "value": "医院护士",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 2,
+    "uses": 0,
+    "overlap": 1,
+    "score": 6.0,
+    "filtered": false,
+    "rank": 8
+   }
+  ],
+  "injected": [
+   "昵称",
+   "关系",
+   "宠物",
+   "状态",
+   "老板",
+   "喜好"
+  ],
+  "dropped": [
+   {
+    "key": "住址",
+    "value": "杭州拱墅区",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 2,
+    "uses": 0,
+    "overlap": 1,
+    "score": 6.0,
+    "filtered": false,
+    "rank": 7,
+    "reason": "相关但排名 > 6"
+   },
+   {
+    "key": "职业",
+    "value": "医院护士",
+    "kind": "fact",
+    "pin": false,
+    "emotion": 2,
+    "uses": 0,
+    "overlap": 1,
+    "score": 6.0,
+    "filtered": false,
+    "rank": 8,
+    "reason": "相关但排名 > 6"
+   }
+  ]
+ },
+ "eviction_probe": {
+  "inserted": 65,
+  "max_slots": 64,
+  "kept": 64,
+  "dropped": [
+   "小事00"
+  ],
+  "note": "同分（情绪2/今天/未使用）时按列表顺序保留最新，淘汰最旧"
+ },
+ "restart_probe": {
+  "file": "slots-c729eeed216e3cc8.json",
+  "version": 1,
+  "slots_before": 64,
+  "slots_after": 64,
+  "same_after_reload": true,
+  "max_slots": 64,
+  "pins_survived": {
+   "昵称": true,
+   "宠物": true
+  },
+  "recall_keys": [
+   "昵称",
+   "宠物"
+  ],
+  "nonpin_skipped_but_stored": true,
+  "file_ok": true
+ },
+ "reflow": {
+  "by_len": {
+   "67字": {
+    "chars": 67,
+    "ms": 0.0609
+   },
+   "120字": {
+    "chars": 111,
+    "ms": 0.5615
+   },
+   "40字": {
+    "chars": 40,
+    "ms": 0.0058
+   }
+  },
+  "frames_67": 34,
+  "per_frame_total_ms": 2.2675,
+  "per_frame_ms": 0.0667,
+  "note": "reflow 入参只有当前回复，与轮数/历史无关"
+ }
+}

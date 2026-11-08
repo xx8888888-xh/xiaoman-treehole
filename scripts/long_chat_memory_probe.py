@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""long_chat_memory_probe.py · 长对话记忆保持压力测试（R9）
+"""long_chat_memory_probe.py · 长对话记忆保持压力测试（R9 / R11）
 
 不联网、不读凭据：LocalBackend 继承 eval_human_feel.ApiBackend，只替换
 `_request`，仍走真实链路「slot.render → prompt_core.system_prompt →
@@ -19,6 +19,7 @@
 """
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -34,7 +35,7 @@ import prompt_core as pc  # noqa: E402
 import risk_guard  # noqa: E402
 
 FREE_MODEL = "dots-studio/dots-3-note-preview:free"
-CHECK_TURNS = (20, 25, 30)
+CHECK_TURNS = (20, 25, 30, 35)
 
 # 30 轮用户输入：T2 埋事实，T20/T25/T30 保持无关话题；
 # T22 提“杭州”、T26 提“医院”，用来验证“存在但只在相关时才注入”，不是被删。
@@ -70,6 +71,21 @@ NEUTRAL_30 = [
     "有点困，先不聊了",
     "我先睡了，晚安",
 ]
+
+# R11：35 轮版本（R9 的 30 轮 + 5 轮无关闲聊），晚轮召回触发点保留到 T31/T34
+NEUTRAL_35 = NEUTRAL_30 + [
+    "今天风挺大的",
+    "想喝点热的",
+    "窗外的树影晃来晃去",
+    "有点想家里的饭",
+    "好了，我先去忙",
+]
+
+# 晚轮召回探针：T8 早 / T22、T26 中 / T31、T34 晚；只有同值（S1）才应命中
+TRIGGERS = {8: ("职业", "医院"), 22: ("住址", "杭州"), 26: ("职业", "医院"),
+            31: ("住址", "杭州"), 34: ("职业", "医院")}
+TRIGGER_LINES = {8: "你在医院上班累不累", 31: "杭州那边冷不冷",
+                 34: "今天医院来了好多病人，你们忙不忙"}
 
 REPLY_POOL = [
     "累就先歇会儿||不用急着说话",
@@ -164,11 +180,39 @@ def slot_view(store, sid, user):
     return {"total": len(rows), "eligible": eligible, "all": rows}
 
 
-def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=None):
-    """跑 30 轮，返回每个检查轮的事实存活、原因与 system 体积。"""
-    users = list(NEUTRAL_30)
+def turn_audit(slots, user, block):
+    """逐轮硬断言：pin 恒注入 / 非 pin overlap=0 不注入 / 注入条数 ≤ MAX_INJECT。
+
+    slots 必须是本轮请求之前的槽快照（本轮新提取的槽不要求已注入）。
+    """
+    lines = [ln for ln in block.splitlines() if ln.strip()]
+    keys = [ln[2:].split("：", 1)[0] for ln in lines
+            if ln.startswith("- ") and "：" in ln]
+    q = ms._grams(user)
+    pin_missing, nonpin_leak = [], []
+    for s in slots:
+        shown = ms._pet_display(s["value"]) if s["key"] == "宠物" else s["value"]
+        in_block = any(ln.startswith("- %s：" % s["key"]) and shown in ln
+                       for ln in lines)
+        if ms._is_pin(s):
+            if not in_block:
+                pin_missing.append(s["key"])
+        elif ms._overlap_count(s, q, user) == 0 and in_block:
+            nonpin_leak.append(s["key"])
+    return {"injected": len(lines), "inject_keys": keys,
+            "pin_missing": pin_missing, "nonpin_leak": nonpin_leak,
+            "over_limit": len(lines) > ms.MAX_INJECT}
+
+
+def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=None,
+                 turns=35, measure_reflow=True):
+    """跑 turns 轮，返回每个检查轮的事实存活、逐轮硬断言与 system 体积。"""
+    users = list(NEUTRAL_35 if turns >= 35 else NEUTRAL_30)[:turns]
     users[1] = seed_text
-    if overwrite:
+    for t, text in TRIGGER_LINES.items():
+        if t <= turns:
+            users[t - 1] = text
+    if overwrite and overwrite[0] <= turns:
         users[overwrite[0] - 1] = overwrite[1]
     backend = LocalBackend(updates_by_turn={2: model_updates})
     backend.reset_case({"id": name})
@@ -176,6 +220,7 @@ def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=N
     rows = {}
     systems = {}
     for i, user in enumerate(users, 1):
+        pre_slots = backend.slots.all(backend.sid)
         t0 = time.perf_counter()
         payload = backend.chat(history, user, {"id": name})
         chat_ms = (time.perf_counter() - t0) * 1000
@@ -184,21 +229,23 @@ def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=N
         system = backend.systems[-1]
         systems[i] = system
         view = slot_view(backend.slots, backend.sid, user)
+        block = mem_block(system)
         rows[i] = {
             "user": user, "chat_ms": round(chat_ms, 3),
             "history_msgs": backend.msg_counts[-1],
             "system_chars": len(system),
-            "mem_chars": len(mem_block(system)),
-            "mem_lines": [ln for ln in mem_block(system).splitlines() if ln.strip()],
+            "mem_chars": len(block),
+            "mem_lines": [ln for ln in block.splitlines() if ln.strip()],
             "view": view, "reply": payload.get("reply") or "",
-            "reflow_ms": round(time_reflow(REFLOW_TEXT), 4),
+            "audit": turn_audit(pre_slots, user, block),
+            "reflow_ms": round(time_reflow(REFLOW_TEXT), 4) if measure_reflow else None,
         }
     slots = backend.slots.all(backend.sid)
     slots_by_key = {s["key"]: s["value"] for s in slots}
     slot_values = [s["value"] for s in slots]
 
-    report = {"scenario": name, "turns": 30, "check_turns": CHECK_TURNS,
-              "facts": {}, "system": {}, "rows": rows}
+    report = {"scenario": name, "turns": turns, "check_turns": CHECK_TURNS,
+              "facts": {}, "system": {}, "rows": rows, "triggers": {}}
     for fact in facts:
         label, key, value = fact[0], fact[1], fact[2]
         introduced = fact[3] if len(fact) > 3 else 3
@@ -211,13 +258,15 @@ def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=N
         if key_value and value not in key_value:
             rec["overwritten_by"] = key_value
         present = {t: (value in mem_block(systems[t]))
-                   for t in range(introduced, 31)}
-        for t in range(introduced, 31):
+                   for t in range(introduced, turns + 1)}
+        for t in range(introduced, turns + 1):
             if not present[t] and rec["first_missing_turn"] is None:
                 rec["first_missing_turn"] = t
             elif present[t] and rec["first_missing_turn"] is not None:
                 rec["revived_turns"].append(t)
         for t in CHECK_TURNS:
+            if t > turns:
+                continue
             system = systems[t]
             block = mem_block(system)
             row = rows[t]
@@ -242,6 +291,8 @@ def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=N
             }
         report["facts"][label] = rec
     for t in CHECK_TURNS:
+        if t > turns:
+            continue
         report["system"][str(t)] = {
             "chars": len(systems[t]), "mem_chars": len(mem_block(systems[t])),
             "mem_lines": [x for x in mem_block(systems[t]).splitlines() if x.strip()],
@@ -250,8 +301,29 @@ def run_scenario(name, seed_text, model_updates, facts, overwrite=None, labels=N
     if labels:
         report["labels"] = {
             str(t): {lb: (lb in mem_block(systems[t])) for lb in labels}
-            for t in CHECK_TURNS
+            for t in CHECK_TURNS if t <= turns
         }
+    for t, (key, word) in TRIGGERS.items():
+        if t > turns:
+            continue
+        row = rows[t]
+        detail = next((s for s in row["view"]["all"] if s["key"] == key), None)
+        in_block = bool(detail) and any(
+            ln.startswith("- %s：" % key) and detail["value"] in ln
+            for ln in row["mem_lines"])
+        if detail is None:
+            ok, why = None, "槽不存在（本套无此事实，不计）"
+        elif detail["filtered"]:
+            ok, why = not in_block, "overlap=0，按需召回跳过（符合）"
+        elif detail.get("rank", 99) > ms.MAX_INJECT:
+            ok, why = not in_block, "相关但排名 %d > MAX_INJECT（符合挤出）" % detail["rank"]
+        else:
+            ok, why = in_block, ("相关且排名 %d ≤ MAX_INJECT，应注入" % detail.get("rank", 0))
+        report["triggers"][str(t)] = {
+            "key": key, "query_word": word,
+            "slot_value": detail["value"] if detail else None,
+            "overlap": detail["overlap"] if detail else None,
+            "in_system": in_block, "ok": ok, "reason": why}
     report["final_slots"] = slots
     report["static_core_chars"] = len(pc.CORE_PROMPT)
     return report
@@ -291,6 +363,35 @@ def eviction_probe():
             "note": "同分（情绪2/今天/未使用）时按列表顺序保留最新，淘汰最旧"}
 
 
+def restart_probe():
+    """重启等价性：落盘 → 新 SlotStore 复载 → pin 仍在、非 pin 不丢只跳过。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sid = "restart-probe"
+        s1 = ms.SlotStore(d)
+        s1.upsert(sid, "昵称", "阿秋")
+        s1.upsert(sid, "宠物", "年糕")
+        s1.upsert(sid, "老板", "张三")
+        for i in range(70):
+            s1.upsert(sid, "话题%02d" % i, "第%d件事" % i, kind="fact", emotion=1)
+        before = s1.all(sid)
+        p = Path(d) / ("slots-%s.json" % ms._sid_hash(sid))
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        s2 = ms.SlotStore(d)  # 等价于进程重启后新实例
+        after = s2.all(sid)
+        same = [(x["key"], x["value"]) for x in before] == [
+            (x["key"], x["value"]) for x in after]
+        pins = {k: s2.get(sid, k) is not None for k in ("昵称", "宠物")}
+        rec_keys = [x["key"] for x in s2.recall(sid, "今天加班好累", touch=False)]
+        return {"file": p.name, "version": raw.get("version"),
+                "slots_before": len(before), "slots_after": len(after),
+                "same_after_reload": same, "max_slots": ms.MAX_SLOTS,
+                "pins_survived": pins, "recall_keys": rec_keys,
+                "nonpin_skipped_but_stored": ("老板" not in rec_keys
+                                              and s2.get(sid, "老板") is not None),
+                "file_ok": p.exists() and raw.get("version") == ms.SlotStore.VERSION}
+
+
 def time_reflow(text, reps=120):
     t0 = time.perf_counter()
     for _ in range(reps):
@@ -319,18 +420,14 @@ def reflow_probe():
             "note": "reflow 入参只有当前回复，与轮数/历史无关"}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--json", default="")
-    args = ap.parse_args()
-
+def build_scenarios(turns=35, measure_reflow=True):
     s1 = run_scenario(
         "S1_mixed", "我叫阿秋，我家猫叫年糕，我在医院做护士，住杭州拱墅区，我很喜欢吃辣。",
         {"职业": "医院护士", "住址": "杭州拱墅区"},
         [("昵称", "昵称", "阿秋"), ("宠物", "宠物", "年糕"),
          ("喜好", "喜好", "喜欢吃辣"), ("职业", "职业", "医院护士"),
          ("住址", "住址", "杭州拱墅区")],
-    )
+        turns=turns, measure_reflow=measure_reflow)
     s2 = run_scenario(
         "S2_nonpin5", "对了，跟你说点我的事。",
         {"职业": "牙医", "住址": "南京鼓楼", "星座": "天蝎座",
@@ -338,69 +435,154 @@ def main():
         [("职业", "职业", "牙医"), ("住址", "住址", "南京鼓楼"),
          ("星座", "星座", "天蝎座"), ("血型", "血型", "O型"),
          ("爱好", "爱好", "拼乐高")],
-    )
+        turns=turns, measure_reflow=measure_reflow)
     s3 = run_scenario(
         "S3_coexist", "我叫阿秋，我家猫叫年糕，我在医院做护士，住杭州拱墅区，我很喜欢吃辣。",
         {"职业": "医院护士", "住址": "杭州拱墅区"},
         [("年糕", "宠物", "年糕"), ("煤球", "宠物", "煤球", 13)],
-        overwrite=(12, "对了，我家狗叫煤球。"),
-        labels=["猫叫年糕", "狗叫煤球"],
-    )
+        overwrite=(12, "对了，我家狗叫煤球。"), labels=["猫叫年糕", "狗叫煤球"],
+        turns=turns, measure_reflow=measure_reflow)
     s4 = run_scenario(
         "S4_correct", "我叫阿秋，我家猫叫团子，我很喜欢吃辣。",
         {},
         [("年糕", "宠物", "年糕", 13), ("团子", "宠物", "团子")],
-        overwrite=(12, "其实它叫年糕不是团子。"),
-        labels=["猫叫年糕"],
-    )
-    out = {
-        "scenarios": {r["scenario"]: r for r in (s1, s2, s3, s4)},
-        "limit_probe": limit_probe(),
-        "eviction_probe": eviction_probe(),
-        "reflow": reflow_probe(),
+        overwrite=(12, "其实它叫年糕不是团子。"), labels=["猫叫年糕"],
+        turns=turns, measure_reflow=measure_reflow)
+    return [s1, s2, s3, s4]
+
+
+def digest(rep):
+    """一套结果的指纹：事实存活、触发命中、逐轮硬断言计数。"""
+    return {
+        "stored": {k: v["stored"] for k, v in rep["facts"].items()},
+        "check": {k: {t: v["check"][t]["in_system"] for t in v["check"]}
+                  for k, v in rep["facts"].items()},
+        "first_missing": {k: v["first_missing_turn"] for k, v in rep["facts"].items()},
+        "triggers": {t: v["ok"] for t, v in rep["triggers"].items()},
+        "pin_missing": sum(len(r["audit"]["pin_missing"]) for r in rep["rows"].values()),
+        "nonpin_leak": sum(len(r["audit"]["nonpin_leak"]) for r in rep["rows"].values()),
+        "over_limit": sum(1 for r in rep["rows"].values() if r["audit"]["over_limit"]),
+        "max_inject": max(r["audit"]["injected"] for r in rep["rows"].values()),
     }
 
-    def show(rep):
-        print("\n=== %s ===" % rep["scenario"])
-        for label, rec in rep["facts"].items():
-            print("- %s「%s」 stored=%s%s" % (
-                label, rec["value"], rec["stored"],
-                "（当前=%s）" % rec["key_value"] if rec.get("overwritten_by") else ""))
-            for t in CHECK_TURNS:
-                c = rec["check"][str(t)]
-                print("    T%-2d in_system=%-5s %s" % (t, c["in_system"], c["reason"]))
-            if rec["first_missing_turn"]:
-                print("    首次不在 system：T%d；重新出现：%s" % (
-                    rec["first_missing_turn"],
-                    ",".join("T%d" % x for x in rec["revived_turns"]) or "无"))
-        for t in CHECK_TURNS:
-            print("  T%d system=%d 字（记忆段 %d 字 / %d 行，历史 %d 条）" % (
-                t, rep["system"][str(t)]["chars"], rep["system"][str(t)]["mem_chars"],
-                len(rep["system"][str(t)]["mem_lines"]),
-                rep["system"][str(t)]["history_msgs"]))
-        if rep.get("labels"):
-            for t in CHECK_TURNS:
-                hit = rep["labels"][str(t)]
-                print("  T%d 记忆段带标签：%s" % (
-                    t, "、".join("%s=%s" % (k, "有" if v else "无") for k, v in hit.items())))
 
-    for rep in (s1, s2, s3, s4):
-        show(rep)
+def flatten(d, prefix=""):
+    out = {}
+    if isinstance(d, dict):
+        for k, v in d.items():
+            out.update(flatten(v, "%s/%s" % (prefix, k)))
+    else:
+        out[prefix] = d
+    return out
 
-    lp = out["limit_probe"]
+
+def show(rep):
+    print("\n=== %s ===" % rep["scenario"])
+    for label, rec in rep["facts"].items():
+        print("- %s「%s」 stored=%s%s" % (
+            label, rec["value"], rec["stored"],
+            "（当前=%s）" % rec["key_value"] if rec.get("overwritten_by") else ""))
+        for t, c in rec["check"].items():
+            print("    T%-2s in_system=%-5s %s" % (t, c["in_system"], c["reason"]))
+        if rec["first_missing_turn"]:
+            print("    首次不在 system：T%d；重新出现：%s" % (
+                rec["first_missing_turn"],
+                ",".join("T%d" % x for x in rec["revived_turns"]) or "无"))
+    for t, s in rep["system"].items():
+        print("  T%-2s system=%d 字（记忆段 %d 字 / %d 行，历史 %d 条）" % (
+            t, s["chars"], s["mem_chars"], len(s["mem_lines"]), s["history_msgs"]))
+    if rep.get("labels"):
+        for t, hit in rep["labels"].items():
+            print("  T%s 记忆段带标签：%s" % (
+                t, "、".join("%s=%s" % (k, "有" if v else "无") for k, v in hit.items())))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--json", default="")
+    ap.add_argument("--turns", type=int, default=35, help="每套轮数（默认 35）")
+    ap.add_argument("--repeat", type=int, default=10, help="跑几套（默认 10）")
+    args = ap.parse_args()
+
+    # 本地只在 21:00 后跑；云端（GitHub Actions）不受限，避免本机 CPU 被打满。
+    if (os.environ.get("GITHUB_ACTIONS") != "true"
+            and os.environ.get("XM_ALLOW_DAYTIME") != "1"
+            and time.localtime().tm_hour < 21):
+        print("[probe] 本地仅在 21:00 后运行长对话探针；云端请走 GitHub Actions。已退出。")
+        return 0
+
+    runs, digests = [], []
+    first_reps = []
+    for run in range(1, args.repeat + 1):
+        reps = build_scenarios(turns=args.turns, measure_reflow=(run == 1))
+        digests.append({r["scenario"]: digest(r) for r in reps})
+        runs.append({"run": run,
+                     "digests": digests[-1],
+                     "pin_missing_total": sum(d["pin_missing"] for d in digests[-1].values()),
+                     "nonpin_leak_total": sum(d["nonpin_leak"] for d in digests[-1].values()),
+                     "over_limit_total": sum(d["over_limit"] for d in digests[-1].values())})
+        if run == 1:
+            first_reps = reps
+            for rep in reps:
+                show(rep)
+
+    lp = limit_probe()
+    ep = eviction_probe()
+    rp = reflow_probe()
+    restart = restart_probe()
+
+    print("\n=== %d 套 × %d 轮 ===" % (args.repeat, args.turns))
+    for run in runs:
+        for name, d in run["digests"].items():
+            trig = " ".join("T%s%s" % (t, "✓" if ok is True else ("N/A" if ok is None else "✗"))
+                            for t, ok in sorted(d["triggers"].items(), key=lambda x: int(x[0])))
+            stored = "%d/%d" % (sum(1 for v in d["stored"].values() if v), len(d["stored"]))
+            print("套%02d %-11s 存%s | pin丢%d 泄漏%d 超限%d 注入≤%d(峰%d) | %s" % (
+                run["run"], name, stored, d["pin_missing"], d["nonpin_leak"],
+                d["over_limit"], ms.MAX_INJECT, d["max_inject"], trig))
+
+    inconsistencies = []
+    base = digests[0]
+    for name in base:
+        b = flatten(base[name])
+        for i, dd in enumerate(digests[1:], 2):
+            f = flatten(dd[name])
+            for path in sorted(set(b) | set(f)):
+                if b.get(path) != f.get(path):
+                    inconsistencies.append({"scenario": name, "run": i, "field": path,
+                                            "base": b.get(path), "value": f.get(path)})
+    identical = not inconsistencies
+    print("\n10 套一致性：%s（逐套指纹 %s）" % (
+        "一致" if identical else "不一致",
+        "完全相同" if identical else "不一致项见下"))
+    for it in inconsistencies:
+        print("  ! 套%02d %s %s：套01=%s 本套=%s" % (
+            it["run"], it["scenario"], it["field"], it["base"], it["value"]))
+    if not inconsistencies:
+        print("  不一致项：无")
+
     print("\n=== MAX_INJECT 挤出 ===")
     print("  query=%s  limit=%d" % (lp["query"], lp["limit"]))
     print("  注入：%s" % "、".join(lp["injected"]))
     print("  挤掉：%s" % "、".join("%s(分%.2f,排名%d)" % (
         d["key"], d["score"], d["rank"]) for d in lp["dropped"]))
+    print("  注入条数 %d ≤ %d：%s" % (len(lp["injected"]), ms.MAX_INJECT,
+                                    len(lp["injected"]) <= ms.MAX_INJECT))
 
-    ep = out["eviction_probe"]
     print("\n=== 容量淘汰（>%d 槽才触发） ===" % ep["max_slots"])
     print("  写入 %d 条，保留 %d 条，淘汰：%s" % (
         ep["inserted"], ep["kept"], "、".join(ep["dropped"])))
     print("  %s" % ep["note"])
 
-    rp = out["reflow"]
+    print("\n=== 重启等价性（落盘 → 新实例复载） ===")
+    print("  文件 %s version=%s；槽 %d → %d，一致=%s；文件可读=%s" % (
+        restart["file"], restart["version"], restart["slots_before"],
+        restart["slots_after"], restart["same_after_reload"], restart["file_ok"]))
+    print("  pin 存活：%s；空查询注入：%s" % (
+        "、".join("%s=%s" % (k, "有" if v else "无") for k, v in restart["pins_survived"].items()),
+        "、".join(restart["recall_keys"]) or "无"))
+    print("  非 pin（老板）仍存但本轮无关被跳过：%s" % restart["nonpin_skipped_but_stored"])
+
     print("\n=== reflow 耗时 ===")
     for k, v in rp["by_len"].items():
         print("  %s：%.4f ms" % (k, v["ms"]))
@@ -408,15 +590,13 @@ def main():
         rp["by_len"]["67字"]["chars"], rp["frames_67"],
         rp["per_frame_total_ms"], rp["per_frame_ms"]))
     print("  %s" % rp["note"])
-    print("\n  各轮 chat 耗时（含 system 组装/reflow/ingest）与历史长度：")
-    for rep in (s1,):
-        for t in (1, 5, 10, 15, 20, 25, 30):
-            row = rep["rows"][t]
-            print("    T%-2d history=%2d 条  system=%4d 字  chat=%.3f ms" % (
-                t, row["history_msgs"], row["system_chars"], row["chat_ms"]))
-            print("         固定67字 reflow 复测：%.4f ms" % row["reflow_ms"])
-    print("\n  static core = %d 字（预算 1850）；记忆段无截断代码" % s1["static_core_chars"])
+    print("\n  static core = %d 字（预算 1850）；明细见上方 show 输出" % (
+        first_reps[0]["static_core_chars"]))
 
+    out = {"turns": args.turns, "repeat": args.repeat, "runs": runs,
+           "identical": identical, "inconsistencies": inconsistencies,
+           "limit_probe": lp, "eviction_probe": ep,
+           "restart_probe": restart, "reflow": rp}
     if args.json:
         p = Path(args.json)
         p.parent.mkdir(parents=True, exist_ok=True)

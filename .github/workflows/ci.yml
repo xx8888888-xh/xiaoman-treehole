@@ -184,3 +184,43 @@ jobs:
             echo "### ci · ${{ matrix.script }}"
             grep -hE "\[SUMMARY\]|[0-9]+/[0-9]+ passed" "artifacts/${{ matrix.script }}.log" 2>/dev/null || echo "(未运行/无汇总)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  memory-long-dialogue:
+    name: memory-long-dialogue (35t × 10)
+    # 长对话探针改到云端跑：纯 fake 后端（LocalBackend），不请求真实模型、
+    # 不启动服务端、不触发任何 TTS/发声；本地只在 21:00 后允许运行。
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run long-dialogue probe (35 turns × 10 sets)
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          python scripts/long_chat_memory_probe.py --turns 35 --repeat 10 \
+            --json artifacts/long_chat_memory_r11.json 2>&1 \
+            | tee artifacts/long_chat_memory_r11.log
+
+      - name: Upload probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-long-dialogue-r11
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### memory · 长对话探针 35 轮 × 10 套"
+            grep -hE "10 套一致性|不一致项|pin丢|MAX_INJECT|写入 .*保留" \
+              artifacts/long_chat_memory_r11.log 2>/dev/null || echo "(未运行/无汇总)"
+          } >> "$GITHUB_STEP_SUMMARY"
