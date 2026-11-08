@@ -8,6 +8,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -474,6 +475,11 @@ def _console_report(res):
         "failures": res["failures"],
         "overall_pass": False,
     }
+
+
+def test_module_import_does_not_disable_process_logging():
+    # exec_module 导入本脚本不得产生全局副作用：logging.disable 只在 CLI 入口生效。
+    assert logging.root.manager.disable == 0
 
 
 def test_product_constants_are_single_source():

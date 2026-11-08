@@ -52,7 +52,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 # --- 离线约束：假 key + 不落盘；在 import mock_api 之前设置 -------------------
 os.environ.setdefault("AI_API_KEY", "offline-eval-placeholder")
 os.environ.pop("XIAOMAN_DATA_DIR", None)
-logging.disable(logging.INFO)  # 屏蔽“已从凭据管理器读取 key”等 INFO 日志
+# 注意：logging.disable 只在 CLI 入口（__main__）生效。模块被 exec_module 导入
+# （验收单测）时不得关闭整个进程的日志，否则同进程里的日志相关测试会集体变红。
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SERVER_DIR = REPO_ROOT / "server"
@@ -1913,4 +1914,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    # 只在命令行运行时屏蔽“已从凭据管理器读取 key”等 INFO 日志；导入本模块不产生副作用。
+    logging.disable(logging.INFO)
     raise SystemExit(main())
