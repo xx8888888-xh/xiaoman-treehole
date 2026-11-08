@@ -771,6 +771,89 @@ async def main():
               {"gap": gap, "st": m4["chatScrollTop"], "sh": m4["chatScrollHeight"],
                "ch": m4["chatClientHeight"]})
 
+        # ---------- 11) 长消息折行与省略 ----------
+        await pg.set_viewport_size({"width": 414, "height": 860})
+        await pg.evaluate("""() => {
+          for (const id of ['voiceTip', 'noticeBar', 'pendingBar'])
+            document.getElementById(id).classList.add('hidden');
+          window.ChatPager.jumpLatest();
+        }""")
+        await pg.wait_for_timeout(220)
+        CJK = ("折行测试" + "这是一段很长的中文消息，用来验证气泡在高密度文本下会自然折行，"
+               "而不是把横向撑破；每行都该在气泡右边界前断开。") * 4
+        ASC = "AAAA" + "A" * 128
+        await pg.evaluate("([a, b]) => { window.ChatPager.push({text: a});"
+                          " window.ChatPager.push({text: b}); }", [CJK, ASC])
+        await pg.wait_for_timeout(280)
+        lm = await pg.evaluate("""() => {
+          const bubbles = [...document.querySelectorAll('#messages .bubble')];
+          const find = p => bubbles.find(b => b.textContent.startsWith(p));
+          const info = el => { if (!el) return null;
+            const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+            return { w: +r.width.toFixed(1), h: +r.height.toFixed(1),
+                     cw: el.clientWidth, sw: el.scrollWidth,
+                     lh: parseFloat(cs.lineHeight) || 0 }; };
+          const s = document.getElementById('chatScroll');
+          return { cjk: info(find('折行测试')), asc: info(find('AAAA')),
+                   chat: { cw: s.clientWidth, sw: s.scrollWidth },
+                   doc: { cw: document.documentElement.clientWidth,
+                          sw: document.documentElement.scrollWidth } };
+        }""")
+        metrics["long_text"] = lm
+        cjk, asc, chat = lm["cjk"], lm["asc"], lm["chat"]
+        check(f"长中文：折成多行（{round(cjk['h'] / cjk['lh'])} 行，>= 5）",
+              cjk["h"] / cjk["lh"] >= 5, (cjk["h"], cjk["lh"]),
+              guard="防止长段中文被压成一行横向滚出屏幕")
+        check(f"长中文：气泡宽度受列宽约束（{cjk['w']} <= {round(chat['cw'] * 0.86)}）",
+              cjk["w"] <= chat["cw"] * 0.86 + 2, (cjk["w"], chat["cw"]),
+              guard="防止气泡按内容宽度撑开，把 80% 上限改回无限宽")
+        check("长中文：气泡内无横向溢出（scrollWidth <= clientWidth）",
+              cjk["sw"] <= cjk["cw"] + 1, (cjk["sw"], cjk["cw"]),
+              guard="防止 overflow-wrap 被去掉后，长段落出现内部横向滚动条")
+        check(f"长英文串（132 个连续字母）：断词折行（{round(asc['h'] / asc['lh'])} 行），不撑破列表",
+              asc["h"] / asc["lh"] >= 2 and asc["sw"] <= asc["cw"] + 1,
+              (asc["h"], asc["lh"], asc["sw"], asc["cw"]),
+              guard="防止 URL/长英文 token 不断词，把整列横向撑破")
+        check("长消息：列表与文档都没有横向溢出",
+              chat["sw"] <= chat["cw"] + 1 and lm["doc"]["sw"] <= lm["doc"]["cw"] + 1,
+              (chat, lm["doc"]),
+              guard="防止单条长消息让整页出现横向漂移（iOS 橡皮筋式左右晃）")
+
+        # 钩子条：短横屏单行省略号 / 竖屏正常折行（"收起"而不是"从中间剪断"）
+        HOOK = "如果今晚还是睡不着，就想想你最想对谁说话，把那个名字留在心里也可以。"
+        await pg.evaluate("""(t) => {
+          const bar = document.getElementById('hookBar');
+          bar.innerHTML = ''; const chip = document.createElement('span');
+          chip.className = 'hook-chip'; chip.textContent = t; bar.appendChild(chip);
+          bar.classList.remove('hidden');
+        }""", HOOK)
+        await pg.set_viewport_size({"width": 782, "height": 363})
+        await pg.wait_for_timeout(220)
+        hook_l = await pg.evaluate("""() => {
+          const c = document.querySelector('.hook-chip'); const r = c.getBoundingClientRect();
+          const cs = getComputedStyle(c);
+          return { h: +r.height.toFixed(1), cw: c.clientWidth, sw: c.scrollWidth,
+                   ws: cs.whiteSpace, ov: cs.overflow, tov: cs.textOverflow,
+                   display: cs.display }; }""")
+        check("钩子条·短横屏：单行 + 省略号生效（确实省略了内容）",
+              hook_l["ws"] == "nowrap" and hook_l["ov"] == "hidden"
+              and hook_l["tov"] == "ellipsis" and hook_l["sw"] > hook_l["cw"]
+              and hook_l["h"] <= 52,
+              hook_l, guard="防止短横屏把钩子句竖切成半截（末尾停在句子中间）")
+        await pg.set_viewport_size({"width": 414, "height": 860})
+        await pg.wait_for_timeout(220)
+        hook_p = await pg.evaluate("""() => {
+          const c = document.querySelector('.hook-chip'); const r = c.getBoundingClientRect();
+          const cs = getComputedStyle(c);
+          return { h: +r.height.toFixed(1), cw: c.clientWidth, sw: c.scrollWidth,
+                   ws: cs.whiteSpace, display: cs.display }; }""")
+        check("钩子条·竖屏：正常折行、不裁字（多行且无横向溢出）",
+              hook_p["ws"] == "normal" and hook_p["h"] >= 60
+              and hook_p["sw"] <= hook_p["cw"] + 1,
+              hook_p, guard="防止竖屏沿用横屏的单行省略，把完整句子裁掉")
+        await pg.evaluate("""() => { const bar = document.getElementById('hookBar');
+          bar.innerHTML = ''; bar.classList.add('hidden'); }""")
+
 
         await browser.close()
 
