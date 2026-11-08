@@ -5,7 +5,9 @@
 不跑 10 套全量；需要全量一致性验证时用脚本的 --reps >= 2。
 """
 import copy
+import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -230,11 +232,11 @@ def test_update_facts_records_delete_and_override():
 
 
 # --- 窗口聚合 ---------------------------------------------------------------
-def _synth_event(set_index, turn, verdict="V", type_="hook"):
+def _synth_event(set_index, turn, verdict="V", type_="hook", key="宠物"):
     g = (set_index - 1) * ara.TURNS_PER_SET + turn
     return {
         "type": type_,
-        "key": "宠物",
+        "key": key,
         "kind": "value",
         "value": "年糕",
         "stored_value": "年糕",
@@ -325,10 +327,26 @@ def test_evaluate_windows_errors_and_failures():
     assert res["checks"]["window_budget"]["partial_windows"] == ara.SETS
     assert diag["offset_slice_windows"]
 
-    assert any(
-        f["criterion"] == "window_budget" and f["set"] == 1 and f["local_turns"] == [21, 30]
-        for f in res["failures"]
-    )
+    # 窗口分布降为诊断：不再出现在 failures / 不参与 PASS-FAIL，但分布仍照算。
+    assert res["checks"]["window_budget"]["participates_in_verdict"] is False
+    assert res["checks"]["name_budget"]["participates_in_verdict"] is False
+    assert diag["hook_only_total"]["participates_in_verdict"] is False
+    dist = diag["window_distribution"]
+    assert dist["participates_in_verdict"] is False
+    assert dist["counts"] == {"windows": 40, "sparse_v0": 0, "dense": 1, "normal": 39}
+    assert dist["conclusion"] == "这不是缺陷，是产品未定义窗口机制。"
+    assert dist["dense"][0]["label"] == "S01 T21-30"
+    assert dist["dense"][0]["evidence"]["allowed"] is False  # 同键重复 + 冷却内 + 总额超，仅诊断
+    assert not any(f["criterion"] == "window_budget" for f in res["failures"])
+
+    # 产品硬规则 2：S01 同键 1→2、11→12、21→21、21→22、22→23，S03 10→11 间隔不足冷却常量。
+    assert res["checks"]["per_key_cooldown"]["violations"] == 6
+    assert res["checks"]["per_key_cooldown"]["pass"] is False
+    assert res["checks"]["per_key_cooldown"]["hook_cooldown"] == ara.mock_api.RECALL_COOLDOWN
+    # 产品硬规则 3：S01 共 9 条 hook 回带、S03 共 5 条，均 > RECALL_MAX。
+    assert res["checks"]["session_total_cap"]["violations"] == 2
+    assert res["checks"]["session_total_cap"]["pass"] is False
+    assert any(f["criterion"] == "per_key_cooldown" for f in res["failures"])
     cap = [f for f in res["failures"] if f["criterion"] == "per_turn_cap"]
     assert cap and cap[0]["set"] == 1 and cap[0]["turn"] == 21
     assert any(f["criterion"] == "tombstone_zero" for f in res["failures"])
@@ -373,7 +391,8 @@ def test_name_recall_split_and_own_budget():
     w2 = res2["windows_local"][0]
     assert w2["name_pass"] is False and w2["pass"] is True
     assert res2["checks"]["name_budget"]["violations"] == ara.SETS
-    assert any(f["criterion"] == "name_budget" for f in res2["failures"])
+    assert res2["checks"]["name_budget"]["participates_in_verdict"] is False
+    assert not any(f["criterion"] == "name_budget" for f in res2["failures"])
 
 
 def test_consistency_requires_at_least_two_reps():
@@ -417,3 +436,120 @@ def test_run_set_single_set_is_deterministic():
     sig2 = [(e["turn"], e["type"], e["key"], e["verdict"]) for e in second["events"]]
     assert sig1 == sig2
     assert first["summary"]["turns"] == ara.TURNS_PER_SET
+
+
+# --- 产品硬规则 / 诊断展示 / 账本清单 ----------------------------------------
+def _console_report(res):
+    """把 evaluate 结果补成 _print_console 需要的最小报告结构。"""
+    return {
+        "meta": {
+            "backend": "fake",
+            "windows_primary": 40,
+            "windows_diagnostic": 35,
+            "reps": 1,
+            "seed": 20261108,
+        },
+        "sets_summary": [
+            {
+                "set": i,
+                "id": f"S{i:02d}",
+                "turns": ara.TURNS_PER_SET,
+                "V_hook": 0,
+                "V_name": 0,
+                "E": 0,
+                "invalid": 0,
+                "local_windows": [w for w in res["windows_local"] if w["set"] == i],
+                "note": "",
+            }
+            for i in range(1, ara.SETS + 1)
+        ],
+        "summary": res["summary"],
+        "checks": {
+            **res["checks"],
+            "consistency": {"reps": 1, "verified": False, "consistent": True, "pass": False},
+        },
+        "windows_local": res["windows_local"],
+        "windows": res["windows"],
+        "diagnostics": res["diagnostics"],
+        "failures": res["failures"],
+        "overall_pass": False,
+    }
+
+
+def test_product_constants_are_single_source():
+    const = ara._product_constants()
+    assert const["hook_cooldown"] == ara.mock_api.RECALL_COOLDOWN
+    assert const["name_cooldown"] == ara.mock_api.NAME_RECALL_COOLDOWN
+    assert const["session_max"] == ara.mock_api.RECALL_MAX
+    assert const["sources"]["session_max"] == "mock_api.RECALL_MAX"
+
+
+def test_cooldown_and_session_rules_are_verdict_checks():
+    cd = ara.mock_api.RECALL_COOLDOWN
+    cap = ara.mock_api.RECALL_MAX
+    events = {s: [_synth_event(s, 1)] for s in range(1, ara.SETS + 1)}
+    events[1].append(_synth_event(1, 1 + cd - 1))  # 间隔 cd-1 -> 同键冷却不达标
+    events[2] = [_synth_event(2, 1 + i * cd) for i in range(cap + 1)]  # 会话总额超 1 条
+    res = ara.evaluate(_synth_sets(events))
+
+    assert res["checks"]["per_key_cooldown"]["violations"] == 1
+    assert res["checks"]["per_key_cooldown"]["pass"] is False
+    assert res["checks"]["session_total_cap"]["violations"] == 1
+    assert res["checks"]["session_total_cap"]["pass"] is False
+    assert any(f["criterion"] == "per_key_cooldown" for f in res["failures"])
+    assert any(f["criterion"] == "session_total_cap" for f in res["failures"])
+
+
+def test_window_distribution_conclusion_is_at_report_top(capsys):
+    events = {s: [_synth_event(s, t) for t in (1, 11, 21, 31)] for s in range(1, ara.SETS + 1)}
+    events[7] = [
+        _synth_event(7, 1, key="宠物"),
+        _synth_event(7, 2, key="老板"),
+        _synth_event(7, 3, key="家人"),
+    ]
+    res = ara.evaluate(_synth_sets(events))
+    dist = res["diagnostics"]["window_distribution"]
+    assert dist["counts"] == {"windows": 40, "sparse_v0": 2, "dense": 1, "normal": 37}
+    ev = dist["dense"][0]["evidence"]
+    assert ev["allowed"] is True and ev["distinct_keys"] is True and ev["all_first"] is True
+
+    ara._print_console(_console_report(res))
+    out = capsys.readouterr().out
+    conclusion = "这不是缺陷，是产品未定义窗口机制"
+    assert conclusion in out
+    assert out.index(conclusion) < out.index("【判据】")
+    assert "密窗 S07 T01-10 V_hook=3" in out
+    assert "不同键=是" in out and "均首提=是" in out and "冷却已过=是" in out
+    assert "会话总额 3≤4" in out
+    assert "稀 2 / 密 1" in out
+    assert "诊断（不参与判定）" in out
+
+
+def test_inexact_red_local_is_visible_next_to_green_to_red(capsys):
+    events = {s: [_synth_event(s, t) for t in (1, 11, 21, 31)] for s in range(1, ara.SETS + 1)}
+    events[2] = [_synth_event(2, t) for t in (11, 21, 31)]  # S02 T01-10 红，但全局切片错位
+    res = ara.evaluate(_synth_sets(events))
+    audit = res["checks"]["window_scheme_audit"]
+    assert audit["green_to_red"] == 0 and audit["coverage_complete"] is True
+    assert audit["inexact_red_local"] == ["S02 T01-10"]
+    assert audit["inexact_red_local_count"] == 1
+    assert audit["pass"] is True  # 错位红窗不改变审计结论，只要求可见
+
+    ara._print_console(_console_report(res))
+    out = capsys.readouterr().out
+    assert "绿转红 0 条 / 空洞 0 / 错位 1 条" in out
+    assert "S02 T01-10" in out
+    assert out.index("错位 1 条") < out.index("【窗口分布")
+
+
+def test_manifest_records_report_sha(tmp_path):
+    out = tmp_path / "runs" / "run1" / "report.json"
+    out.parent.mkdir(parents=True)
+    report = {"meta": {"reps": 3, "seed": 1, "generated_at": "t"}, "overall_pass": True}
+    out.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    info = ara._write_manifest(out, report)
+    manifest = json.loads((out.parent / "manifest.json").read_text(encoding="utf-8"))
+    expected = hashlib.sha256(out.read_bytes()).hexdigest()
+    assert info["report_sha256"] == expected == manifest["report_sha256"]
+    assert manifest["report_path"] == str(out)
+    assert manifest["reps"] == 3 and manifest["overall_pass"] is True

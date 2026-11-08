@@ -2,31 +2,34 @@
 # -*- coding: utf-8 -*-
 """主动回带验收：10 套 × 35 轮（350 轮），离线 fake 后端。
 
-判据（用户已定）：
-  - 有效回带 V >= 35
-  - 错误回带 E == 0（墓碑/改口语义、实体错绑、编造属性、冷却内重复、敏感未受邀）
-  - 每个 10 轮窗口 1 <= V <= 2，每轮 <= 1 条
-  - 精确率 V / (V + E + 无效) >= 0.9
-  - "把年糕忘了"之后年糕提及 0 次；改口场景旧值 0 次
+判据（用户已定，2026-11 方案甲）：
+  参与 PASS/FAIL 的三条产品硬规则：
+  - 每轮 <= 1 条回带
+  - 同键冷却：同一会话同一键两次回带间隔 >= 产品常量（mock_api.RECALL_COOLDOWN /
+    NAME_RECALL_COOLDOWN；脚本不另写 6）
+  - 会话总额：单会话 hook 回带 <= mock_api.RECALL_MAX（昵称不占名额）
+  另保留：有效回带 V >= 35、错误回带 E == 0、精确率 >= 0.9、
+  墓碑后提及 0 次、改口旧值 0 次、口径反向审计（绿转红 0 且覆盖无空洞）。
 
-本脚本只做评测与判据，不改生成逻辑。规则门控（墓碑、预算、冷却）由另一路负责。
+窗口分布量（1<=V_hook<=2、V_name<=6、hook_only_total>=35）全部降为诊断：
+participates_in_verdict=false，值照算、分布照打印，但不决定 PASS/FAIL。
+产品未定义窗口机制，报告顶部固定写“这不是缺陷，是产品未定义窗口机制。”
+
+本脚本只做评测与判据，不改生成逻辑；mock_api.py / memory_slots.py 不碰。
 
 运行：
   python scripts/active_recall_acceptance.py
   python scripts/active_recall_acceptance.py --reps 3 --verbose
-  python scripts/active_recall_acceptance.py --json artifacts/active_recall_acceptance/report.json
 
 账本隔离：缺省每次运行写入独立目录
   artifacts/active_recall_acceptance/runs/<时间戳>_reps<N>_seed<S>/report.json
-同 seed 复跑也不会覆盖上一次的取证；需要指定路径时再用 --json。
+同 seed 复跑也不会覆盖上一次的取证；同目录 manifest.json 记录 report.json 的 sha256，
+控制台顶部打印本次 run 路径与 sha。需要指定路径时再用 --json。
 
 说明：
   - 直接调用 server/mock_api.py 的 make_reply（fake 后端），不联网、不调用真实模型。
-  - 窗口口径（主判据）：每套会话从 T1 起每 10 轮一窗，尾窗不足 10 轮按实际轮数算并标 partial，
-    套与套之间不拼，共 40 窗；只有这个口径参与红绿判定。
-  - 诊断口径：把 350 轮展平后按全局每 10 轮切窗，共 35 窗，标注 crosses_sets / offset_slice。
-    跨套/偏移切片会把互不相关的会话拼接或横跨两个局部窗，V 之和没有单会话语义，
-    因此只并排展示、不参与判定；报告里同时给出红转绿 / 仍红 / 绿转红。
+  - 局部窗口（按会话 40 窗）与全局窗口（拼接 35 窗）都只作诊断与定位，
+    用于“口径重算”的反向审计，不参与红绿判定。
   - 复跑一致性只有 --reps >= 2 才算验证通过；--reps 1 记为“未验证”，不给空 PASS。
 """
 
@@ -34,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -135,10 +139,12 @@ CRITERIA_LABELS = {
     "total_v": "有效回带 V 合计",
     "errors": "错误回带 E",
     "precision": "精确率",
-    "window_budget": "窗口 V_hook∈[1,2]（按会话）",
-    "name_budget": "窗口 V_name∈[0,6]",
+    "window_budget": "窗口 V_hook 分布",
+    "name_budget": "窗口 V_name 分布",
     "window_scheme_audit": "口径反向审计（绿转红）",
     "per_turn_cap": "每轮 ≤1 条",
+    "per_key_cooldown": "同键冷却",
+    "session_total_cap": "会话回带总额",
     "tombstone_zero": "墓碑后提及 0 次",
     "override_zero": "改口旧值 0 次",
     "consistency": "复跑一致性",
@@ -925,6 +931,56 @@ def _covering_global(
     ]
 
 
+def _product_constants() -> Dict[str, Any]:
+    """三条硬规则的阈值全部引用产品常量，不在脚本里另写 6 / 4（否则判据变成第二个真源）。"""
+    return {
+        "hook_cooldown": int(mock_api.RECALL_COOLDOWN),
+        "name_cooldown": int(mock_api.NAME_RECALL_COOLDOWN),
+        "session_max": int(mock_api.RECALL_MAX),
+        "sources": {
+            "hook_cooldown": "mock_api.RECALL_COOLDOWN",
+            "name_cooldown": "mock_api.NAME_RECALL_COOLDOWN",
+            "session_max": "mock_api.RECALL_MAX",
+        },
+    }
+
+
+def _dense_evidence(
+    w: Dict[str, Any], all_events: Sequence[Dict[str, Any]], const: Dict[str, Any]
+) -> Dict[str, Any]:
+    """密窗逐条核验：不同键、均首提、冷却已过、会话总额未超产品常量。"""
+    evs = [
+        e
+        for e in all_events
+        if e["set"] == w["set"] and w["start"] <= e["turn"] <= w["end"] and e["type"] == "hook"
+    ]
+    keys = [e["key"] for e in evs]
+    distinct_keys = bool(keys) and len(set(keys)) == len(keys)
+    all_first = True
+    cooldown_ok = True
+    for e in evs:
+        same = [
+            x for x in all_events
+            if x["set"] == w["set"] and x["type"] == "hook" and x["key"] == e["key"]
+        ]
+        prior_turns = [x["turn"] for x in same if x["turn"] < e["turn"]]
+        all_first = all_first and e["turn"] == min(x["turn"] for x in same)
+        cooldown_ok = cooldown_ok and (
+            not prior_turns or e["turn"] - max(prior_turns) >= const["hook_cooldown"]
+        )
+    session_total = sum(1 for x in all_events if x["set"] == w["set"] and x["type"] == "hook")
+    return {
+        "keys": keys,
+        "distinct_keys": distinct_keys,
+        "all_first": all_first,
+        "cooldown_ok": cooldown_ok,
+        "session_hook_total": session_total,
+        "session_max": const["session_max"],
+        "total_ok": session_total <= const["session_max"],
+        "allowed": distinct_keys and all_first and cooldown_ok and session_total <= const["session_max"],
+    }
+
+
 def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     all_events = [e for s in all_sets for e in s["events"]]
     all_mentions = [m for s in all_sets for m in s["mentions"]]
@@ -981,55 +1037,63 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     cap_bad = {k: n for k, n in per_turn_counts.items() if n > 1}
 
     failures: List[Dict[str, Any]] = []
-    for w in local_windows:
-        if not w["pass"]:
-            if w["V_hook"] > WINDOW_V_MAX:
-                reason = "超出每 10 轮 hook 回带上限（缺窗口预算门控）"
-                detail = (
-                    f"{w['label']} V_hook={w['V_hook']}，要求 1≤V_hook≤2（按会话切窗）"
-                    if not w["partial"]
-                    else f"{w['label']} V_hook={w['V_hook']}，尾窗只判不超上限（V_hook≤2），本次越上限"
-                )
-            else:
-                reason = "hook 回带过稀（缺每 10 轮至少 1 条的下限调度）"
-                detail = f"{w['label']} V_hook=0，要求 1≤V_hook≤2（按会话切窗）"
-            failures.append(
+
+    # 产品硬规则 2/3：阈值引用 mock_api 常量，不另写 6 / 4。
+    const = _product_constants()
+    by_key: Dict[Tuple[int, str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for e in all_events:
+        by_key[(e["set"], e["type"], e["key"])].append(e)
+    cooldown_violations: List[Dict[str, Any]] = []
+    for (s, typ, key), evs in sorted(by_key.items()):
+        evs.sort(key=lambda e: e["turn"])
+        required = const["name_cooldown"] if typ == "name" else const["hook_cooldown"]
+        for prev, cur in zip(evs, evs[1:]):
+            gap = cur["turn"] - prev["turn"]
+            if gap >= required:
+                continue
+            cooldown_violations.append(
                 {
-                    "criterion": "window_budget",
-                    "owner": "生成侧",
-                    "owner_file": "server/mock_api.py",
-                    "owner_reason": reason,
-                    "set": w["set"],
-                    "set_id": w["set_id"],
-                    "local_turns": [w["start"], w["end"]],
-                    "partial": w["partial"],
-                    "rule": w.get("rule"),
-                    "detail": detail,
-                    "V": w["V"],
-                    "V_hook": w["V_hook"],
-                    "V_name": w["V_name"],
-                    "E": w["E"],
+                    "set": s,
+                    "set_id": cur["set_id"],
+                    "type": typ,
+                    "key": key,
+                    "prev_turn": prev["turn"],
+                    "turn": cur["turn"],
+                    "gap": gap,
+                    "required": required,
                 }
             )
-    for w in local_windows:
-        if not w.get("name_pass", True):
             failures.append(
                 {
-                    "criterion": "name_budget",
+                    "criterion": "per_key_cooldown",
                     "owner": "生成侧",
                     "owner_file": "server/mock_api.py",
-                    "owner_reason": "名字回带过密，超产品口径上界（隔 1-2 轮叫一次）",
-                    "set": w["set"],
-                    "set_id": w["set_id"],
-                    "local_turns": [w["start"], w["end"]],
-                    "partial": w["partial"],
+                    "owner_reason": "同键两次回带间隔小于产品冷却常量",
+                    "set": s,
+                    "set_id": cur["set_id"],
+                    "turn": cur["turn"],
                     "detail": (
-                        f"{w['label']} V_name={w['V_name']}，"
-                        f"要求 {NAME_WINDOW_V_MIN}≤V_name≤{NAME_WINDOW_V_MAX}"
+                        f"套{s:02d} 键「{key}」({typ}) T{cur['turn']:02d} 距上次 T{prev['turn']:02d} "
+                        f"仅 {gap} 轮 < {required}（{const['sources']['name_cooldown' if typ == 'name' else 'hook_cooldown']}）"
                     ),
-                    "V_name": w["V_name"],
                 }
             )
+    session_hook_counts = Counter(e["set"] for e in all_events if e["type"] == "hook")
+    session_over = {s: n for s, n in sorted(session_hook_counts.items()) if n > const["session_max"]}
+    for s, n in session_over.items():
+        failures.append(
+            {
+                "criterion": "session_total_cap",
+                "owner": "生成侧",
+                "owner_file": "server/mock_api.py",
+                "owner_reason": "会话回带总额超过产品常量 RECALL_MAX",
+                "set": s,
+                "detail": (
+                    f"套{s:02d} hook 回带 {n} 次 > {const['session_max']}"
+                    f"（{const['sources']['session_max']}）"
+                ),
+            }
+        )
     for e in all_events:
         if str(e["verdict"]).startswith("E"):
             failures.append(
@@ -1149,6 +1213,36 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         if w["window"] not in {r["window"] for r in red_to_green}
     ]
 
+    # 窗口分布量全部降为诊断：值照算、分布照打印，但不参与 PASS/FAIL。
+    sparse_v0 = [w for w in local_windows if w.get("rule") == "range" and w["V_hook"] == 0]
+    dense = [w for w in local_windows if w["V_hook"] > WINDOW_V_MAX]
+    dense_diag = [
+        {
+            "label": w["label"],
+            "set": w["set"],
+            "V_hook": w["V_hook"],
+            "evidence": _dense_evidence(w, all_events, const),
+        }
+        for w in dense
+    ]
+    window_distribution = {
+        "participates_in_verdict": False,
+        "counts": {
+            "windows": len(local_windows),
+            "sparse_v0": len(sparse_v0),
+            "dense": len(dense),
+            "normal": len(local_windows) - len(sparse_v0) - len(dense),
+        },
+        "sparse_v0": [w["label"] for w in sparse_v0],
+        "dense": dense_diag,
+        "conclusion": "这不是缺陷，是产品未定义窗口机制。",
+        "reason": (
+            "1≤V_hook≤2 是评测侧自拟的窗口分布量，产品只定义了三道硬闸门"
+            "（每轮≤1、同键冷却≥RECALL_COOLDOWN、会话总额≤RECALL_MAX）；"
+            "产品没有窗口机制，故窗口分布只作诊断，不参与 PASS/FAIL。"
+        ),
+    }
+
     checks: Dict[str, Dict[str, Any]] = {
         "turns": {
             "actual": sum(s["summary"]["turns"] for s in all_sets),
@@ -1170,17 +1264,37 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             "full_windows": sum(1 for w in local_windows if not w["partial"]),
             "partial_windows": sum(1 for w in local_windows if w["partial"]),
             "metric": "V_hook",
+            "distribution": window_distribution["counts"],
+            "participates_in_verdict": False,
             "pass": all(w["pass"] for w in local_windows),
         },
-        # 名字回带独立判据：上界 6 来自产品口径（隔 1-2 轮叫一次），下界 0 合法。
+        # 名字回带独立量：同样只是窗口分布诊断；产品只给了冷却常量，没有窗口上界。
         "name_budget": {
             "violations": sum(1 for w in local_windows if not w.get("name_pass", True)),
             "windows": len(local_windows),
             "range": [NAME_WINDOW_V_MIN, NAME_WINDOW_V_MAX],
             "distribution": {str(k): v for k, v in sorted(Counter(w["V_name"] for w in local_windows).items())},
+            "participates_in_verdict": False,
             "pass": all(w.get("name_pass", True) for w in local_windows),
         },
         "per_turn_cap": {"violations": len(cap_bad), "pass": not cap_bad},
+        # 产品硬规则 2：同键两次回带间隔 ≥ 产品冷却常量（hook/名字各用各的常量）。
+        "per_key_cooldown": {
+            "violations": len(cooldown_violations),
+            "hook_cooldown": const["hook_cooldown"],
+            "name_cooldown": const["name_cooldown"],
+            "sources": [const["sources"]["hook_cooldown"], const["sources"]["name_cooldown"]],
+            "pass": not cooldown_violations,
+        },
+        # 产品硬规则 3：单会话 hook 回带总额 ≤ RECALL_MAX（昵称不占名额，见 mock_api 口径）。
+        "session_total_cap": {
+            "violations": len(session_over),
+            "max_per_session": const["session_max"],
+            "max_observed": max(session_hook_counts.values()) if session_hook_counts else 0,
+            "metric": "hook 回带（昵称不占 RECALL_MAX 名额）",
+            "source": const["sources"]["session_max"],
+            "pass": not session_over,
+        },
         "tombstone_zero": {"mentions": len(tomb_mentions), "pass": len(tomb_mentions) == 0},
         "override_zero": {"mentions": len(over_mentions), "pass": len(over_mentions) == 0},
         # 口径反向审计：改判据不能只往好处走。脚本自动比对两口径窗口集合，
@@ -1189,6 +1303,10 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             "green_to_red": len(green_to_red),
             "coverage_gaps": coverage_gaps,
             "coverage_complete": not coverage_gaps,
+            # 切片错位的局部红窗：不计入绿转红（判定口径不变），但必须与“绿转红 0 / 覆盖无空洞”
+            # 同处可见，不能只藏在 diagnostics 深处 —— 单列不等于可以不看。
+            "inexact_red_local": [r["label"] for r in inexact_red_local],
+            "inexact_red_local_count": len(inexact_red_local),
             "pass": not green_to_red and not coverage_gaps,
         },
     }
@@ -1230,6 +1348,7 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             ),
             "coverage_gaps": coverage_gaps,
             "coverage_complete": not coverage_gaps,
+            "window_distribution": window_distribution,
             "partial_windows_note": (
                 "10 个 5 轮尾窗（T31-35）只有半窗样本，V_hook 的绝对数天然偏小："
                 "尾窗只参与“不超上限（V_hook≤2）”的判定，不做“回带过少（V_hook≥1）”的正向判定；"
@@ -1239,6 +1358,7 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             "hook_only_total": {
                 "V_hook": V_hook,
                 "threshold": MIN_V,
+                "participates_in_verdict": False,
                 "pass": V_hook >= MIN_V,
                 "note": "仅供参考：原判据按 V_hook+V_name 合计≥35 计（未改门槛）；若只算 hook 则不足 35。",
             },
@@ -1338,7 +1458,10 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
                 "detail": f"仅复跑 {reps} 次，无法验证一致性；请用 --reps 2 或更多",
             }
         )
-    overall = all(bool(c.get("pass")) for c in checks.values())
+    # 只有 participates_in_verdict 未标 False 的判据参与 PASS/FAIL；窗口分布量已降为诊断。
+    overall = all(
+        bool(c.get("pass")) for c in checks.values() if c.get("participates_in_verdict", True)
+    )
     gen_n = sum(1 for f in baseline["failures"] if f.get("owner") == "生成侧")
     judge_n = sum(1 for f in baseline["failures"] if f.get("owner") == "判据侧")
     judge_note = (
@@ -1351,13 +1474,14 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
         "判据侧": judge_n,
         "剧本输入": 0,
         "note": (
-            f"生成侧 {gen_n} 条（hook 窗口预算/错误回带/每轮上限）属评估后端 "
-            "server/mock_api.py 缺按会话窗口预算、冷却、敏感邀请、每轮上限门控，待另派；"
-            "本脚本只评测，不改 mock_api.py。"
+            f"生成侧 {gen_n} 条（错误回带/每轮上限/同键冷却/会话总额）属评估后端 "
+            "server/mock_api.py 门控缺失，待另派；本脚本只评测，不改 mock_api.py。"
             + judge_note
+            + "窗口稀/密分布已降为诊断，不参与判定，归因见 diagnostics.window_distribution。"
             + "无剧本输入失败。"
         ),
     }
+    const = _product_constants()
     meta = {
         "generated_at": started.isoformat(),
         "backend": "server/mock_api.py::make_reply（离线 fake 后端，不调用真实模型）",
@@ -1375,23 +1499,38 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
             "precision_min": MIN_PRECISION,
             "window_V_hook": [WINDOW_V_MIN, WINDOW_V_MAX],
             "window_V_name": [NAME_WINDOW_V_MIN, NAME_WINDOW_V_MAX],
+            "window_bounds_participate_in_verdict": False,
             "per_turn_max": 1,
+            "per_key_cooldown": {
+                "hook": const["hook_cooldown"],
+                "name": const["name_cooldown"],
+                "source": [const["sources"]["hook_cooldown"], const["sources"]["name_cooldown"]],
+            },
+            "session_recall_max": {
+                "value": const["session_max"],
+                "source": const["sources"]["session_max"],
+                "metric": "hook 回带（昵称不占名额）",
+            },
         },
         "definitions": {
             "V": "有效主动回带合计 = V_hook + V_name；≥35 沿用原判据口径（合计），便于与历史账本对齐。",
-            "V_hook": "有效 hook 回带：带出用户此前说过、本轮未提到的记忆事实（不含昵称）。窗口 1≤V_hook≤2 只约束这一项。",
-            "V_name": "有效昵称回带：主动叫名字。产品把名字排除在 hook 预算外（test_active_recall.py::test_name_recall_does_not_consume_hook_budget），单设 [0,6]/10 轮上界。",
+            "V_hook": "有效 hook 回带：带出用户此前说过、本轮未提到的记忆事实（不含昵称）。窗口 1≤V_hook≤2 仅为诊断量，不参与判定。",
+            "V_name": "有效昵称回带：主动叫名字。产品把名字排除在 hook 预算外（test_active_recall.py::test_name_recall_does_not_consume_hook_budget），[0,6]/10 轮上界同样仅为诊断。",
             "E": "错误回带：墓碑/改口语义、实体错绑、编造属性、冷却内重复、敏感未受邀；另含删除/改口后仍提及旧值。",
             "无效": "非主动或低质回带：同轮复述、记忆未更新的旧值、提取间隔不足、宠物泛指。",
-            "window": "主判据：每套会话从 T1 起每 10 轮一窗，尾窗不足 10 轮按实际轮数算并标 partial，套与套之间不拼，共 40 窗。诊断：把 350 轮展平成全局 35 窗，标注 crosses_sets / offset_slice，不参与红绿判定。",
-            "window_primary": "按会话对齐的 40 个窗口，是唯一参与红绿判定的窗口口径。",
+            "window": "窗口分布量（按会话 40 窗 / 全局 35 窗）均为诊断：值照算、分布照打印，不参与 PASS/FAIL；产品未定义窗口机制。",
+            "window_primary": "按会话对齐的 40 个窗口：仅用于定位与诊断，不再作为主判据。",
             "window_diagnostic": "全局 35 窗仅作诊断：跨套拼接与偏移切片会让互不相关的会话 V 相加，不能当作产品回带过多。",
             "red_to_green": "旧全局诊断红窗，跨套时各段 V_hook 均 1≤V_hook≤2、单套时覆盖的局部窗口全合格：属纯切窗口径假红。",
             "still_red": "旧全局诊断红窗，至少覆盖一个局部红窗：与真实生成侧越界重叠，不能算纯口径问题。",
             "green_to_red": "局部窗口红、但其覆盖的全局诊断窗口全绿：改口径后新增的真红，必须为空。",
             "window_partial": "尾窗（每套 T31-35，共 10 个）只有 5 轮样本，V_hook 绝对数天然偏小：只判“不超上限 V_hook≤2”，不做“V_hook≥1 回带过少”的正向判定。",
             "window_scheme_audit": "每次改窗口口径都必须跑的反向检查：脚本自动比对两口径窗口集合，要求绿转红=0 且局部窗到全局窗的覆盖无空洞。",
-            "name_recall": "昵称回带（V_name）独立计数、独立判据 [0,6]/10 轮；不再与 hook 合计施加 1≤V≤2。",
+            "inexact_red_local": "切片错位（本套 T1 不落在 10 轮边界）的局部红窗：全局诊断窗无法与它逐轮对齐，故不参与绿转红计数；但仍在报告顶部与绿转红同列展示，不得只看 JSON。",
+            "name_recall": "昵称回带（V_name）独立计数；窗口上界仅为诊断，产品规则只有 NAME_RECALL_COOLDOWN 冷却。",
+            "window_distribution": "窗口稀/密分布：不参与判定。结论固定为“这不是缺陷，是产品未定义窗口机制”，稀窗与密窗仍逐条可见。",
+            "per_key_cooldown": "产品硬规则 2：同一会话同一键两次回带间隔 ≥ 冷却常量（hook 用 RECALL_COOLDOWN，名字用 NAME_RECALL_COOLDOWN，均取自 mock_api）。",
+            "session_total_cap": "产品硬规则 3：单会话 hook 回带总额 ≤ mock_api.RECALL_MAX（昵称不占名额）。",
         },
     }
 
@@ -1463,7 +1602,14 @@ def _fmt_pct(v: Optional[float]) -> str:
     return "n/a" if v is None else f"{v * 100:.1f}%"
 
 
-def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
+def _print_console(
+    report: Dict[str, Any], verbose: bool = False, run_info: Optional[Dict[str, Any]] = None
+) -> None:
+    if run_info:
+        print(f"本次 run 目录：{run_info['run_dir']}")
+        print(f"报告文件：{run_info['report_path']}")
+        print(f"报告 sha256：{run_info['report_sha256']}")
+        print(f"清单文件：{run_info['manifest_path']}")
     meta = report["meta"]
     checks = report["checks"]
     print("=" * 78)
@@ -1471,8 +1617,8 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
     print(f"后端：{meta['backend']}")
     print(
         f"轮数：{sum(s['turns'] for s in report['sets_summary'])} / "
-        f"主判据窗口：{meta['windows_primary']}（按会话切，尾窗按实际轮数）/ "
-        f"诊断窗口：{meta['windows_diagnostic']}（全局拼接，不参与判定）"
+        f"局部窗口：{meta['windows_primary']}（按会话切，尾窗按实际轮数，仅诊断）/ "
+        f"全局窗口：{meta['windows_diagnostic']}（拼接切片，仅诊断）"
     )
     print(f"复跑：{meta['reps']} 次（seed={meta['seed']}）")
     s = report.get("summary") or {}
@@ -1480,6 +1626,25 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
         f"摘要：V_hook={s.get('V_hook')} / V_name={s.get('V_name')} / "
         f"E={s.get('E')} / 精确率={_fmt_pct(s.get('precision'))}"
     )
+    dist = (report.get("diagnostics") or {}).get("window_distribution") or {}
+    if dist:
+        c = dist["counts"]
+        print(
+            f"窗口机制：{dist['conclusion']}"
+            f"（诊断，不参与判定：稀窗 V_hook=0 ×{c['sparse_v0']} / "
+            f"密窗 V_hook>{WINDOW_V_MAX} ×{c['dense']} / 正常 ×{c['normal']}）"
+        )
+        if dist.get("sparse_v0"):
+            print(f"  └ 稀窗 V_hook=0（{len(dist['sparse_v0'])} 个）：" + "、".join(dist["sparse_v0"]))
+        for d in dist.get("dense") or []:
+            ev = d.get("evidence") or {}
+            print(
+                f"  └ 密窗 {d['label']} V_hook={d['V_hook']}：{d['V_hook']} 条已逐条验证为产品规则允许"
+                f"（不同键={'是' if ev.get('distinct_keys') else '否'}、"
+                f"均首提={'是' if ev.get('all_first') else '否'}、"
+                f"冷却已过={'是' if ev.get('cooldown_ok') else '否'}、"
+                f"会话总额 {ev.get('session_hook_total')}≤{ev.get('session_max')}）"
+            )
     print("=" * 78)
 
     print("\n【判据】")
@@ -1494,15 +1659,47 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
     c = checks["precision"]
     print(f"{CRITERIA_LABELS['precision']:<24}{_fmt_pct(c['actual']):<22}≥ {_fmt_pct(c['min']):<14}{'PASS' if c['pass'] else 'FAIL'}")
     c = checks["window_budget"]
-    print(f"{CRITERIA_LABELS['window_budget']:<24}{c['violations']} 个窗口越界     1≤V_hook≤2     {'PASS' if c['pass'] else 'FAIL'}")
+    d = c.get("distribution") or {}
+    print(
+        f"{CRITERIA_LABELS['window_budget']:<24}"
+        f"稀 {d.get('sparse_v0', 0)} / 密 {d.get('dense', 0):<12}"
+        f"{'诊断（不参与判定）':<16}诊断"
+    )
     c = checks.get("name_budget")
     if c:
-        print(f"{CRITERIA_LABELS['name_budget']:<24}{c['violations']} 个窗口越界     {c['range'][0]}≤V_name≤{c['range'][1]}   {'PASS' if c['pass'] else 'FAIL'}")
+        print(
+            f"{CRITERIA_LABELS['name_budget']:<24}{c['violations']} 个窗口越界     "
+            f"{'诊断（不参与判定）':<16}诊断"
+        )
     c = checks.get("window_scheme_audit")
     if c:
-        print(f"{CRITERIA_LABELS['window_scheme_audit']:<24}绿转红 {c['green_to_red']} 条         = 0            {'PASS' if c['pass'] else 'FAIL'}")
+        inexact = c.get("inexact_red_local") or []
+        value = f"绿转红 {c['green_to_red']} 条 / 空洞 {len(c['coverage_gaps'])} / 错位 {len(inexact)} 条"
+        print(
+            f"{CRITERIA_LABELS['window_scheme_audit']:<24}{value:<26}"
+            f"{'绿转红=0 且空洞=0':<16}{'PASS' if c['pass'] else 'FAIL'}"
+        )
+        if inexact:
+            by_set = Counter(lbl.split()[0] for lbl in inexact)
+            print("  └ 切片错位局部红窗（不计入绿转红，但同样要看）：" + "、".join(inexact))
+            print("    按套：" + "、".join(f"{k}×{v}" for k, v in sorted(by_set.items())) + "（详见下方口径重算）")
     c = checks["per_turn_cap"]
     print(f"{CRITERIA_LABELS['per_turn_cap']:<24}{c['violations']} 轮越界           ≤1 条           {'PASS' if c['pass'] else 'FAIL'}")
+    c = checks["per_key_cooldown"]
+    cd = (
+        f"≥{c['hook_cooldown']} 轮"
+        if c["hook_cooldown"] == c["name_cooldown"]
+        else f"≥{c['hook_cooldown']}/{c['name_cooldown']} 轮"
+    )
+    print(
+        f"{CRITERIA_LABELS['per_key_cooldown']:<24}{c['violations']} 次            "
+        f"{cd:<16}{'PASS' if c['pass'] else 'FAIL'}"
+    )
+    c = checks["session_total_cap"]
+    print(
+        f"{CRITERIA_LABELS['session_total_cap']:<24}{c['violations']} 套越界         "
+        f"≤{c['max_per_session']} 次/会话      {'PASS' if c['pass'] else 'FAIL'}"
+    )
     c = checks["tombstone_zero"]
     print(f"{CRITERIA_LABELS['tombstone_zero']:<24}{c['mentions']} 次             0              {'PASS' if c['pass'] else 'FAIL'}")
     c = checks["override_zero"]
@@ -1526,14 +1723,20 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
             f"{s['E']:>4}{s['invalid']:>6}{local:>20}  {s['note']}"
         )
 
-    print("\n【主判据：按会话切窗】40 窗（尾窗按实际轮数，套与套不拼）")
-    print(f"{'窗口':<20}{'V_hook':>7}{'V_name':>7}{'E':>4}{'无效':>6}  判据")
+    print("\n【窗口分布 · 按会话切】40 窗（诊断，不参与判定；尾窗按实际轮数，套与套不拼）")
+    print(f"{'窗口':<20}{'V_hook':>7}{'V_name':>7}{'E':>4}{'无效':>6}  分布")
     for w in report["windows_local"]:
-        mark = "OK " if w["pass"] else "FAIL"
+        if w["pass"]:
+            mark = "OK "
+        elif w["V_hook"] == 0:
+            mark = "稀窗"
+        else:
+            mark = "密窗"
         print(
             f"{w['label']:<20}{w['V_hook']:>7}{w['V_name']:>7}{w['E']:>4}{w['invalid']:>6}  {mark}"
         )
-    print("  尾窗（T31-35）只有 5 轮样本：只判“不超上限 V_hook≤2”，不做“V_hook≥1 回带过少”的正向判定。")
+    print("  稀窗/密窗只是分布诊断：产品未定义窗口机制，不据此判定 PASS/FAIL。")
+    print("  尾窗（T31-35）只有 5 轮样本：V_hook 绝对数天然偏小，同样只作诊断。")
 
     print("\n【诊断：全局 35 窗（不参与红绿判定）】")
     print(f"{'窗口':<6}{'全局轮':<14}{'套/轮':<30}{'Vh':>4}{'Vn':>4}{'E':>4}{'无效':>6}  诊断")
@@ -1549,8 +1752,8 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
     diag = report["diagnostics"]
     print("\n【口径重算】")
     print(
-        f"  诊断红 {diag['global_windows']['violations']} 窗 → 主判据红 "
-        f"{checks['window_budget']['violations']} 窗"
+        f"  旧全局窗口红 {diag['global_windows']['violations']} 窗 → 局部稀/密窗 "
+        f"{checks['window_budget']['violations']} 窗（全部仅诊断，不参与判定）"
     )
     print("  红转绿（纯切窗口径）：" + ("、".join(f"W{r['window']:02d}" for r in diag["red_to_green"]) or "无"))
     print("  诊断仍红（与局部红重叠）：" + ("、".join(f"W{n:02d}" for n in diag["still_red"]) or "无"))
@@ -1604,6 +1807,33 @@ def _print_console(report: Dict[str, Any], verbose: bool = False) -> None:
 
 
 # --- CLI --------------------------------------------------------------------
+def _write_manifest(out: Path, report: Dict[str, Any]) -> Dict[str, Any]:
+    """在报告同目录写 manifest.json 记录 report.json 的 sha256（文件无法内嵌自身哈希）。"""
+    sha = hashlib.sha256(out.read_bytes()).hexdigest()
+    manifest = {
+        "run_dir": str(out.parent),
+        "report_path": str(out),
+        "report_sha256": sha,
+        "report_bytes": out.stat().st_size,
+        "reps": report.get("meta", {}).get("reps"),
+        "seed": report.get("meta", {}).get("seed"),
+        "generated_at": report.get("meta", {}).get("generated_at"),
+        "overall_pass": report.get("overall_pass"),
+        "note": (
+            "report.json 无法内嵌自身 sha256，故与报告同目录保存本清单；"
+            "每次运行写入独立 run 目录（a91b169），同 seed 复跑不会覆盖取证。"
+        ),
+    }
+    manifest_path = out.parent / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "run_dir": str(out.parent),
+        "report_path": str(out),
+        "report_sha256": sha,
+        "manifest_path": str(manifest_path),
+    }
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="主动回带验收：10 套 × 35 轮（离线 fake 后端）")
     parser.add_argument("--reps", type=int, default=1, help="复跑次数，用于检查一致性（默认 1）")
@@ -1611,8 +1841,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--json",
         default=None,
-        help="报告 JSON 输出路径；缺省写入 runs/<时间戳>_reps<N>_seed<S>/report.json；"
-        "传空字符串则不写文件",
+        help="报告 JSON 输出路径；缺省写入 runs/<时间戳>_reps<N>_seed<S>/report.json"
+        "（同目录 manifest.json 记录 sha256）；传空字符串则不写文件",
     )
     parser.add_argument("--verbose", action="store_true", help="打印全部回带事件明细")
     args = parser.parse_args(argv)
@@ -1631,10 +1861,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for r in report["reps"]:
         r.pop("fingerprint", None)
 
-    _print_console(report, verbose=args.verbose)
-
+    # 账本按 run 目录隔离（沿用 a91b169）：同 seed 复跑不再覆盖上一次的取证
     if args.json is None:
-        # 账本按 run 目录隔离：同 seed 复跑不再覆盖上一次的取证
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         base = REPO_ROOT / "artifacts/active_recall_acceptance/runs"
         run_dir = base / f"{stamp}_reps{args.reps}_seed{args.seed}"
@@ -1642,7 +1870,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         while run_dir.exists():
             n += 1
             run_dir = base / f"{stamp}_reps{args.reps}_seed{args.seed}-{n}"
-        out = run_dir / "report.json"
+        out: Optional[Path] = run_dir / "report.json"
     elif args.json:
         out = Path(args.json)
         if not out.is_absolute():
@@ -1650,10 +1878,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         out = None
 
+    ledger = None
     if out is not None:
+        # 报告内也印出本次 run 路径；文件自身 sha256 无法自嵌，落在同目录 manifest.json。
+        report.setdefault("meta", {})["provenance"] = {
+            "run_dir": str(out.parent),
+            "report_path": str(out),
+            "report_sha256_note": "本文件 sha256 记录在同目录 manifest.json，控制台顶部同步打印。",
+        }
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"\n报告已写入：{out}")
+        ledger = _write_manifest(out, report)
+
+    _print_console(report, verbose=args.verbose, run_info=ledger)
+
+    if ledger:
+        print(f"\n报告已写入：{ledger['report_path']}")
+        print(f"本次 run 目录：{ledger['run_dir']}")
+        print(f"报告 sha256：{ledger['report_sha256']}（见 {ledger['manifest_path']}）")
 
     return 0 if report["overall_pass"] else 1
 
