@@ -230,10 +230,10 @@ def test_update_facts_records_delete_and_override():
 
 
 # --- 窗口聚合 ---------------------------------------------------------------
-def _synth_event(set_index, turn, verdict="V"):
+def _synth_event(set_index, turn, verdict="V", type_="hook"):
     g = (set_index - 1) * ara.TURNS_PER_SET + turn
     return {
-        "type": "hook",
+        "type": type_,
         "key": "宠物",
         "kind": "value",
         "value": "年糕",
@@ -303,6 +303,9 @@ def test_evaluate_windows_errors_and_failures():
     ]
     assert res["windows_local"][3]["partial"] is True
     assert res["V"] == 45 and res["E"] == 2 and res["invalid"] == 0
+    assert res["V_hook"] == 45 and res["V_name"] == 0
+    assert res["summary"] == {"V_hook": 45, "V_name": 0, "E": 2, "precision": res["precision"]}
+    assert res["checks"]["name_budget"]["pass"] is True
     assert res["checks"]["window_budget"]["violations"] == 1
     assert res["checks"]["window_budget"]["windows"] == 40
     assert res["checks"]["errors"]["actual"] == 2
@@ -346,6 +349,31 @@ def test_local_windows_partial_tail_is_upper_bound_only():
         1, "S01", [_synth_event(1, t) for t in (31, 32, 33)], []
     )[3]
     assert tail["V"] == 3 and tail["pass"] is False
+
+
+def test_name_recall_split_and_own_budget():
+    """名字与 hook 分开量：合计 V=3 不触发 hook 窗口上限；名字过密走自己的判据。"""
+    events = {
+        s: [_synth_event(s, 1), _synth_event(s, 6), _synth_event(s, 3, type_="name")]
+        for s in range(1, ara.SETS + 1)
+    }
+    res = ara.evaluate(_synth_sets(events))
+    w = res["windows_local"][0]
+    assert (w["V"], w["V_hook"], w["V_name"]) == (3, 2, 1)
+    assert w["pass"] is True and w["name_pass"] is True
+    assert res["summary"]["V_hook"] == 20 and res["summary"]["V_name"] == 10
+    assert res["checks"]["name_budget"]["distribution"] == {"0": 30, "1": ara.SETS}
+    assert res["checks"]["window_budget"]["violations"] == 20  # 每套后两个整窗无 hook（尾窗不判下限）
+
+    dense = {
+        s: [_synth_event(s, t, type_="name") for t in range(1, 8)] + [_synth_event(s, 2)]
+        for s in range(1, ara.SETS + 1)
+    }
+    res2 = ara.evaluate(_synth_sets(dense))
+    w2 = res2["windows_local"][0]
+    assert w2["name_pass"] is False and w2["pass"] is True
+    assert res2["checks"]["name_budget"]["violations"] == ara.SETS
+    assert any(f["criterion"] == "name_budget" for f in res2["failures"])
 
 
 def test_consistency_requires_at_least_two_reps():

@@ -23,15 +23,17 @@ sys.modules[_spec.name] = arc
 _spec.loader.exec_module(arc)
 
 
-def _windows(v_override=None, e_override=None):
-    """40 个局部窗（每套 4 个），默认每窗 V=1、E=0。"""
-    v_override = v_override or {}
-    e_override = e_override or {}
+def _windows(v_hook_override=None, v_name_override=None):
+    """40 个局部窗（每套 4 个），默认每窗 V_hook=1、V_name=0、E=0。"""
+    v_hook_override = v_hook_override or {}
+    v_name_override = v_name_override or {}
     out = []
     for s in range(1, arc.ara.SETS + 1):
         for start in range(1, arc.ara.TURNS_PER_SET + 1, arc.ara.WINDOW_SIZE):
             end = min(start + arc.ara.WINDOW_SIZE - 1, arc.ara.TURNS_PER_SET)
             key = (s, start)
+            vh = v_hook_override.get(key, 1)
+            vn = v_name_override.get(key, 0)
             out.append(
                 {
                     "set": s,
@@ -39,21 +41,26 @@ def _windows(v_override=None, e_override=None):
                     "end": end,
                     "label": f"S{s:02d} T{start:02d}-{end:02d}",
                     "partial": (end - start + 1) < arc.ara.WINDOW_SIZE,
-                    "V": v_override.get(key, 1),
-                    "E": e_override.get(key, 0),
+                    "V_hook": vh,
+                    "V_name": vn,
+                    "V": vh + vn,
+                    "E": 0,
                     "event_ids": [f"S{s:02d}T{start:02d}:hook:宠物=V"],
                 }
             )
     return out
 
 
-def _view(rep, *, v_override=None, e_override=None, **extra):
+def _view(rep, *, v_hook_override=None, v_name_override=None, **extra):
+    windows = _windows(v_hook_override, v_name_override)
     view = {
         "rep": rep,
         "failed": False,
         "fail_reason": None,
-        "windows": _windows(v_override, e_override),
-        "V": sum(w["V"] for w in _windows(v_override, e_override)),
+        "windows": windows,
+        "V": sum(w["V"] for w in windows),
+        "V_hook": sum(w["V_hook"] for w in windows),
+        "V_name": sum(w["V_name"] for w in windows),
         "E": 0,
         "precision": 1.0,
     }
@@ -87,16 +94,16 @@ def test_three_identical_views_are_consistent():
 def test_window_level_diff_is_located_with_values_and_event_ids():
     views = [
         _view(1),
-        _view(2, v_override={(1, 1): 4}),
+        _view(2, v_hook_override={(1, 1): 4}),
         _view(3),
     ]
     res = arc.compare_views(views, requested_reps=3)
     assert res["verdict"] == arc.VERDICT_INCONSISTENT
     diffs = res["window_diffs"]
     assert len(diffs) == 1 and diffs[0]["window"] == "S01 T01-10"
-    assert diffs[0]["values"]["rep1"] == {"V": 1, "E": 0}
-    assert diffs[0]["values"]["rep2"] == {"V": 4, "E": 0}
-    assert diffs[0]["values"]["rep3"] == {"V": 1, "E": 0}
+    assert diffs[0]["values"]["rep1"] == {"V_hook": 1, "V_name": 0, "E": 0, "V": 1}
+    assert diffs[0]["values"]["rep2"] == {"V_hook": 4, "V_name": 0, "E": 0, "V": 4}
+    assert diffs[0]["values"]["rep3"] == {"V_hook": 1, "V_name": 0, "E": 0, "V": 1}
     assert diffs[0]["event_ids"]["rep2"]
     line = arc.conclusion_line(res)
     assert "不一致" in line and "S01 T01-10" in line
@@ -105,7 +112,7 @@ def test_window_level_diff_is_located_with_values_and_event_ids():
 def test_globals_equal_but_windows_differ_still_inconsistent():
     """全局三项相等不算一致：窗口级差异照样判不一致。"""
     a = _view(1)
-    b = _view(2, v_override={(1, 1): 2, (1, 11): 0})
+    b = _view(2, v_hook_override={(1, 1): 2, (1, 11): 0})
     b["V"] = a["V"]  # 冒充全局相等
     b["precision"] = a["precision"]
     b["E"] = a["E"]

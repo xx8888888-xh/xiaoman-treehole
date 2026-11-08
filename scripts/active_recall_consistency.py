@@ -74,6 +74,8 @@ def view_from_result(res: Dict[str, Any]) -> Dict[str, Any]:
                 "label": w["label"],
                 "partial": w["partial"],
                 "V": w["V"],
+                "V_hook": w.get("V_hook"),
+                "V_name": w.get("V_name"),
                 "E": w["E"],
                 "event_ids": _event_ids(res["events"], w["set"], w["start"], w["end"]),
             }
@@ -149,7 +151,10 @@ def compare_views(views: Sequence[Dict[str, Any]], requested_reps: int) -> Dict[
 
     window_diffs: List[Dict[str, Any]] = []
     for i, key in enumerate(keys0):
-        vals = [(v["windows"][i]["V"], v["windows"][i]["E"]) for v in views]
+        vals = [
+            (v["windows"][i]["V_hook"], v["windows"][i]["V_name"], v["windows"][i]["E"])
+            for v in views
+        ]
         if len(set(vals)) <= 1:
             continue
         window_diffs.append(
@@ -158,7 +163,10 @@ def compare_views(views: Sequence[Dict[str, Any]], requested_reps: int) -> Dict[
                 "set": key[0],
                 "start": key[1],
                 "end": key[2],
-                "values": {f"rep{v['rep']}": {"V": V, "E": E} for v, (V, E) in zip(views, vals)},
+                "values": {
+                    f"rep{v['rep']}": {"V_hook": vh, "V_name": vn, "E": E, "V": vh + vn}
+                    for v, (vh, vn, E) in zip(views, vals)
+                },
                 "event_ids": {f"rep{v['rep']}": v["windows"][i]["event_ids"] for v in views},
             }
         )
@@ -221,10 +229,16 @@ def _fmt_ve(V: Any, E: Any) -> str:
     return f"{V}/{E}"
 
 
+def _fmt_vne(vh: Any, vn: Any, E: Any) -> str:
+    if vh is None and vn is None and E is None:
+        return "-"
+    return f"{vh}/{vn}/{E}"
+
+
 def conclusion_line(result: Dict[str, Any]) -> str:
     kind = result["verdict"]
     if kind == VERDICT_CONSISTENT:
-        return f"结论：{kind}（{result.get('reps_completed', 0)} 次运行，40 个局部窗逐窗 V/E 全等）"
+        return f"结论：{kind}（{result.get('reps_completed', 0)} 次运行，40 个局部窗逐窗 V_hook/V_name/E 全等）"
     if kind == VERDICT_INCONSISTENT:
         labels = "、".join(d["window"] for d in result["window_diffs"]) or "无窗口差异"
         extra = "；全局量差异：" + "、".join(g["metric"] for g in result["global_diffs"]) if result["global_diffs"] else ""
@@ -240,19 +254,23 @@ def print_report(result: Dict[str, Any], views: Sequence[Dict[str, Any]]) -> Non
 
     if views and views[0].get("windows"):
         reps = [v["rep"] for v in views]
-        header = f"{'窗口':<18}" + "".join(f"{'rep' + str(r) + ' V/E':>12}" for r in reps) + "  结果"
-        print("\n【逐窗表】40 个局部窗（V/E）")
+        header = f"{'窗口':<18}" + "".join(f"{'rep' + str(r) + ' Vh/Vn/E':>14}" for r in reps) + "  结果"
+        print("\n【逐窗表】40 个局部窗（V_hook / V_name / E）")
         print(header)
         print("-" * 78)
         for i, w0 in enumerate(views[0]["windows"]):
             cells = "".join(
-                f"{_fmt_ve(v['windows'][i]['V'], v['windows'][i]['E']):>12}"
+                f"{_fmt_vne(v['windows'][i]['V_hook'], v['windows'][i]['V_name'], v['windows'][i]['E']):>14}"
                 for v in views
                 if v.get("windows")
             )
             same = all(
-                (v["windows"][i]["V"], v["windows"][i]["E"])
-                == (w0["V"], w0["E"])
+                (
+                    v["windows"][i]["V_hook"],
+                    v["windows"][i]["V_name"],
+                    v["windows"][i]["E"],
+                )
+                == (w0["V_hook"], w0["V_name"], w0["E"])
                 for v in views
             )
             print(f"{w0['label']:<18}{cells}  {'一致' if same else '差异'}")
@@ -270,7 +288,9 @@ def print_report(result: Dict[str, Any], views: Sequence[Dict[str, Any]]) -> Non
     if result["window_diffs"]:
         print("\n【差异窗明细】")
         for d in result["window_diffs"]:
-            vals = " ".join(f"{k}={x['V']}/{x['E']}" for k, x in d["values"].items())
+            vals = " ".join(
+                f"{k}={x['V_hook']}/{x['V_name']}/{x['E']}" for k, x in d["values"].items()
+            )
             print(f"  {d['window']}: {vals}")
             for k, ids in d["event_ids"].items():
                 print(f"    {k} 事件：{('; '.join(ids)) if ids else '无事件'}")
@@ -297,6 +317,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     views = collect_views(reps=args.reps, seed=args.seed)
     result = compare_views(views, requested_reps=args.reps)
+    result["reps_completed"] = sum(1 for v in views if not v.get("failed"))
 
     print_report(result, views)
 
