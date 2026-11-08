@@ -512,6 +512,10 @@ def test_window_distribution_conclusion_is_at_report_top(capsys):
     assert dist["counts"] == {"windows": 40, "sparse_v0": 2, "dense": 1, "normal": 37}
     ev = dist["dense"][0]["evidence"]
     assert ev["allowed"] is True and ev["distinct_keys"] is True and ev["all_first"] is True
+    # 按会话拆开：S07 独占 2 个稀窗，其余会话为 0。
+    assert dist["sparse_v0_by_set"]["S07"] == 2
+    assert dist["sparse_v0_by_set"]["S01"] == 0
+    assert len(dist["sparse_v0_by_set"]) == ara.SETS
 
     ara._print_console(_console_report(res))
     out = capsys.readouterr().out
@@ -522,6 +526,9 @@ def test_window_distribution_conclusion_is_at_report_top(capsys):
     assert "不同键=是" in out and "均首提=是" in out and "冷却已过=是" in out
     assert "会话总额 3≤4" in out
     assert "稀 2 / 密 1" in out
+    assert "稀窗按会话：S01×0、S02×0、S03×0、S04×0、S05×0、S06×0、S07×2、S08×0、S09×0、S10×0" in out
+    assert "1/10 个会话出现稀窗" in out
+    assert out.index("稀窗按会话") < out.index("【判据】")
     assert "诊断（不参与判定）" in out
 
 

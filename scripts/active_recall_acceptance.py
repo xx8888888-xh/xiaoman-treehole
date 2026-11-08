@@ -1234,6 +1234,11 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             "normal": len(local_windows) - len(sparse_v0) - len(dense),
         },
         "sparse_v0": [w["label"] for w in sparse_v0],
+        # 按会话拆开：判断是“某几个会话特别安静”还是“普遍安静”的唯一数据。
+        "sparse_v0_by_set": {
+            f"S{i:02d}": sum(1 for w in sparse_v0 if w["set"] == i)
+            for i in range(1, SETS + 1)
+        },
         "dense": dense_diag,
         "conclusion": "这不是缺陷，是产品未定义窗口机制。",
         "reason": (
@@ -1636,6 +1641,13 @@ def _print_console(
         )
         if dist.get("sparse_v0"):
             print(f"  └ 稀窗 V_hook=0（{len(dist['sparse_v0'])} 个）：" + "、".join(dist["sparse_v0"]))
+            by_set = dist.get("sparse_v0_by_set") or {}
+            n_sets = sum(1 for v in by_set.values() if v)
+            print(
+                "  └ 稀窗按会话："
+                + "、".join(f"{k}×{v}" for k, v in by_set.items())
+                + f"（{n_sets}/{len(by_set)} 个会话出现稀窗）"
+            )
         for d in dist.get("dense") or []:
             ev = d.get("evidence") or {}
             print(
