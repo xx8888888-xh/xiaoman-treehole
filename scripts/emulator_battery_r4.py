@@ -536,7 +536,12 @@ def run_standby(minutes, uid):
     return run_window(seg)
 
 
-def run_foreground(minutes, uid):
+def prepare_foreground():
+    """亮屏 → 启动 App → 设 default preset → 拉起浮窗 + 注入探针（不采样）。
+
+    `--bg-only` 多轮之间只需要把 App 拉回前台就绪状态，随后立刻切后台；
+    不能复用 run_foreground（那会额外采样整段 minutes）。返回 (cdp, info)。
+    """
     global _FOREGROUND_CDP
     screen_on()
     sh(f"adb shell am start -n {MAIN} -f 0x20000000", timeout=60)
@@ -558,9 +563,14 @@ def run_foreground(minutes, uid):
     preset.close()
     cdp, info = ensure_pet_probe()
     _FOREGROUND_CDP = cdp
-    print(f"[BATT] foreground 浮窗：{json.dumps(info.get('frame'), ensure_ascii=False)} "
+    print(f"[BATT] 前景就绪：{json.dumps(info.get('frame'), ensure_ascii=False)} "
           f"petReady={info.get('petReady')}", flush=True)
     time.sleep(10)                              # 启动补帧/纹理解码落定
+    return cdp, info
+
+
+def run_foreground(minutes, uid):
+    cdp, info = prepare_foreground()
 
     seg = Segment("foreground", minutes, uid)
     seg.begin()
@@ -586,15 +596,15 @@ def run_foreground(minutes, uid):
     return run_window(seg, _extra)
 
 
-def run_background(minutes, uid, cdp):
+def run_background(minutes, uid, cdp, name="background"):
     """从前景（浮窗仍在）切 Home + 灭屏，30 min；结束时唤醒读隐藏期真实帧数。"""
     # 先在前台可见状态下清零并记 C0，随后 Home+灭屏；visibilitychange 会记 atHidden。
     if cdp is not None:
         ep.fast_eval(cdp, "window.__r4 && window.__r4.reset()", timeout=10)
     c0, _ = read_pet_snap(cdp)
     wf = screen_off()
-    print(f"[BATT] background 灭屏后 wakefulness={wf}", flush=True)
-    seg = Segment("background", minutes, uid)
+    print(f"[BATT] {name} 灭屏后 wakefulness={wf}", flush=True)
+    seg = Segment(name, minutes, uid)
     seg.begin()
 
     def _extra():
@@ -645,6 +655,18 @@ def add_net_cost(segs):
     """App 净成本 = App 段 - 纯待机段；mAh 必须同为整机模型，不能拿 uid 估算比整机。"""
     base = next((s for s in segs if s.get("name") == "standby"), None)
     if not base:
+        # --skip-standby：没有基线可比，over-standby 字段一律置 null（仍逐轮产出该字段）。
+        for s in segs:
+            if s.get("name") == "standby":
+                s["appNetCost"] = None
+                continue
+            s["appNetCost"] = {
+                "mahOverStandby": None,
+                "cpuMsOverStandby": None,
+                "deviceCpuMsOverStandby": None,
+                "wakeupsOverStandby": None,
+                "netBytesOverStandby": None,
+            }
         return
 
     def device_mah(s):
@@ -672,6 +694,38 @@ def add_net_cost(segs):
                                     if s.get("netBytes") is not None
                                     and base.get("netBytes") is not None else None),
         }
+
+
+def build_rounds_summary(segs, rounds):
+    """每轮后台段的关键指标 + worst（按 cpuMs 取最大，注明轮次）。"""
+    items = []
+    for i in range(1, rounds + 1):
+        name = f"background#{i}"
+        s = next((x for x in segs if x.get("name") == name), None)
+        if s is None:
+            items.append({
+                "round": i, "cpuMs": None, "wakeups": None, "netBytes": None,
+                "mahMeasured": None, "deviceMahMeasured": None,
+                "framesWhileHidden": None, "ok": False,
+            })
+            continue
+        items.append({
+            "round": i,
+            "cpuMs": s.get("cpuMs"),
+            "wakeups": s.get("wakeups"),
+            "netBytes": s.get("netBytes"),
+            "mahMeasured": s.get("mahMeasured"),
+            "deviceMahMeasured": s.get("deviceMahMeasured"),
+            "framesWhileHidden": (s.get("frames") or {}).get("framesWhileHidden"),
+            "ok": bool(s.get("ok")),
+        })
+    valid = [x for x in items if x.get("ok") and x.get("cpuMs") is not None]
+    worst = None
+    if valid:
+        w = max(valid, key=lambda x: x["cpuMs"])
+        worst = {"round": w["round"], "name": f"background#{w['round']}",
+                 "metric": "cpuMs", "cpuMs": w["cpuMs"]}
+    return {"rounds": items, "worst": worst}
 
 
 def write_json(path, payload):
@@ -715,7 +769,18 @@ def main():
     ap.add_argument("--minutes", type=int, default=30, help="每段分钟数（默认 30）")
     ap.add_argument("--out", default=os.path.join("artifacts", "avd", "battery_r4.json"))
     ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--bg-only", action="store_true",
+                    help="只跑待机基线 + 后台段（不做 foreground 30 分钟采样）")
+    ap.add_argument("--mode", choices=("standard", "background"), default="standard",
+                    help="standard=原有三段；background 等同 --bg-only")
+    ap.add_argument("--bg-rounds", type=int, default=1,
+                    help="后台段重复轮数（默认 1；仅 bg-only 生效）")
+    ap.add_argument("--skip-standby", action="store_true",
+                    help="bg-only 时跳过待机基线（over-standby 字段置 null）")
     args = ap.parse_args()
+
+    bg_only = bool(args.bg_only) or args.mode == "background"
+    rounds = max(1, int(args.bg_rounds))
 
     payload = {
         "meta": {},
@@ -738,6 +803,10 @@ def main():
             port=args.port))
         payload["meta"]["minutesPerSegment"] = args.minutes
         payload["meta"]["sampleSeconds"] = SAMPLE_SECONDS
+        if bg_only:
+            payload["meta"]["mode"] = "background"
+            payload["meta"]["bgRounds"] = rounds
+            payload["meta"]["skipStandby"] = bool(args.skip_standby)
         print(f"[BATT] meta: {json.dumps(payload['meta'], ensure_ascii=False)}", flush=True)
 
         ep.device_prepare()
@@ -753,14 +822,35 @@ def main():
                 print(f"[BATT-FAIL] {name} 采集失败：{e}", flush=True)
                 segs.append({"name": name, "ok": False, "error": repr(e)[:300]})
 
-        run("standby", lambda: run_standby(args.minutes, uid))
-        run("foreground", lambda: run_foreground(args.minutes, uid))
-        # foreground 失败时 cdp 可能不存在；后台仍可用系统状态采集（帧数记空）。
-        cdp = _FOREGROUND_CDP
-        run("background", lambda: run_background(args.minutes, uid, cdp))
+        if bg_only:
+            # 待机基线只跑一次；随后 N 轮「准备前台 → 后台采样」，轮间不跑 foreground 段。
+            if not args.skip_standby:
+                run("standby", lambda: run_standby(args.minutes, uid))
+            for i in range(1, rounds + 1):
+                name = f"background#{i}"
 
-        add_net_cost(segs)
-        payload["segments"] = segs
+                def round_job(name=name):
+                    cdp2, _ = prepare_foreground()
+                    try:
+                        return run_background(args.minutes, uid, cdp2, name=name)
+                    finally:
+                        try:
+                            cdp2.close()
+                        except Exception:
+                            pass
+
+                run(name, round_job)
+            add_net_cost(segs)
+            payload["segments"] = segs
+        else:
+            run("standby", lambda: run_standby(args.minutes, uid))
+            run("foreground", lambda: run_foreground(args.minutes, uid))
+            # foreground 失败时 cdp 可能不存在；后台仍可用系统状态采集（帧数记空）。
+            cdp = _FOREGROUND_CDP
+            run("background", lambda: run_background(args.minutes, uid, cdp))
+
+            add_net_cost(segs)
+            payload["segments"] = segs
     except Exception as e:
         print(f"[BATT-FAIL] 探针整体异常：{e}", flush=True)
         payload["error"] = repr(e)[:300]
@@ -772,7 +862,12 @@ def main():
             except Exception:
                 pass
 
-    all_ok = bool(segs) and len(segs) == 3 and all(s.get("ok") for s in segs)
+    if bg_only:
+        payload["roundsSummary"] = build_rounds_summary(segs, rounds)
+        expected = rounds + (0 if args.skip_standby else 1)
+        all_ok = bool(segs) and len(segs) == expected and all(s.get("ok") for s in segs)
+    else:
+        all_ok = bool(segs) and len(segs) == 3 and all(s.get("ok") for s in segs)
     payload["ok"] = all_ok
     rc = 0 if all_ok else 1
     summary(segs)
