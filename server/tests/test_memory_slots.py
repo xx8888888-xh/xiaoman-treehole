@@ -295,6 +295,87 @@ class TombstoneTest(unittest.TestCase):
             s.delete_from_text("u", "把年糕忘了")
             self.assertEqual(s.scrub_reply("u", "年糕今天特别乖。"), "")
 
+    def test_revive_only_by_user_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.upsert("u", "宠物", "年糕")
+            s.delete_from_text("u", "把年糕忘了")
+            # 系统/模型路径（upsert / apply_updates）绝不复活
+            s.upsert("u", "宠物", "年糕")
+            s.apply_updates("u", {"宠物": "年糕"}, source="model")
+            self.assertTrue(s.forgotten_items("u"))
+            # 用户亲口打出该值 → 撤销墓碑并允许重新入槽
+            s.ingest("u", "我又养了只猫叫年糕")
+            self.assertEqual(s.forgotten_items("u"), [])
+            self.assertTrue(any("年糕" in h["value"]
+                                for h in s.recall("u", "猫")))
+
+    def test_forget_phrase_does_not_revive(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.upsert("u", "宠物", "年糕")
+            s.delete_from_text("u", "把年糕忘了")
+            s.ingest("u", "把年糕忘了吧")
+            self.assertTrue(s.forgotten_items("u"))
+
+    def test_correction_tombstone_expires_after_20_turns(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.ingest("u", "我家猫叫团子")
+            s.tick("u")
+            s.ingest("u", "其实它叫年糕不是团子")
+            items = [x for x in s.forgotten_items("u")
+                     if x["reason"] == "correction"]
+            self.assertEqual([(x["key"], x["value"]) for x in items],
+                             [("宠物", "团子")])
+            self.assertEqual(items[0]["expires_turn"], 23)
+            self.assertEqual(s.scrub_reply("u", "团子今天很乖。"), "")
+            for _ in range(20):
+                s.tick("u")
+            self.assertEqual(s.scrub_reply("u", "团子今天很乖。"),
+                             "团子今天很乖。")
+
+    def test_alias_minimal_new_pet_not_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.ingest("u", "我家猫叫年糕")
+            s.delete_from_text("u", "把年糕忘了")
+            item = s.forgotten_items("u")[0]
+            self.assertEqual(item["aliases"], [])
+            self.assertNotIn("猫", item["value"])
+            s.upsert("u", "宠物", "兔子")
+            self.assertIn("兔子", [h["value"] for h in s.recall("u", "兔子")])
+
+    def test_tombstone_schema_has_no_raw_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            s.upsert("u", "宠物", "年糕")
+            s.delete_from_text("u", "把年糕忘了")
+            raw = json.loads((Path(d) / ("suppress-%s.json" % ms._sid_hash("u")))
+                             .read_text(encoding="utf-8"))
+            self.assertEqual(set(raw), {"version", "updated", "turn", "items"})
+            for it in raw["items"]:
+                self.assertEqual(set(it), {"key", "value", "aliases",
+                                           "ts", "reason", "expires_turn"})
+            body = json.dumps(raw, ensure_ascii=False)
+            self.assertNotIn("把年糕忘了", body)
+            self.assertNotIn("message", body)
+            self.assertNotIn("user_id", body)
+
+    def test_tomb_buffer_follows_longest_alias(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = ms.SlotStore(d)
+            self.assertEqual(s.tomb_buffer("u"), 2)  # 无墓碑默认 2
+            s.upsert("u", "老板", "张三")
+            s.delete_from_text("u", "把张三忘了")
+            self.assertEqual(s.tomb_buffer("u"), 2)  # 2 字名字
+            s.upsert("u", "老板", "克里斯蒂娜")
+            s.delete_from_text("u", "把克里斯蒂娜忘了")
+            self.assertEqual(s.tomb_buffer("u"), 5)
+            s.upsert("u", "老板", "阿卜杜拉买买提")
+            s.delete_from_text("u", "把阿卜杜拉买买提忘了")
+            self.assertEqual(s.tomb_buffer("u"), 6)  # 上限 6
+
 
 if __name__ == "__main__":
     unittest.main()

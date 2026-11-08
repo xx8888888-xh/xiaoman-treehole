@@ -30,11 +30,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
 import time
 from pathlib import Path
+
+logger = logging.getLogger("memory_slots")
 
 MAX_SLOTS = 64
 MAX_PIN_SLOTS = 16
@@ -486,6 +489,7 @@ class SlotStore:
         self.root = Path(root) if root else None
         self._mem = {}
         self._tomb = {}
+        self._turns = {}
         if self.root:
             self.root.mkdir(parents=True, exist_ok=True)
 
@@ -506,6 +510,8 @@ class SlotStore:
                 try:
                     data = json.loads(p.read_text(encoding="utf-8"))
                     raw = data.get("items") if isinstance(data, dict) else data
+                    if isinstance(data, dict) and sid not in self._turns:
+                        self._turns[sid] = int(data.get("turn") or 0)
                     for it in raw or []:
                         if not isinstance(it, dict):
                             continue
@@ -530,7 +536,8 @@ class SlotStore:
             return
         p = self._tomb_path(sid)
         tmp = p.with_suffix(".tmp")
-        payload = {"version": TOMBSTONE_VERSION, "updated": _now(), "items": items}
+        payload = {"version": TOMBSTONE_VERSION, "updated": _now(),
+                   "turn": int(self._turns.get(sid, 0)), "items": items}
         try:
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
             os.replace(tmp, p)
@@ -711,33 +718,95 @@ class SlotStore:
 
     def _record_forget(self, sid: str, removed: list, targets: list):
         """删槽后写墓碑：只存 value + 用户亲口说过的唯一别名 + key/ts/reason。"""
-        items = self._load_tomb(sid)
-        now = _now()
-        for s in removed:
-            value = str(s.get("value") or "").strip()
-            if not value:
-                continue
-            aliases = set()
-            for t in targets:
-                if not t or t == "__last__" or t in _GENERIC_FORGET:
+        with _LOCK:
+            items = self._load_tomb(sid)
+            now = _now()
+            for s in removed:
+                value = str(s.get("value") or "").strip()
+                if not value:
                     continue
-                if t != value and t in value:
-                    aliases.add(t)
-            entry = {"key": str(s.get("key") or ""), "value": value,
-                     "aliases": sorted(aliases), "ts": now,
-                     "reason": "user_forget"}
+                aliases = set()
+                for t in targets:
+                    if not t or t == "__last__" or t in _GENERIC_FORGET:
+                        continue
+                    if t != value and t in value:
+                        aliases.add(t)
+                entry = {"key": str(s.get("key") or ""), "value": value,
+                         "aliases": sorted(aliases), "ts": now,
+                         "reason": "user_forget", "expires_turn": 0}
+                items = [x for x in items
+                         if not (x["key"] == entry["key"] and x["value"] == value)]
+                items.append(entry)
+            self._save_tomb(sid, items)
+
+    def record_correction(self, sid: str, key: str, old_value: str):
+        """改口：旧值进抑制表 20 轮（reason=correction，与 user_forget 分开）。"""
+        old_value = str(old_value or "").strip()
+        if not old_value:
+            return
+        with _LOCK:
+            items = self._load_tomb(sid)
+            turn = int(self._turns.get(sid, 0))
+            entry = {"key": str(key or ""), "value": old_value, "aliases": [],
+                     "ts": _now(), "reason": "correction",
+                     "expires_turn": turn + 20}
             items = [x for x in items
-                     if not (x["key"] == entry["key"] and x["value"] == value)]
+                     if not (x["key"] == entry["key"] and x["value"] == old_value)]
             items.append(entry)
-        self._save_tomb(sid, items)
+            self._save_tomb(sid, items)
+
+    def tick(self, sid: str) -> int:
+        """每收到一条用户文本，会话轮次 +1（改口墓碑按轮次过期）。"""
+        with _LOCK:
+            self._turns[sid] = int(self._turns.get(sid, 0)) + 1
+            if self._load_tomb(sid):
+                self._save_tomb(sid, self._load_tomb(sid))
+            return self._turns[sid]
+
+    def revive_from_user_input(self, sid: str, text: str) -> list:
+        """只有用户亲口打出该值才撤销墓碑；忘/别记/删 本轮一律不复活。"""
+        if not text:
+            return []
+        if detect_deletions(text):
+            return []
+        with _LOCK:
+            items = self._load_tomb(sid)
+            revived, keep = [], []
+            for it in items:
+                if any(t and t in text for t in [it["value"]] + it["aliases"]):
+                    revived.append(it)
+                else:
+                    keep.append(it)
+            if revived:
+                self._save_tomb(sid, keep)
+                for it in revived:
+                    logger.info("tombstone_revived(user_input): key=%s value=%s",
+                                it.get("key"), it.get("value"))
+            return revived
+
+    def _active_items(self, sid: str) -> list:
+        cur = int(self._turns.get(sid, 0))
+        out = []
+        for it in self._load_tomb(sid):
+            exp = int(it.get("expires_turn") or 0)
+            if it.get("reason") == "correction" and exp and cur >= exp:
+                continue
+            out.append(it)
+        return out
 
     def forgotten_items(self, sid: str) -> list:
         with _LOCK:
             return [dict(x) for x in self._load_tomb(sid)]
 
+    def tomb_buffer(self, sid: str, cap: int = 6) -> int:
+        """流式保留窗口：按本会话墓碑最长值/别名动态取值（2–cap 字）。"""
+        lens = [len(t) for it in self._active_items(sid)
+                for t in [it["value"]] + it["aliases"] if t]
+        return max(2, min(cap, max(lens) if lens else 2))
+
     def _filter_tombstones(self, sid: str, slots: list) -> list:
         """生成前过滤候选：命中墓碑的值/别名不进 system 记忆段。"""
-        items = self._load_tomb(sid)
+        items = self._active_items(sid)
         if not items:
             return slots
         out = []
@@ -784,7 +853,7 @@ class SlotStore:
         if not reply:
             return reply
         toks = []
-        for it in self._load_tomb(sid):
+        for it in self._active_items(sid):
             toks.extend([it["value"]] + it["aliases"])
         toks = [t for t in toks if t]
         if not toks:
@@ -816,6 +885,9 @@ class SlotStore:
                 target = entries[0]
             if target is None or target["name"] == name:
                 return None
+            old_name = target["name"]
+            if old_name:
+                self.record_correction(sid, "宠物", old_name)
             target["name"] = name
             slot["value"] = _pet_value(entries)
             slot["source"] = "rule"
@@ -825,7 +897,9 @@ class SlotStore:
             return dict(slot)
 
     def ingest(self, sid: str, text: str) -> dict:
-        """一轮用户文本：先处理删除，再处理“它叫…”改口，最后提取入库。"""
+        """一轮用户文本：先推进轮次/复活墓碑，再处理删除、改口，最后提取入库。"""
+        self.tick(sid)
+        self.revive_from_user_input(sid, text)
         deleted = self.delete_from_text(sid, text)
         m = _PET_RENAME_RE.search(text)
         renamed = self.rename_pet(sid, m.group(1), text) if m else None

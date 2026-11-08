@@ -2268,7 +2268,8 @@ class Handler(BaseHTTPRequestHandler):
                 # 只改称呼/分隔、不触发危机路径，由下面的常规 delta/replace 分支处理。
                 safe_prefix = _guard_pet_text(clean_prefix, session_id)
                 # 留 2 字缓冲，避免把刚成形的危险词先露出去
-                target = safe_prefix[:-2] if len(safe_prefix) > 2 else ""
+                hold = _SLOTS.tomb_buffer(session_id) if (session_id and _SLOTS) else 2
+                target = safe_prefix[:-hold] if len(safe_prefix) > hold else ""
                 if target and target.startswith(emitted):
                     self._sse("delta", {"text": target[len(emitted):]})
                     emitted = target
