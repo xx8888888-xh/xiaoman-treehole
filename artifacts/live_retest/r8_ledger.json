@@ -75,6 +75,12 @@
       "detail": "无"
      },
      {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
+      "ok": true,
+      "detail": "无"
+     },
+     {
       "key": "expect",
       "label": "期望内容命中",
       "ok": false,
@@ -218,6 +224,12 @@
       "detail": "无"
      },
      {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
+      "ok": true,
+      "detail": "无"
+     },
+     {
       "key": "expect",
       "label": "期望内容命中",
       "ok": true,
@@ -341,6 +353,12 @@
      {
       "key": "redlines",
       "label": "红线（套话/说教/危机/复读/问号/内部状态）",
+      "ok": true,
+      "detail": "无"
+     },
+     {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
       "ok": true,
       "detail": "无"
      },
@@ -470,6 +488,12 @@
       "detail": "无"
      },
      {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
+      "ok": true,
+      "detail": "无"
+     },
+     {
       "key": "expect",
       "label": "期望内容命中",
       "ok": true,
@@ -582,6 +606,12 @@
      {
       "key": "redlines",
       "label": "红线（套话/说教/危机/复读/问号/内部状态）",
+      "ok": true,
+      "detail": "无"
+     },
+     {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
       "ok": true,
       "detail": "无"
      },
@@ -708,6 +738,12 @@
      {
       "key": "redlines",
       "label": "红线（套话/说教/危机/复读/问号/内部状态）",
+      "ok": true,
+      "detail": "无"
+     },
+     {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
       "ok": true,
       "detail": "无"
      },
@@ -856,6 +892,12 @@
       "detail": "T2 开头复读“林夏这名”"
      },
      {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
+      "ok": true,
+      "detail": "无"
+     },
+     {
       "key": "expect",
       "label": "期望内容命中",
       "ok": true,
@@ -968,6 +1010,12 @@
      {
       "key": "redlines",
       "label": "红线（套话/说教/危机/复读/问号/内部状态）",
+      "ok": true,
+      "detail": "无"
+     },
+     {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
       "ok": true,
       "detail": "无"
      },
@@ -1112,6 +1160,12 @@
       "detail": "无"
      },
      {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
+      "ok": true,
+      "detail": "无"
+     },
+     {
       "key": "expect",
       "label": "期望内容命中",
       "ok": true,
@@ -1177,8 +1231,15 @@
    "id": "followup-04-backfill",
    "category": "追问",
    "status": "valid",
-   "passed": true,
-   "reasons": [],
+   "passed": false,
+   "reasons": [
+    {
+     "case": "followup-04-backfill",
+     "category": "追问",
+     "turn": 3,
+     "reason": "跨轮重复追问“团子半夜跑酷吗？”（T2/T3）"
+    }
+   ],
    "turns": [
     {
      "user": "最近老是失眠",
@@ -1232,6 +1293,12 @@
       "label": "红线（套话/说教/危机/复读/问号/内部状态）",
       "ok": true,
       "detail": "无"
+     },
+     {
+      "key": "cross_turn_repeat",
+      "label": "跨轮不重复追问同一句",
+      "ok": false,
+      "detail": "T3 跨轮重复追问“团子半夜跑酷吗？”（T2/T3）"
      },
      {
       "key": "expect",
@@ -1303,7 +1370,9 @@
      }
     ]
    },
-   "replaces": "followup-04"
+   "replaces": "followup-04",
+   "passed_legacy": true,
+   "rubric_flip": "旧判据 PASS，新判据（跨轮重复追问）判红；原文未改动，未为转绿放宽判据"
   }
  ],
  "stop_reason": "",

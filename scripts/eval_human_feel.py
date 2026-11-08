@@ -392,6 +392,82 @@ def check_case_expect(result: CaseResult, universal: dict):
         result.fail(0, "建议轮次 %d>%d（默认不给建议）" % (advice_turns, limit))
 
 
+# ---------------- 跨轮重复追问 ----------------
+# 只判助手把同一问句/近似问句在多个轮次里推回给用户；
+# 用户自己重复问、助手照常回答不算产品缺陷（只看 result.turns 的回复）。
+_QUESTION_SENT_RE = re.compile(r"[^。！？!?\n]+[？?]")
+_QUOTE_SPAN_RE = re.compile(r"[“\"「『][^”\"」』]*[”\"」』]")
+# 短寒暄/口头追问：长度本来就短，重复也算正常接话，不判。
+_Q_CHANNEL_KEYS = {"然后", "怎么", "你", "是吗", "真的", "后来", "还有", "在",
+                   "要不要说说", "想说说", "说说看"}
+_Q_MIN_VISIBLE = 6
+_Q_NEAR_JACCARD = 0.90  # 近似问句阈值：字符二元组 Jaccard，只对 ≥8 字的问句生效
+
+
+def _q_key(text: str) -> str:
+    """问句指纹：去引号、标点、空白和句末语气词。"""
+    s = _QUOTE_SPAN_RE.sub("", text or "")
+    s = re.sub(r"[\s，,。！？!?、…~～“”\"'‘’「」『』（）()：:]", "", s)
+    return s.strip("吗呢吧啊呀嘛")
+
+
+def assistant_questions(reply: str) -> list:
+    """抽出助手回复里的问句（按 || 分条后逐句），返回 [(原句, 指纹)]。"""
+    out = []
+    for part in reply_parts(reply):
+        clean = _QUOTE_SPAN_RE.sub("", part)
+        for m in _QUESTION_SENT_RE.finditer(clean):
+            q = m.group(0).strip()
+            key = _q_key(q)
+            if visible_len(q) < _Q_MIN_VISIBLE or not key or key in _Q_CHANNEL_KEYS:
+                continue
+            out.append((q, key))
+    return out
+
+
+def _q_bigrams(text: str) -> set:
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
+def _q_similar(a: str, b: str) -> bool:
+    if len(a) < 8 or len(b) < 8:
+        return False
+    sa, sb = _q_bigrams(a), _q_bigrams(b)
+    if not sa or not sb:
+        return False
+    return len(sa & sb) / len(sa | sb) >= _Q_NEAR_JACCARD
+
+
+def check_case_question_repeat(result: CaseResult) -> None:
+    """同一问句（或近似问句）在 ≥2 个不同轮次里由助手重复问出 → 判红。"""
+    occ = {}
+    for t in result.turns:
+        for q, key in assistant_questions(t.reply):
+            occ.setdefault(key, []).append((t.index + 1, q))
+    flagged = set()
+    for key, items in occ.items():
+        turns = sorted({i for i, _ in items})
+        if len(turns) >= 2:
+            result.fail(turns[1], "跨轮重复追问“%s”（T%s）"
+                        % (items[0][1], "/T".join(str(i) for i in turns)))
+            flagged.add(key)
+    keys = list(occ)
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a, b = keys[i], keys[j]
+            if a in flagged or b in flagged or not _q_similar(a, b):
+                continue
+            ta = sorted({x for x, _ in occ[a]})
+            tb = sorted({x for x, _ in occ[b]})
+            if len(set(ta) | set(tb)) < 2 or (ta == tb and len(ta) == 1):
+                continue
+            result.fail(max(min(ta), min(tb)),
+                        "跨轮重复追问近似句“%s”≈“%s”（T%s/T%s）"
+                        % (occ[a][0][1], occ[b][0][1], "/".join(map(str, ta)),
+                           "/".join(map(str, tb))))
+    return None
+
+
 # ---------------- 后端 ----------------
 class QuotaExhausted(Exception):
     """某一家后端的配额/鉴权失效，轮换时应切下一家。"""
@@ -943,6 +1019,7 @@ def run_case(case: dict, backend, universal: dict) -> tuple:
         prev.append(turn)
         history.append({"role": "assistant", "content": turn.reply or " "})
     check_case_expect(result, universal)
+    check_case_question_repeat(result)
     # “忘了/别记”之后不仅嘴上不提，存储里也必须真的没了（mock 会话记忆 / 服务端槽）
     forget = case.get("forget_after") or {}
     if forget:

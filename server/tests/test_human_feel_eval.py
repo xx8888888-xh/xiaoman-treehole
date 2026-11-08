@@ -187,6 +187,54 @@ class HumanFeelEvalTest(unittest.TestCase):
         self.assertIsNone(ev.META_MEMORY_RE.search("你记错了？我没说过"))
         self.assertIsNone(ev.META_MEMORY_RE.search("我没记错的话，是年糕吧"))
 
+    def test_cross_turn_repeat_question_fails(self):
+        """助手在多轮里反复把同一句问题推回给用户：判红。"""
+        case = {"id": "repeat-q", "category": "追问"}
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("最近老是失眠",
+                                 {"reply": "这阵子我也老失眠。团子半夜跑酷吗？"}, 0))
+        res.turns.append(ev.Turn("昨天也是三点多才睡着",
+                                 {"reply": "作息乱套了。团子半夜跑酷吗？"}, 1))
+        res.turns.append(ev.Turn("今天一早又要开会",
+                                 {"reply": "一早开会更难熬。团子半夜跑酷吗？"}, 2))
+        ev.check_case_question_repeat(res)
+        self.assertFalse(res.passed)
+        self.assertIn("跨轮重复追问", res.failures[0]["reason"])
+        self.assertIn("T1/T2/T3", res.failures[0]["reason"])
+
+    def test_user_repeat_question_is_not_a_product_defect(self):
+        """用户自己重复问，助手照常回答：不算助手的锅。"""
+        case = {"id": "user-repeat", "category": "追问"}
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("你睡了吗",
+                                 {"reply": "还没，躺着呢"}, 0))
+        res.turns.append(ev.Turn("你睡了吗",
+                                 {"reply": "真没睡，在听你说"}, 1))
+        ev.check_case_question_repeat(res)
+        self.assertTrue(res.passed, res.failures)
+
+    def test_short_backchannel_repeat_allowed(self):
+        """“然后呢？”这类短接话重复，不算重复追问。"""
+        case = {"id": "channel", "category": "日常倾诉"}
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("我今天被领导说了",
+                                 {"reply": "然后呢？"}, 0))
+        res.turns.append(ev.Turn("我就没说话",
+                                 {"reply": "然后呢？"}, 1))
+        ev.check_case_question_repeat(res)
+        self.assertTrue(res.passed, res.failures)
+
+    def test_quoted_question_not_counted(self):
+        """助手转述用户问句（引号内）不算助手自己在重复追问。"""
+        case = {"id": "quoted", "category": "日常倾诉"}
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn("我为什么会这样",
+                                 {"reply": "你问“我为什么会这样？”，听着就累。"}, 0))
+        res.turns.append(ev.Turn("我也不知道",
+                                 {"reply": "还是那句“我为什么会这样？”在绕。"}, 1))
+        ev.check_case_question_repeat(res)
+        self.assertTrue(res.passed, res.failures)
+
     def test_pass_rate_and_regression(self):
         by_cat = {}
         failures = []
