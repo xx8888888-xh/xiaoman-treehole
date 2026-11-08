@@ -1,0 +1,163 @@
+name: layout-nightly
+
+# 布局矩阵 10 份重复（只挂定时 + 手动，不进 PR、不进 main push）。
+# 判红规则：同一断言只要在 10 份里失败 >= 1 次，整个 workflow 即红；
+# 不取多数、不做"偶发豁免"。fail-fast: false 只是让其余份继续跑完，便于一次看全，
+# 不影响最终红/绿——任何一份非 0 都会让 workflow 失败。
+# 失败留档：每份的完整 run.log + failed.txt（第几次、哪条断言、实测值）+ metrics JSON 都上传。
+# 单套快速反馈仍由 e2e.yml 的 ui-suites（test_layout_matrix 一份）负责，本文件不改动它。
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # 02:00 Asia/Shanghai（18:00 UTC）。深夜云端跑，不占本地。
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: layout-nightly
+  # 夜间长跑，不互相取消：取消会把"10 份是否稳定"的样本打掉
+  cancel-in-progress: false
+
+env:
+  AI_MODE: mock
+  XIAOMAN_HOST: 127.0.0.1
+  XIAOMAN_WEB_PORT: "8901"
+  XIAOMAN_MOCK_PORT: "8902"
+  XIAOMAN_TTS_PORT: "8903"
+  XIAOMAN_TTS_PROVIDER: none
+  XIAOMAN_ALLOW_LOCAL_BROWSER: "1"
+  PYTHONUNBUFFERED: "1"
+  COMPOSE_FILE: docker-compose.yml:.github/ci/docker-compose.ci.yml
+
+jobs:
+  layout-matrix-x10:
+    name: layout-matrix-x10-${{ matrix.repeat }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      # 其余份继续跑完再判定（判红不看多数，只看有没有任何一份红）
+      fail-fast: false
+      matrix:
+        repeat: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Short sha
+        id: meta
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/setup-playwright
+
+      - name: Sync web assets
+        run: bash scripts/build_assets.sh
+
+      - name: Build & start 3 containers
+        run: |
+          docker compose up -d --build
+          docker compose ps
+
+      - name: Wait for services
+        run: |
+          set -euo pipefail
+          web_url="http://${XIAOMAN_HOST}:${XIAOMAN_WEB_PORT}/index.html"
+          mock_url="http://${XIAOMAN_HOST}:${XIAOMAN_MOCK_PORT}/health"
+          tts_url="http://${XIAOMAN_HOST}:${XIAOMAN_TTS_PORT}/health"
+          for i in $(seq 1 60); do
+            ok=1
+            curl -sf "$web_url" >/dev/null || ok=0
+            curl -sf "$mock_url" >/dev/null || ok=0
+            curl -sf "$tts_url" >/dev/null || ok=0
+            if [ "$ok" = "1" ]; then
+              echo "services ready after $((i * 2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "services not ready after 120s"
+          docker compose ps
+          docker compose logs --tail=100
+          exit 1
+
+      - name: Run layout matrix (${{ matrix.repeat }}/10)
+        run: |
+          set -euo pipefail
+          OUT="artifacts/layout-nightly/run-${{ matrix.repeat }}"
+          mkdir -p "$OUT"
+          export XIAOMAN_ARTIFACTS_DIR="$OUT"
+          export XIAOMAN_SHOTS_DIR="$OUT/shots"
+          export XIAOMAN_LAYOUT_SHOTS="$OUT/layout"
+          : > "$OUT/failed.txt"
+
+          {
+            echo "run=${{ matrix.repeat }}/10"
+            echo "sha=${GITHUB_SHA}"
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee "$OUT/run.log"
+
+          set +e
+          python scripts/test_layout_matrix.py 2>&1 | tee -a "$OUT/run.log"
+          code=${PIPESTATUS[0]}
+          set -e
+
+          # 脚本默认把 metrics 写在 SHOTS 目录；若落到仓库默认路径也一并收进本次产物
+          if [ -f artifacts/layout_matrix/layout_matrix_metrics.json ]; then
+            cp artifacts/layout_matrix/layout_matrix_metrics.json "$OUT/" || true
+          fi
+
+          if [ "$code" -ne 0 ]; then
+            {
+              echo "run=${{ matrix.repeat }}/10 exit=$code"
+              # 脚本本身逐条输出 "FAIL <断言> · <实测值>"，这里原样保留，不做二次归纳
+              grep -aE "^FAIL |^RESULT " "$OUT/run.log" || true
+            } > "$OUT/failed.txt"
+            grep -aE "^FAIL " "$OUT/run.log" | while IFS= read -r line; do
+              echo "::error::layout 第 ${{ matrix.repeat }}/10 份 · $line"
+            done
+            echo "::error::layout 第 ${{ matrix.repeat }}/10 份 failed (exit $code)"
+            exit "$code"
+          fi
+
+      - name: Job summary
+        if: always()
+        run: |
+          OUT="artifacts/layout-nightly/run-${{ matrix.repeat }}"
+          {
+            echo "### layout-nightly · run ${{ matrix.repeat }}/10"
+            echo ""
+            echo '```'
+            grep -aE "^RESULT|^FAIL |run=|started_at=" "$OUT/run.log" 2>/dev/null | tail -n 15 || echo "(无汇总)"
+            echo '```'
+            if [ -s "$OUT/failed.txt" ]; then
+              echo ""
+              echo "**失败明细（第 ${{ matrix.repeat }}/10 份）**"
+              echo '```'
+              sed 's/^/    /' "$OUT/failed.txt"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs --tail=120 || true
+
+      - name: Upload artifacts
+        # 失败时也要拿到那一份的完整输出：run.log / failed.txt / metrics JSON / 截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: layout-nightly-run-${{ matrix.repeat }}-${{ steps.meta.outputs.short }}
+          path: artifacts/layout-nightly/run-${{ matrix.repeat }}/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down -v --remove-orphans || true
