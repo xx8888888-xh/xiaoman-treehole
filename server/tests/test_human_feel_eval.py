@@ -235,6 +235,52 @@ class HumanFeelEvalTest(unittest.TestCase):
         ev.check_case_question_repeat(res)
         self.assertTrue(res.passed, res.failures)
 
+    def test_user_echo_fails(self):
+        """助手把用户本轮原句逐字抄回来（≥8 字且覆盖过半）：判红。"""
+        case = {"id": "echo", "category": "日常倾诉"}
+        res = ev.CaseResult(case)
+        res.turns.append(ev.Turn(
+            "它把我杯子推下去了",
+            {"reply": "它把我杯子推下去了，我还没来得及捡。||真是欠揍"}, 0))
+        ev.check_case_user_echo(res)
+        self.assertFalse(res.passed)
+        self.assertIn("复读用户原句", res.failures[0]["reason"])
+        self.assertEqual(res.failures[0]["turn"], 1)
+
+    def test_short_echo_allowed(self):
+        """“真的吗/我也是”这类短接话重合不算复读。"""
+        res = ev.CaseResult({"id": "short", "category": "日常倾诉"})
+        res.turns.append(ev.Turn("真的吗", {"reply": "真的吗，我也觉得"}, 0))
+        ev.check_case_user_echo(res)
+        self.assertTrue(res.passed, res.failures)
+
+    def test_partial_echo_of_long_user_not_flagged(self):
+        """长句里只重合一个短片段（不足一半）不算复读用户原句。"""
+        res = ev.CaseResult({"id": "partial", "category": "日常倾诉"})
+        res.turns.append(ev.Turn(
+            "今天早上上班的时候又被领导叫去改方案了我真的烦死了",
+            {"reply": "又被领导叫去改方案了，换谁都烦"}, 0))
+        ev.check_case_user_echo(res)
+        self.assertTrue(res.passed, res.failures)
+
+    def test_echo_paraphrase_not_flagged(self):
+        """改写过的不算逐字复读。"""
+        res = ev.CaseResult({"id": "para", "category": "日常倾诉"})
+        res.turns.append(ev.Turn(
+            "它把我杯子推下去了，我还没来得及捡。",
+            {"reply": "杯子被它推下去了？还没捡吧"}, 0))
+        ev.check_case_user_echo(res)
+        self.assertTrue(res.passed, res.failures)
+
+    def test_advice_skips_first_person_self_disclosure(self):
+        """“我昨天也熬夜了”是第一人称自述，不算建议；真建议仍要抓。"""
+        case = {"id": "adv", "category": "具体细节"}
+        self.assertIsNone(ev.advice_hits(case, "三点睡，今天应该挺难受的。我昨天也熬夜了。"))
+        self.assertIsNone(ev.advice_hits(case, "我以前也经常熬夜到三点。"))
+        self.assertIsNotNone(ev.advice_hits(case, "你也早点睡吧。"))
+        self.assertIsNotNone(ev.advice_hits(case, "我劝你也早睡。"))
+        self.assertIsNotNone(ev.advice_hits(case, "我昨天也熬夜了，你还是早点睡吧。"))
+
     def test_pass_rate_and_regression(self):
         by_cat = {}
         failures = []

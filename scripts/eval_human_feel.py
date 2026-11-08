@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import random
@@ -59,6 +60,13 @@ ADVICE_STRICT_CATEGORIES = ("具体细节", "追问")
 ADVICE_RE_STRICT = re.compile(
     ADVICE_RE.pattern + "|早点休息|注意保暖|多喝|别熬夜|熬夜|去医院|看医生|"
     "休息一下|记得休息|别忘休息|多穿点|穿厚点")
+# 第一人称自述：主语“我”（可带时间/频率副词）直接接建议词，且中间不出现“你”。
+# 只用来排除“我昨天也熬夜了”这类自述，不删词表——同一句里如果后面还有
+# “建议你早睡”，仍会被后续匹配抓到。
+_SELF_DISCLOSURE_RE = re.compile(
+    r"我(?:昨天|今天|前天|上周|最近|以前|之前|平时|平常|小时候)?"
+    r"(?:也|都|经常|总是|老是|一直|每天|每周|有时候|偶尔)*")
+_SELF_DISCLOSURE_WINDOW = 10
 # 别名接住的守门词：同义命中若发生在“叮嘱/指导”里，不算接住（防“顺带提一句+说教”刷绿）
 INSTRUCTION_RE = re.compile(
     "记得|别忘|别忘了|要注意|注意保暖|注意暖和|别着凉|多穿|穿厚|"
@@ -195,11 +203,31 @@ class CaseResult:
 
 
 # ---------------- 判定 ----------------
+def _is_self_disclosure(reply: str, start: int) -> bool:
+    """匹配词是否落在第一人称自述里（“我也/我以前/我昨天也”直接接谓语）。
+
+    取匹配点前 10 个字（去标点），从最后一个“我”起算；中间出现“你”就不算自述，
+    避免把“我劝你也早睡”当成自述放过。
+    """
+    before = PUNCT_RE.sub("", (reply or "")[max(0, start - _SELF_DISCLOSURE_WINDOW):start])
+    i = before.rfind("我")
+    if i < 0:
+        return False
+    tail = before[i:]
+    if "你" in tail:
+        return False
+    return bool(_SELF_DISCLOSURE_RE.fullmatch(tail))
+
+
 def advice_hits(case: dict, reply: str):
-    """按用例类别选建议词表：细节/追问用 strict（宽词表），其余用原表。"""
+    """按用例类别选建议词表；跳过第一人称自述，继续找真正的建议。"""
     rx = (ADVICE_RE_STRICT if case.get("category") in ADVICE_STRICT_CATEGORIES
           else ADVICE_RE)
-    return rx.search(reply or "")
+    for m in rx.finditer(reply or ""):
+        if _is_self_disclosure(reply, m.start()):
+            continue
+        return m
+    return None
 
 
 def _advice_limit(case: dict, universal: dict) -> int:
@@ -471,6 +499,34 @@ def check_case_question_repeat(result: CaseResult) -> None:
                         % (occ[a][0][1], occ[b][0][1], "/".join(map(str, ta)),
                            "/".join(map(str, tb))))
     return None
+
+
+# ---------------- 复读用户原句 ----------------
+# 只判助手在本轮把用户刚说的原句逐字抄回来；连续 ≥8 个可见字符、且至少覆盖
+# 用户原句一半才判，避免“嗯/真的吗/我也是”这种必然重合的短接话被判红。
+_ECHO_MIN_CHARS = 8
+_ECHO_MIN_RATIO = 0.5
+_ECHO_NORM_RE = re.compile(r"[\s，。！？!?、；：,.!?;:\"'“”‘’（）()~～—\-_…·|]+")
+
+
+def _echo_norm(text: str) -> str:
+    return _ECHO_NORM_RE.sub("", text or "")
+
+
+def check_case_user_echo(result: CaseResult) -> None:
+    """助手把用户本轮原句逐字抄回（连续 ≥8 字且覆盖过半）→ 判红。"""
+    for t in result.turns:
+        user = _echo_norm(t.user)
+        reply = _echo_norm(t.reply)
+        if len(user) < _ECHO_MIN_CHARS or len(reply) < _ECHO_MIN_CHARS:
+            continue
+        sm = difflib.SequenceMatcher(None, user, reply, autojunk=False)
+        m = sm.find_longest_match(0, len(user), 0, len(reply))
+        if (m.size >= _ECHO_MIN_CHARS
+                and m.size >= _ECHO_MIN_RATIO * len(user)):
+            frag = user[m.a:m.a + m.size]
+            result.fail(t.index + 1,
+                        "复读用户原句“%s”（连续 %d 字）" % (frag, m.size))
 
 
 # ---------------- 后端 ----------------
@@ -1025,6 +1081,7 @@ def run_case(case: dict, backend, universal: dict) -> tuple:
         history.append({"role": "assistant", "content": turn.reply or " "})
     check_case_expect(result, universal)
     check_case_question_repeat(result)
+    check_case_user_echo(result)
     # “忘了/别记”之后不仅嘴上不提，存储里也必须真的没了（mock 会话记忆 / 服务端槽）
     forget = case.get("forget_after") or {}
     if forget:
