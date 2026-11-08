@@ -177,7 +177,7 @@
       "rule": {"type": "range", "value": [4.0, 7.0]},
       "r6": 5.19,
       "unit": "per_sec",
-      "note": "R5/R6 观测 5.14–5.19（30s 后 1fps 降档的混合均值）；4–7 为噪声包络，不是 55–62 满帧判据"
+      "note": "R5/R6 观测 5.14–5.19（1fps 降档混合均值）；4–7 为噪声包络，不是 55–62 满帧判据；probe 侧 RAF_ANIM_MIN/MAX 已对齐同区间，旧 ≥30 判据作废"
     },
     {
       "id": "power.background_frames_hidden",

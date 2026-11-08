@@ -63,7 +63,8 @@ PRESET_DEFAULT = {"preset": "default", "motion": True, "font": "normal", "iconsG
 # ---- 判据阈值 ---------------------------------------------------------------
 RAF_ZERO_MAX = 10        # 零渲染窗口（首秒除外）允许的 rAF 回调数
 PX_ZERO_MAX = 20000      # 同上：目的矩形像素面积上限（一次 720p 满屏 ≈ 1.5M）
-RAF_ANIM_MIN = 30.0      # 默认预设：平均每秒 rAF 低于此值 = 动画根本没跑
+RAF_ANIM_MIN = 4.0       # 默认预设：rAF 均值下限（1fps 降档混合均值，与 R6 基线 4–7 同源）
+RAF_ANIM_MAX = 7.0       # 默认预设：rAF 均值上限，对应 docs/perf_baseline_r6.json 的 range
 BG_FRAME_MAX = 10        # 后台 300s 允许的帧增量上限（对照 60fps×300s=18000）
 
 # ---- 页内探针 ---------------------------------------------------------------
@@ -561,14 +562,14 @@ def measure_foreground(cdp, name, seconds, preset, expectation):
                 reasons.append(f"画布目的矩形 {px_ex_first}px（>{PX_ZERO_MAX}），仍在绘制")
         verdict = "zero-render-ok" if ok else "NOT-zero-render"
     else:
-        ok = (raf_avg or 0) >= RAF_ANIM_MIN
+        ok = bool(raf_avg is not None and RAF_ANIM_MIN <= raf_avg <= RAF_ANIM_MAX)
         verdict = "NOT-zero-render"                       # 默认预设本就该持续出帧
-        in_band = bool(raf_avg is not None and 50.0 <= raf_avg <= 65.0)
         if not ok:
-            reasons.append(f"默认预设期望 rAF 持续（55~62/s），实测 {raf_avg}/s < {RAF_ANIM_MIN}")
+            reasons.append(f"默认预设期望 rAF 均值 {RAF_ANIM_MIN}~{RAF_ANIM_MAX}/s"
+                           f"（1fps 降档混合均值），实测 {raf_avg}/s 超出区间")
         else:
-            reasons.append(f"期望值：动画持续（55~62/s），实测均值 {raf_avg}/s"
-                           f"{'（在带内）' if in_band else '（带外，仅记录）'}")
+            reasons.append(f"默认预设 rAF 均值 {raf_avg}/s 在带内（{RAF_ANIM_MIN}~{RAF_ANIM_MAX}/s，"
+                           f"1fps 降档混合均值）")
         if zero_observed:
             reasons.append("注意：本段实际观测到零渲染，动画可能没起来")
 
