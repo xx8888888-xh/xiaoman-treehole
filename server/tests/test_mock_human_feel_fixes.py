@@ -136,6 +136,28 @@ class NamedEchoGuardTest(unittest.TestCase):
         payloads = say("named-neg", ["我家猫叫年糕", "它今天把我杯子推下去了"])
         self.assertNotIn("年糕", payloads[1]["reply"])
 
+    def test_five_naming_turns_no_mechanical_repeat(self):
+        """连续 5 轮都点名同一实体：名字每轮出现，且句式不机械重复。
+
+        接替原「接住 ≠ 复读」断言在新路径上的职责：整句不重 + 同头 4 字不重。
+        边界（实测，见本轮报告）：宠物池 5 条，前 5 轮 5/5 不重；
+        第 6 轮起 recent 已用尽整池，退回整池随机 → 开始重复。
+        """
+        payloads = say("named-diversity", [
+            "我家猫叫年糕",         # 写入轮
+            "年糕在干嘛",
+            "年糕拆家了",
+            "年糕欠揍不",
+            "年糕最近乖不乖",
+        ])
+        replies = [p["reply"].replace("||", "/") for p in payloads]
+        for i, r in enumerate(replies):
+            self.assertIn("年糕", r, "第 %d 轮点名必须出现名字：%r" % (i, r))
+        self.assertGreaterEqual(len(set(replies)), 4,
+                                "5 轮点名不许机械重复：%r" % replies)
+        self.assertGreaterEqual(len({r[:4] for r in replies}), 4,
+                                "5 轮点名不许同头 4 字：%r" % replies)
+
     def test_guard_result_wraps_upstream_reply(self):
         """上游/模型路径同样过闸：成品缺值 → 确定性替换。"""
         sid = fresh("named-guard")

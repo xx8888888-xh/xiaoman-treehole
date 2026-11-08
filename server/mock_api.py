@@ -1616,12 +1616,19 @@ def _ensure_named_echo(result, user_text, session_id):
     pool = MEM_AWARE_POOL.get(key) or ()
     out = dict(result)
     if pool:
-        # 重试：改走记忆感知模板（必含 {v}），并沿用会话内"没用过"的去重口径，
-        # 避免每轮同句把"点名"变成复读机。
-        recent = sess.get("recent_replies") or []
+        # 重试：改走记忆感知模板（必含 {v}），并沿用会话内去重口径：
+        # 整句不重 + 开头 4/6 字不重（与 make_reply 的 _pick 同源），
+        # 避免每轮同句把"点名"变成复读机。池用尽后如实退回整池（见单测边界说明）。
+        recent = sess.setdefault("recent_replies", [])
+        opens4 = {c[:4] for c in recent}
+        opens6 = {c[:6] for c in recent}
         cands = [t.replace("{v}", value) for t in pool
                  if t.replace("{v}", value) not in recent]
-        out["reply"] = random.choice(cands or [t.replace("{v}", value) for t in pool])
+        narrow = [c for c in cands
+                  if len(c) >= 4 and c[:4] not in opens4
+                  and (len(c) < 6 or c[:6] not in opens6)]
+        out["reply"] = random.choice(
+            narrow or cands or [t.replace("{v}", value) for t in pool])
         recent.append(out["reply"])
         if len(recent) > 8:
             del recent[0]
