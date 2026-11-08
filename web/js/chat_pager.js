@@ -388,6 +388,11 @@ const ChatPager = (() => {
     autoScrollUntil = Date.now() + 800;
     render("bottom");
     syncJump();
+    // 回底后状态区/打字行这类异步布局可能晚半拍改变可视高度，把刚贴好的底顶出 12px。
+    // 只在程序化回底窗口内补两拍（用户一旦接管滚动就不再抢位置）。
+    const repin = () => { if (Date.now() < autoScrollUntil) pinBottom(); };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(repin);
+    setTimeout(repin, 260);
   }
 
   function onScroll() {

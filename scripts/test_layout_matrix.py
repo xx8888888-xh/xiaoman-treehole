@@ -539,7 +539,10 @@ async def main():
             gap = m4["chatScrollHeight"] - m4["chatScrollTop"] - m4["chatClientHeight"]
             if gap <= 1:
                 break
-        check(f"上翻后点浮钮回到最新（gap={gap} <= 1）", gap is not None and gap <= 1, gap)
+        check(f"上翻后点浮钮回到最新（gap={gap} <= 1）", gap is not None and gap <= 1,
+              {"gap": gap, "st": m4["chatScrollTop"], "sh": m4["chatScrollHeight"],
+               "ch": m4["chatClientHeight"]})
+
 
         await browser.close()
 

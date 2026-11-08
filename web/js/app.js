@@ -2557,10 +2557,21 @@ const App = (() => {
         };
         let lastGap = gap();
         s.addEventListener("scroll", () => { lastGap = gap(); }, { passive: true });
+        const pin = () => {
+          if (typeof s.scrollTo === "function") s.scrollTo({ top: s.scrollHeight, behavior: "instant" });
+          else s.scrollTop = s.scrollHeight;
+        };
+        // 先贴底再确认最后一条真的完整可见；只有贴底后仍被尾部占位块顶出去时，
+        // 才用 scrollIntoView 补一帧。顺序反过来会把行顶对齐到 scroll-padding-top(44px)，
+        // 底部反而留出 12px 缝（矩阵 gap<=2 断言会红）。
         const stick = () => {
-          s.scrollTop = s.scrollHeight;
+          pin();
           const row = lastVisibleRow();
-          if (row) row.scrollIntoView({ block: "nearest" });
+          if (!row) return;
+          const r = row.getBoundingClientRect(), sr = s.getBoundingClientRect();
+          if (r.bottom > sr.bottom + 1 || r.top < sr.top - 1) {
+            row.scrollIntoView({ block: "nearest" });
+          }
         };
         // 极矮横屏 + 输入框获焦（键盘弹起后 WebView 只剩 ~149 CSS px）时，
         // 聊天区只有几十像素，等于"最新一条"的预览条：此时无条件贴底，
@@ -2605,8 +2616,7 @@ const App = (() => {
             // 缓存会把"刚上翻"误判成"仍贴底"，一次 scrollIntoView 就把视口往下拽近 200px。
             const now = gap();
             if (now > 60 && !tinyFocused()) { lastGap = now; return; }
-            const row = lastVisibleRow();
-            if (row) row.scrollIntoView({ block: "nearest" });
+            stick();
             lastGap = gap();
           });
           mo.observe(s, { childList: true, subtree: true });
