@@ -165,9 +165,9 @@ class NamedEchoGuardTest(unittest.TestCase):
         """连续 5 轮都点名同一实体：名字每轮出现，且句式不机械重复。
 
         接替原「接住 ≠ 复读」断言在新路径上的职责：整句不重 + 同头 4 字不重。
-        边界（实测，见本轮报告）：宠物池 8 条；同实体连喂 9 轮时 unique 为 6-8，
-        最早第 6 轮就复用（recent 窗口 8 条里混有非点名回复，去重地平线≈4 轮
-        点名；且 9 轮 > 8 条模板，9/9 不重在当前池容量下无解）。
+        边界（实测）：宠物池 10 条，D 场景（写入 + 8 轮点名）40 次全部 9/9 不重；
+        去重查"本会话已用整句"集合，池耗尽时整体重置为只用上一轮那条，
+        跨重置点相邻两轮不重（见 test_pool_exhaustion_resets_to_last_reply）。
         """
         payloads = say("named-diversity", [
             "我家猫叫年糕",         # 写入轮
@@ -183,6 +183,26 @@ class NamedEchoGuardTest(unittest.TestCase):
                                 "5 轮点名不许机械重复：%r" % replies)
         self.assertGreaterEqual(len({r[:4] for r in replies}), 4,
                                 "5 轮点名不许同头 4 字：%r" % replies)
+
+    def test_pool_exhaustion_resets_to_last_reply(self):
+        """池用尽时整体重置为"只用上一轮那条"：跨重置点的相邻两轮不许同句。
+
+        写入 + 11 轮点名 = 12 轮 > 10 条池，必然跨过重置点。
+        """
+        payloads = say("named-exhaust", [
+            "我家猫叫年糕",            # 写入
+            "年糕在干嘛", "年糕拆家了", "年糕欠揍不", "年糕最近乖不乖",
+            "年糕又偷吃罐头", "年糕今天睡得沉", "年糕是不是胖了",
+            "年糕明早得喊我起来", "年糕在窗台上", "年糕又掉毛了",
+            "年糕是不是困了",          # 第 11 轮点名：池已耗尽
+        ])
+        replies = [p["reply"] for p in payloads]
+        for i, r in enumerate(replies):
+            self.assertIn("年糕", r, "第 %d 轮点名必须出现名字：%r" % (i, r))
+        for i in range(1, len(replies)):
+            self.assertNotEqual(replies[i], replies[i - 1],
+                                "相邻两轮不许同句（轮 %d→%d）：%r"
+                                % (i - 1, i, replies[i - 1]))
 
     def test_guard_result_wraps_upstream_reply(self):
         """上游/模型路径同样过闸：成品缺值 → 确定性替换。"""
@@ -256,10 +276,11 @@ class InsomniaStateSlotTest(unittest.TestCase):
         self.assertIn("状态", mock_api.RECALL_TEMPLATES)
         self.assertIn("状态", mock_api.MEM_AWARE_POOL)
 
-    def test_mem_aware_pool_size_matches_window(self):
-        """模板池 8 条，与 recent_replies 去重窗口（8）对齐；每条都必须能嵌入 {v}。"""
+    def test_mem_aware_pool_size_and_placeholders(self):
+        """常被点名的键各 10 条（8 条对齐窗口 + 2 条余量），每条都能嵌入 {v}。"""
         for key, pool in mock_api.MEM_AWARE_POOL.items():
-            self.assertEqual(len(pool), 8, "%s 池应为 8 条：%d" % (key, len(pool)))
+            self.assertEqual(len(pool), 10, "%s 池应为 10 条：%d" % (key, len(pool)))
+            self.assertEqual(len(set(pool)), len(pool), "%s 池有重复整句" % key)
             self.assertTrue(all("{v}" in t for t in pool),
                             "%s 池有模板缺 {v}：%r" % (key, pool))
 

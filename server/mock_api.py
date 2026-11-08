@@ -425,8 +425,8 @@ RECALL_MAX = 4         # 闸门2：每会话回提总次数上限（含 greet �
 # 记忆）回复走通用追问池完全无感知。用户主动给记忆回访机会时，小满应自然接住。
 # 模板 {v}=记忆值原文嵌入（零虚构铁律延伸）；频控=同键相邻轮冷却（3 轮：
 # 写入轮当场接住，随后两轮静默，冷却满再提；与离线引擎 mock_engine.js 同源）。
-# 池 8 条：与 recent_replies 去重窗口（8）对齐（内容量下限）。注意窗口里还会混入
-# 非点名回复，实际去重地平线比 8 短——同句连喂的不重轮数见单测边界说明。
+# 池 10 条：8 条与 recent_replies 去重窗口（8）对齐，另 2 条作余量（窗口里还会
+# 混入非点名回复，点名回带的去重不靠这个窗口，见 _named_echo_pool）。
 MEM_AWARE_POOL = {
     "宠物": [
         "{v}这会儿肯定又赖在你腿上打呼噜了吧||它最近还这么粘人？",
@@ -437,6 +437,8 @@ MEM_AWARE_POOL = {
         "刚还想着{v}呢||它今天有没有捣乱",
         "说到{v}||它那点小心思我可太懂了",
         "你家{v}真是戏精||今天又演哪出",
+        "{v}是不是胖了点||抱起来沉不沉",
+        "一想到{v}我就想笑||它平时是不是也这么欠",
     ],
     "大事": [
         "{v}这事你刚提，又有新进展了？||快说，我一直记着呢",
@@ -447,6 +449,8 @@ MEM_AWARE_POOL = {
         "你说{v}那会儿我就上心了||现在呢",
         "关于{v}||有我能搭把手的地方吗",
         "别自己扛着{v}||说出来我陪你捋",
+        "{v}走到哪一步了||需要我帮你记着啥",
+        "还惦记着{v}呢||慢慢来，不催你",
     ],
     "老板": [
         "{v}又怎么了？||该不会又作妖了吧",
@@ -457,6 +461,8 @@ MEM_AWARE_POOL = {
         "一提到{v}你语气都变了||今天又发生什么",
         "行，先把{v}放一边||你想骂就骂",
         "{v}真是阴魂不散||说来听听",
+        "怎么又是{v}的事||今天这口气顺了没",
+        "{v}那脾气也是没谁了||你离他远点",
     ],
     "在忙": [
         "{v}还没忙完呀？||悠着点，别把自己耗干了",
@@ -464,9 +470,11 @@ MEM_AWARE_POOL = {
         "{v}真是磨人||还没结束呢？",
         "还在{v}啊||这都快成连续剧了",
         "{v}这事我记得||有进展了没",
-        "{v}这事先别急着收尾||跟我说说卡哪",
+        "先别急着收{v}的尾||跟我说说卡哪",
         "还在跟{v}较劲呢||喘口气再弄",
         "说到{v}||你可别又熬到半夜",
+        "{v}这摊子事什么时候是个头||先喘口气",
+        "忙{v}忙到现在||饿不饿，先垫一口",
     ],
     "状态": [
         "又是{v}？||这两天是不是一直没缓过来",
@@ -477,6 +485,8 @@ MEM_AWARE_POOL = {
         "说起来{v}||今天有没有轻一点",
         "{v}还没放过你||要不要先歇会儿",
         "辛苦你了，扛着{v}||我在这儿听着",
+        "{v}这事急不来||今天先顾好自己",
+        "{v}又犯了是不是||先把今天撑过去",
     ],
     "家人": [
         "{v}今天又念叨你了吧||说说，我听着",
@@ -487,6 +497,8 @@ MEM_AWARE_POOL = {
         "一聊到{v}你话就多||我听着呢",
         "{v}那边还好吧||你有事别憋着",
         "替我问{v}好||你也照顾好自己",
+        "你说的{v}||今天又有什么新情况",
+        "为{v}的事烦心呢||你也得顾着自己",
     ],
     "室友": [
         "{v}又整什么活了||说吧，我听着",
@@ -497,6 +509,8 @@ MEM_AWARE_POOL = {
         "跟{v}住着是不是挺憋屈||说说",
         "{v}那人还那样呢||换我真受不了",
         "一屋子就你和{v}||今天又咋了",
+        "又跟{v}闹别扭了||谁的问题先说清",
+        "{v}今天在家吗||想清静会儿就出去走走",
     ],
 }
 MEM_AWARE_COOLDOWN = 3  # 同键记忆感知间隔轮数（含写入轮；与离线引擎 mock_engine.js 同源）
@@ -1211,7 +1225,7 @@ def _norm_history(raw):
 _STATE_SCALARS = ("crisis_count", "depress_count", "turns", "recall_count", "mem_aware_ts")
 _STATE_BOOLS = ("depress_esc",)
 _STATE_DICTS = ("memories", "memory_hits", "risk_state", "pet_species")
-_STATE_LISTS = ("told_v", "mem_extracted", "recent_replies")
+_STATE_LISTS = ("told_v", "mem_extracted", "recent_replies", "named_echo_used")
 
 
 def _norm_state(raw):
@@ -1254,6 +1268,7 @@ class _State:
         "last_topic", "memories", "crisis_count", "depress_count", "depress_esc",
         "turns", "told_v", "memory_hits", "mem_extracted", "recall_count",
         "recent_replies", "mem_aware_ts", "risk_state", "pet_species",
+        "named_echo_used",
     )
 
     def __init__(self):
@@ -1611,6 +1626,25 @@ def _named_memory_pairs(session_id):
     return pairs
 
 
+def _named_echo_pool(key, value, sess):
+    """点名回带的候选整句：对本会话"已用过的整句"去重，不再依赖 recent_replies 窗口。
+
+    窗口按 2 条/轮计（通用回复 + 兜底替换各一条），实际只覆盖约 4 轮点名；早先
+    模板出了窗就会被随机再撞。会话级集合随会话失效，不需要持久化到全局。
+    集合耗尽时整体重置为"只用上一轮那条"，保证跨过重置点的相邻两轮不重。
+    """
+    pool = [t.replace("{v}", value) for t in (MEM_AWARE_POOL.get(key) or ())]
+    if not pool:
+        return []
+    used = sess.setdefault("named_echo_used", [])
+    cands = [c for c in pool if c not in used]
+    if not cands:
+        last = used[-1] if used else ""
+        used[:] = [last] if last else []
+        cands = [c for c in pool if c not in used] or list(pool)
+    return cands
+
+
 def _ensure_named_echo(result, user_text, session_id):
     """生成后置校验：本轮用户唯一点名的实体记忆，回复里必须出现该值。
 
@@ -1632,25 +1666,22 @@ def _ensure_named_echo(result, user_text, session_id):
     if len(named) != 1:
         return result
     key, value = named[0]
-    if value in reply:
-        return result
     sess = _STATE.get_session(session_id) or {}
-    pool = MEM_AWARE_POOL.get(key) or ()
+    if value in reply:
+        # 写入轮/记忆感知轮的回复已经带值，也要记进"已用整句"，否则点名兜底
+        # 不知道这条已被用过，会在窗口外重新撞上它。
+        used = sess.setdefault("named_echo_used", [])
+        if reply not in used:
+            used.append(reply)
+        return result
+    cands = _named_echo_pool(key, value, sess)
     out = dict(result)
-    if pool:
-        # 重试：改走记忆感知模板（必含 {v}），并沿用会话内去重口径：
-        # 整句不重 + 开头 4/6 字不重（与 make_reply 的 _pick 同源），
-        # 避免每轮同句把"点名"变成复读机。池用尽后如实退回整池（见单测边界说明）。
+    if cands:
+        # 重试：改走记忆感知模板（必含 {v}），查会话级已用集合（见 _named_echo_pool）；
+        # 集合耗尽时只排除上一轮那条，跨重置点相邻两轮不重。
+        out["reply"] = random.choice(cands)
+        sess.setdefault("named_echo_used", []).append(out["reply"])
         recent = sess.setdefault("recent_replies", [])
-        opens4 = {c[:4] for c in recent}
-        opens6 = {c[:6] for c in recent}
-        cands = [t.replace("{v}", value) for t in pool
-                 if t.replace("{v}", value) not in recent]
-        narrow = [c for c in cands
-                  if len(c) >= 4 and c[:4] not in opens4
-                  and (len(c) < 6 or c[:6] not in opens6)]
-        out["reply"] = random.choice(
-            narrow or cands or [t.replace("{v}", value) for t in pool])
         recent.append(out["reply"])
         if len(recent) > 8:
             del recent[0]
@@ -1811,7 +1842,8 @@ def make_reply(messages, session_id=None):
         memories_now, user_text, sess)
     if mem_aware:
         k_aware, v_aware = mem_aware
-        aware_pool = [t.replace("{v}", v_aware) for t in MEM_AWARE_POOL.get(k_aware, [])]
+        # 点名轮（含写入轮）也查会话级已用整句，避免 _pick 在窗口外重新撞旧句
+        aware_pool = _named_echo_pool(k_aware, v_aware, sess)
         if aware_pool:
             pool = aware_pool  # topic 保持原值（last_topic/@CTX/EMO_MAP 不受影响）
     # W11 轻量插值：用户提到具体实体（橘猫/关东煮/三点/周报）→ 用占位符模板回声。
