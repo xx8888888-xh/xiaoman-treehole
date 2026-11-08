@@ -295,10 +295,19 @@ async def main():
         # 那是滚动范围变化，不是我们布局规则造成的"跳变"，会误判。
         await pg.evaluate("""() => {
           const s = document.getElementById('chatScroll');
-          const rows = [...s.querySelectorAll('.msg-row')];
+          const host = document.getElementById('messages');
+          const typing = document.getElementById('typingRow');
+          // 只克隆真实消息行；typingRow 是 host 的最后一个 .msg-row，直接取 last 会把它
+          // 复制 25 份并去掉 hidden（每份 39px），在列表尾部撑出上千 px 空白。
+          const rows = [...host.querySelectorAll('.msg-row')]
+            .filter(r => r !== typing && !r.classList.contains('window-tip'));
           const last = rows[rows.length - 1];
           if (last) for (let i = 0; i < 25; i++) {
-            const c = last.cloneNode(true); c.classList.remove('hidden'); s.appendChild(c);
+            const c = last.cloneNode(true);
+            c.removeAttribute('id');
+            c.classList.remove('hidden', 'window-tip');
+            c.removeAttribute('data-fresh');
+            host.insertBefore(c, typing);
           }
         }""")
         # 两组：竖屏键盘（414×364→860）；横屏键盘收起（782×300→363，此组修前 scrollTop 120→1599）
