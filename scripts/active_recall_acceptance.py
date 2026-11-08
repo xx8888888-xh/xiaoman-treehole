@@ -79,7 +79,13 @@ MIN_PRECISION = 0.9
 # 窗口预算只约束 hook 回带；名字（昵称）是独立产品能力，产品本身把它排除在 hook 预算外
 # （server/tests/test_active_recall.py::test_name_recall_does_not_consume_hook_budget），
 # 因此不参与 1<=V<=2。名字另设上界，依据见下方 NAME_WINDOW_V_MAX。
-WINDOW_V_MIN = 1
+# 下界取 0：产品只定义“何时可以回带”（话题线索、非同轮复述、敏感需受邀、
+# 提取间隔、同键冷却、会话总额），没有定义“每个 10 轮窗必须回带几次”。
+# 0 hook 的整窗是合法常态：无话题线索、本套无事实（S09）、墓碑后、敏感未受邀、
+# 会话预算（RECALL_MAX）已用尽。给正向下限会逼产品做无邀请的敏感回带或同轮复述，
+# 反而触发本脚本自己的 E 判据。10 轮上界 2 仍保留为“过密”诊断，
+# 但密窗是否违规按产品硬规则逐条复核（_dense_evidence），不再一刀切。
+WINDOW_V_MIN = 0
 WINDOW_V_MAX = 2
 
 # 名字回带的窗口区间推导（不是拍脑袋）：
@@ -802,13 +808,24 @@ def _local_windows(
         wi = sum(1 for e in evs if str(e["verdict"]).startswith("无效"))
         partial = (end - start + 1) < WINDOW_SIZE
         # 尾窗只有半窗样本（5 轮），V_hook 的绝对数天然偏小：只判“不超上限”，
-        # 不做“回带过少（V_hook>=1）”的正向判定，否则等于拿半个窗口说产品不合格。
+        # 不做正向下限判定，否则等于拿半个窗口说产品不合格。
+        # 整窗同样不设正向下限（见 WINDOW_V_MIN 注释）：0 hook 是合法分布。
         if partial:
             ok = vh <= WINDOW_V_MAX
             rule = "upper_only"
         else:
             ok = WINDOW_V_MIN <= vh <= WINDOW_V_MAX
             rule = "range"
+        # 过密只作诊断：低于上限直接合格；高于上限时按产品硬规则逐条复核
+        # （不同键、均首提、冷却已过、会话总额未超 RECALL_MAX），合法即不算越界。
+        if vh > WINDOW_V_MAX:
+            ok = bool(
+                _dense_evidence(
+                    {"set": set_index, "start": start, "end": end},
+                    events,
+                    _product_constants(),
+                )["allowed"]
+            )
         name_ok = NAME_WINDOW_V_MIN <= vn <= NAME_WINDOW_V_MAX
         out.append(
             {
@@ -1243,9 +1260,11 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "dense": dense_diag,
         "conclusion": "这不是缺陷，是产品未定义窗口机制。",
         "reason": (
-            "1≤V_hook≤2 是评测侧自拟的窗口分布量，产品只定义了三道硬闸门"
+            "0≤V_hook≤2 是评测侧自拟的窗口分布量，产品只定义了三道硬闸门"
             "（每轮≤1、同键冷却≥RECALL_COOLDOWN、会话总额≤RECALL_MAX）；"
-            "产品没有窗口机制，故窗口分布只作诊断，不参与 PASS/FAIL。"
+            "产品没有窗口机制，也没有“每窗必须回带”的义务：无话题线索、本套无事实、"
+            "墓碑后、敏感未受邀、会话预算用尽时，0 hook 均为合法。"
+            "故稀窗只作分布诊断，密窗按产品硬规则逐条复核，两者都不参与 PASS/FAIL。"
         ),
     }
 
@@ -1357,8 +1376,8 @@ def evaluate(all_sets: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             "window_distribution": window_distribution,
             "partial_windows_note": (
                 "10 个 5 轮尾窗（T31-35）只有半窗样本，V_hook 的绝对数天然偏小："
-                "尾窗只参与“不超上限（V_hook≤2）”的判定，不做“回带过少（V_hook≥1）”的正向判定；"
-                "不得拿尾窗 V_hook=0 或 1 认定产品回带不足。"
+                "尾窗只参与“不超上限（V_hook≤2，超限再按产品硬规则复核）”的判定，"
+                "不设正向下限；整窗同理，V_hook=0 不得认定为产品回带不足。"
             ),
             # 诊断，不参与判定：原判据“有效回带≥35”是合计口径，拆分后仅 hook 不达 35。
             "hook_only_total": {
@@ -1520,7 +1539,7 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
         },
         "definitions": {
             "V": "有效主动回带合计 = V_hook + V_name；≥35 沿用原判据口径（合计），便于与历史账本对齐。",
-            "V_hook": "有效 hook 回带：带出用户此前说过、本轮未提到的记忆事实（不含昵称）。窗口 1≤V_hook≤2 仅为诊断量，不参与判定。",
+            "V_hook": "有效 hook 回带：带出用户此前说过、本轮未提到的记忆事实（不含昵称）。窗口 0≤V_hook≤2 仅为诊断量，不参与判定；0 hook 在无线索/无事实/墓碑后/敏感未受邀/预算用尽时均合法。",
             "V_name": "有效昵称回带：主动叫名字。产品把名字排除在 hook 预算外（test_active_recall.py::test_name_recall_does_not_consume_hook_budget），[0,6]/10 轮上界同样仅为诊断。",
             "E": "错误回带：墓碑/改口语义、实体错绑、编造属性、冷却内重复、敏感未受邀；另含删除/改口后仍提及旧值。",
             "无效": "非主动或低质回带：同轮复述、记忆未更新的旧值、提取间隔不足、宠物泛指。",
@@ -1530,11 +1549,11 @@ def run_all(*, reps: int, base_seed: int, verbose: bool = False) -> Dict[str, An
             "red_to_green": "旧全局诊断红窗，跨套时各段 V_hook 均 1≤V_hook≤2、单套时覆盖的局部窗口全合格：属纯切窗口径假红。",
             "still_red": "旧全局诊断红窗，至少覆盖一个局部红窗：与真实生成侧越界重叠，不能算纯口径问题。",
             "green_to_red": "局部窗口红、但其覆盖的全局诊断窗口全绿：改口径后新增的真红，必须为空。",
-            "window_partial": "尾窗（每套 T31-35，共 10 个）只有 5 轮样本，V_hook 绝对数天然偏小：只判“不超上限 V_hook≤2”，不做“V_hook≥1 回带过少”的正向判定。",
+            "window_partial": "尾窗（每套 T31-35，共 10 个）只有 5 轮样本，V_hook 绝对数天然偏小：只判“不超上限 V_hook≤2”，不做正向回带量判定。",
             "window_scheme_audit": "每次改窗口口径都必须跑的反向检查：脚本自动比对两口径窗口集合，要求绿转红=0 且局部窗到全局窗的覆盖无空洞。",
             "inexact_red_local": "切片错位（本套 T1 不落在 10 轮边界）的局部红窗：全局诊断窗无法与它逐轮对齐，故不参与绿转红计数；但仍在报告顶部与绿转红同列展示，不得只看 JSON。",
             "name_recall": "昵称回带（V_name）独立计数；窗口上界仅为诊断，产品规则只有 NAME_RECALL_COOLDOWN 冷却。",
-            "window_distribution": "窗口稀/密分布：不参与判定。结论固定为“这不是缺陷，是产品未定义窗口机制”，稀窗与密窗仍逐条可见。",
+            "window_distribution": "窗口稀/密分布：不参与判定。结论固定为“这不是缺陷，是产品未定义窗口机制”，稀窗与密窗仍逐条可见；密窗是否越界按产品硬规则逐条复核。",
             "per_key_cooldown": "产品硬规则 2：同一会话同一键两次回带间隔 ≥ 冷却常量（hook 用 RECALL_COOLDOWN，名字用 NAME_RECALL_COOLDOWN，均取自 mock_api）。",
             "session_total_cap": "产品硬规则 3：单会话 hook 回带总额 ≤ mock_api.RECALL_MAX（昵称不占名额）。",
         },
@@ -1651,8 +1670,9 @@ def _print_console(
             )
         for d in dist.get("dense") or []:
             ev = d.get("evidence") or {}
+            verdict = "产品规则允许（诊断，不计违规）" if ev.get("allowed") else "产品规则不允许（越界）"
             print(
-                f"  └ 密窗 {d['label']} V_hook={d['V_hook']}：{d['V_hook']} 条已逐条验证为产品规则允许"
+                f"  └ 密窗 {d['label']} V_hook={d['V_hook']}：{verdict}"
                 f"（不同键={'是' if ev.get('distinct_keys') else '否'}、"
                 f"均首提={'是' if ev.get('all_first') else '否'}、"
                 f"冷却已过={'是' if ev.get('cooldown_ok') else '否'}、"
@@ -1739,15 +1759,16 @@ def _print_console(
     print("\n【窗口分布 · 按会话切】40 窗（诊断，不参与判定；尾窗按实际轮数，套与套不拼）")
     print(f"{'窗口':<20}{'V_hook':>7}{'V_name':>7}{'E':>4}{'无效':>6}  分布")
     for w in report["windows_local"]:
-        if w["pass"]:
-            mark = "OK "
-        elif w["V_hook"] == 0:
-            mark = "稀窗"
+        if w["V_hook"] > WINDOW_V_MAX:
+            mark = "密窗" + ("(合法)" if w["pass"] else "(越界)")
+        elif w["pass"]:
+            mark = "OK " + ("(稀)" if w["V_hook"] == 0 else "")
         else:
-            mark = "密窗"
+            mark = "越界"
         print(
             f"{w['label']:<20}{w['V_hook']:>7}{w['V_name']:>7}{w['E']:>4}{w['invalid']:>6}  {mark}"
         )
+    print("  稀窗（V_hook=0）是合法分布：无线索/本套无事实/墓碑后/敏感未受邀/会话预算用尽时不回带。")
     print("  稀窗/密窗只是分布诊断：产品未定义窗口机制，不据此判定 PASS/FAIL。")
     print("  尾窗（T31-35）只有 5 轮样本：V_hook 绝对数天然偏小，同样只作诊断。")
 
@@ -1765,8 +1786,8 @@ def _print_console(
     diag = report["diagnostics"]
     print("\n【口径重算】")
     print(
-        f"  旧全局窗口红 {diag['global_windows']['violations']} 窗 → 局部稀/密窗 "
-        f"{checks['window_budget']['violations']} 窗（全部仅诊断，不参与判定）"
+        f"  旧全局窗口红 {diag['global_windows']['violations']} 窗 → 局部不合规窗 "
+        f"{checks['window_budget']['violations']} 窗（稀窗不计违规；全部仅诊断，不参与判定）"
     )
     print("  红转绿（纯切窗口径）：" + ("、".join(f"W{r['window']:02d}" for r in diag["red_to_green"]) or "无"))
     print("  诊断仍红（与局部红重叠）：" + ("、".join(f"W{n:02d}" for n in diag["still_red"]) or "无"))

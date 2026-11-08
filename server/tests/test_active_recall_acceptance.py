@@ -354,12 +354,12 @@ def test_evaluate_windows_errors_and_failures():
 
 
 def test_local_windows_partial_tail_is_upper_bound_only():
-    """尾窗只有 5 轮样本：V=0 不判“回带过少”，但 V>2 仍越上限。"""
+    """整窗/尾窗 V=0 都不判“回带过少”；V>2 才按产品硬规则复核是否越界。"""
     empty = ara._local_windows(1, "S01", [], [])
     assert [(w["start"], w["end"], w["rule"], w["pass"]) for w in empty] == [
-        (1, 10, "range", False),
-        (11, 20, "range", False),
-        (21, 30, "range", False),
+        (1, 10, "range", True),
+        (11, 20, "range", True),
+        (21, 30, "range", True),
         (31, 35, "upper_only", True),
     ]
     assert empty[3]["partial"] is True and empty[3]["actual_turns"] == 5
@@ -382,7 +382,7 @@ def test_name_recall_split_and_own_budget():
     assert w["pass"] is True and w["name_pass"] is True
     assert res["summary"]["V_hook"] == 20 and res["summary"]["V_name"] == 10
     assert res["checks"]["name_budget"]["distribution"] == {"0": 30, "1": ara.SETS}
-    assert res["checks"]["window_budget"]["violations"] == 20  # 每套后两个整窗无 hook（尾窗不判下限）
+    assert res["checks"]["window_budget"]["violations"] == 0  # 0 hook 的整窗合法（产品无“每窗必须回带”义务）
 
     dense = {
         s: [_synth_event(s, t, type_="name") for t in range(1, 8)] + [_synth_event(s, 2)]
@@ -540,7 +540,8 @@ def test_window_distribution_conclusion_is_at_report_top(capsys):
 
 def test_inexact_red_local_is_visible_next_to_green_to_red(capsys):
     events = {s: [_synth_event(s, t) for t in (1, 11, 21, 31)] for s in range(1, ara.SETS + 1)}
-    events[2] = [_synth_event(2, t) for t in (11, 21, 31)]  # S02 T01-10 红，但全局切片错位
+    # S02 T01-10 密窗越界（同键 3 条、会话总额超），且 S02 的 T1 落在全局切片边界外
+    events[2] = [_synth_event(2, t) for t in (2, 4, 6, 11, 21, 31)]
     res = ara.evaluate(_synth_sets(events))
     audit = res["checks"]["window_scheme_audit"]
     assert audit["green_to_red"] == 0 and audit["coverage_complete"] is True
