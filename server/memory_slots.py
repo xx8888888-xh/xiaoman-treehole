@@ -291,6 +291,14 @@ TOMBSTONE_VERSION = 1
 _GENERIC_FORGET = {"猫", "狗", "它", "他", "她", "这个", "那个", "这件", "那件",
                    "宠物", "东西", "事", "一下", "上面那个", "刚才说的"}
 
+# 复活门（保守侧）：必须同时满足“有再提及意图”且“无负面评价”。
+# 两类错误代价不对称：该复活没复活只是继续藏名字；不该复活却复活等于
+# 让“我叫它忘掉”失效。若将来发现用户明显想恢复却一直没恢复，方向是补确认词，
+# 绝不放宽成“出现即复活”。
+_REVIVE_INTENT_RE = re.compile(
+    "又|还是|仍然|依然|其实|新养|养了只|叫|名字|记得|想起|刚才说|怎么不提|怎么不说")
+_REVIVE_NEGATIVE_RE = re.compile("不喜欢|讨厌|烦|恨|别再|不想再")
+
 
 def detect_deletions(text: str) -> list:
     """返回用户要求删除的记忆指代（值/类别/指代词）。'别忘了带钥匙'不算删除。"""
@@ -764,10 +772,12 @@ class SlotStore:
             return self._turns[sid]
 
     def revive_from_user_input(self, sid: str, text: str) -> list:
-        """只有用户亲口打出该值才撤销墓碑；忘/别记/删 本轮一律不复活。"""
+        """只有用户亲口打出该值、且句子有再提及意图、无负面评价，才撤销墓碑。"""
         if not text:
             return []
         if detect_deletions(text):
+            return []
+        if not _REVIVE_INTENT_RE.search(text) or _REVIVE_NEGATIVE_RE.search(text):
             return []
         with _LOCK:
             items = self._load_tomb(sid)

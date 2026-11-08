@@ -304,7 +304,10 @@ class TombstoneTest(unittest.TestCase):
             s.upsert("u", "宠物", "年糕")
             s.apply_updates("u", {"宠物": "年糕"}, source="model")
             self.assertTrue(s.forgotten_items("u"))
-            # 用户亲口打出该值 → 撤销墓碑并允许重新入槽
+            # 负面评价不算复活（同一组对照）
+            s.ingest("u", "我不喜欢年糕了")
+            self.assertTrue(s.forgotten_items("u"))
+            # 用户亲口打出该值 + 确认意图 → 撤销墓碑并允许重新入槽
             s.ingest("u", "我又养了只猫叫年糕")
             self.assertEqual(s.forgotten_items("u"), [])
             self.assertTrue(any("年糕" in h["value"]
